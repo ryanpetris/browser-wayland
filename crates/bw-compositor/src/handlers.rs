@@ -8,11 +8,12 @@ use smithay::{
         renderer::ImportDma,
     },
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale, delegate_output,
-    delegate_primary_selection, delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_pointer_constraints, delegate_primary_selection, delegate_relative_pointer, delegate_seat, delegate_shm,
+    delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{PopupKind, Window, find_popup_root_surface, get_popup_toplevel_coords},
     input::{
         Seat, SeatHandler, SeatState,
-        pointer::{CursorImageStatus, Focus, GrabStartData},
+        pointer::{CursorImageStatus, Focus, GrabStartData, PointerHandle},
     },
     reexports::{
         calloop::Interest,
@@ -35,6 +36,7 @@ use smithay::{
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier, get_dmabuf},
         fractional_scale::{FractionalScaleHandler, with_fractional_scale},
         output::OutputHandler,
+        pointer_constraints::{PointerConstraintsHandler, with_pointer_constraint},
         selection::{
             SelectionHandler,
             data_device::{ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler, set_data_device_focus},
@@ -387,6 +389,23 @@ impl FractionalScaleHandler for State {
     }
 }
 
+impl PointerConstraintsHandler for State {
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+        // Activate right away if the pointer is already on that surface; otherwise on entering it.
+        if pointer.current_focus().as_ref() == Some(surface) {
+            with_pointer_constraint(surface, pointer, |c| {
+                if let Some(c) = c {
+                    c.activate();
+                }
+            });
+        }
+        self.sync_pointer_lock(pointer);
+    }
+    // ponytail: the browser's own pointer is wherever the user left it, so a warp hint has nothing to move;
+    // the next absolute motion resyncs.
+    fn cursor_position_hint(&mut self, _surface: &WlSurface, _pointer: &PointerHandle<Self>, _location: Point<f64, Logical>) {}
+}
+
 impl AsRef<ViewporterState> for State {
     fn as_ref(&self) -> &ViewporterState {
         &self.viewporter_state
@@ -404,3 +423,5 @@ delegate_output!(State);
 delegate_dmabuf!(State);
 delegate_viewporter!(State);
 delegate_fractional_scale!(State);
+delegate_relative_pointer!(State);
+delegate_pointer_constraints!(State);

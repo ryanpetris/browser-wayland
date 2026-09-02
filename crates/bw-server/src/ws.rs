@@ -50,13 +50,18 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
 /// Compositor events (cursor changes) to the current viewer.
 pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event>) {
     while let Some(ev) = rx.recv().await {
-        let Event::Cursor(img) = ev;
-        let msg = protocol::cursor(img.as_ref());
         let mut v = app.viewer.lock().unwrap();
+        let msg = match ev {
+            Event::Cursor(img) => {
+                let msg = protocol::cursor(img.as_ref());
+                v.cursor = Some(msg.clone());
+                msg
+            }
+            Event::PointerLock(locked) => Bytes::from(vec![protocol::POINTER_LOCK, locked as u8]),
+        };
         if let Some(tx) = &v.tx {
-            let _ = tx.try_send(msg.clone());
+            let _ = tx.try_send(msg);
         }
-        v.cursor = Some(msg);
     }
 }
 

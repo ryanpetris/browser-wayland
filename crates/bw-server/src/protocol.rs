@@ -6,6 +6,7 @@ use bw_core::{Bytes, CursorImage, EncodedFrame, StreamInfo};
 pub const CONFIG: u8 = 0x01;
 pub const VIDEO: u8 = 0x02;
 pub const CURSOR: u8 = 0x03;
+pub const POINTER_LOCK: u8 = 0x04;
 // client -> server
 pub const RESIZE: u8 = 0x82;
 pub const MOTION_ABS: u8 = 0x83;

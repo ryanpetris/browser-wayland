@@ -1,15 +1,17 @@
 //! Browser input (`Command`) → seat events.
 
-use bw_core::{AxisSource as Src, Command, OutputGeometry};
+use bw_core::{AxisSource as Src, Command, Event, OutputGeometry};
 use smithay::{
+    reexports::wayland_server::Resource,
     backend::input::{Axis, AxisSource, ButtonState, KeyState, Keycode},
     desktop::WindowSurfaceType,
     input::{
         keyboard::FilterResult,
-        pointer::{AxisFrame, ButtonEvent, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle, RelativeMotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, SERIAL_COUNTER},
+    wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint},
 };
 
 use crate::State;
@@ -61,6 +63,17 @@ impl State {
     }
 
     fn pointer_motion(&mut self, location: Point<f64, Logical>) {
+        let pointer = self.seat.get_pointer().unwrap();
+        let delta = location - self.pointer_location;
+        let relative = RelativeMotionEvent { delta, delta_unaccel: delta, utime: self.clock.now().as_micros() };
+        if self.locked(&pointer) {
+            // Locked: the pointer stays put and the client only gets deltas.
+            let under = self.surface_under(self.pointer_location);
+            tracing::debug!(?delta, focus = under.is_some(), "relative motion under lock");
+            pointer.relative_motion(self, under, &relative);
+            pointer.frame(self);
+            return;
+        }
         let geo = self.space.output_geometry(&self.output).unwrap();
         let location = Point::from((
             location.x.clamp(0.0, (geo.size.w - 1) as f64),
@@ -68,9 +81,39 @@ impl State {
         ));
         self.pointer_location = location;
         let under = self.surface_under(location);
-        let pointer = self.seat.get_pointer().unwrap();
-        pointer.motion(self, under, &MotionEvent { location, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
+        pointer.motion(self, under.clone(), &MotionEvent { location, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
+        pointer.relative_motion(self, under.clone(), &relative);
         pointer.frame(self);
+        // entering a surface with a pending constraint activates it
+        if let Some((surface, origin)) = under {
+            with_pointer_constraint(&surface, &pointer, |c| {
+                if let Some(c) = c.filter(|c| !c.is_active()) {
+                    let local = (location - origin).to_i32_round();
+                    if c.region().is_none_or(|r| r.contains(local)) {
+                        c.activate();
+                    }
+                }
+            });
+        }
+        self.sync_pointer_lock(&pointer);
+    }
+
+    fn locked(&self, pointer: &PointerHandle<State>) -> bool {
+        pointer.current_focus().is_some_and(|surface| {
+            with_pointer_constraint(&surface, pointer, |c| {
+                c.is_some_and(|c| c.is_active() && matches!(*c, PointerConstraint::Locked(_)))
+            })
+        })
+    }
+
+    /// Tell the browser when a lock starts or ends so it can mirror it with the Pointer Lock API.
+    pub fn sync_pointer_lock(&mut self, pointer: &PointerHandle<State>) {
+        let locked = self.locked(pointer);
+        tracing::debug!(locked, was = self.pointer_locked, focus = ?pointer.current_focus().map(|s| s.id()), "sync_pointer_lock");
+        if locked != self.pointer_locked {
+            self.pointer_locked = locked;
+            let _ = self.events.send(Event::PointerLock(locked));
+        }
     }
 
     fn pointer_button(&mut self, button: u32, pressed: bool) {
@@ -97,6 +140,7 @@ impl State {
         if pressed { self.pressed_buttons.insert(button); } else { self.pressed_buttons.remove(&button); }
         pointer.button(self, &ButtonEvent { button, state, serial, time: self.now() });
         pointer.frame(self);
+        self.sync_pointer_lock(&pointer);
     }
 
     fn pointer_axis(&mut self, source: Src, dx: f64, dy: f64, v120: Option<(i32, i32)>) {

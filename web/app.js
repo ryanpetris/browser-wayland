@@ -2,15 +2,15 @@
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
 
-const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03;
-const RESIZE = 0x82, MOTION_ABS = 0x83, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89;
+const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04;
+const RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89;
 const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const status = document.getElementById('s');
 
-let ws, decoder, stream, awaitingKey = true, frames = 0;
+let ws, decoder, stream, awaitingKey = true, frames = 0, lockRequests = 0, lockError = '';
 
 function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
@@ -76,6 +76,17 @@ function onMessage(buf) {
       canvas.style.cursor = `url(${c.toDataURL()}) ${dv.getInt16(5, true)} ${dv.getInt16(7, true)}, default`;
       break;
     }
+    case POINTER_LOCK:
+      // A client locked the pointer (a game, say): lock the browser's too and send raw deltas.
+      if (dv.getUint8(1)) {
+        lockRequests++;
+        canvas.requestPointerLock({ unadjustedMovement: true })?.catch?.(e => {
+          lockError = String(e);
+          canvas.requestPointerLock()?.catch?.(e2 => { lockError += ' / ' + e2; });
+        });
+      }
+      else if (document.pointerLockElement) document.exitPointerLock();
+      break;
     case VIDEO: {
       if (!decoder) return;
       const key = (dv.getUint8(1) & 1) !== 0;
@@ -105,10 +116,9 @@ function onMessage(buf) {
 const scaleX = () => stream ? stream.width / stream.scale / canvas.clientWidth : 1;
 const scaleY = () => stream ? stream.height / stream.scale / canvas.clientHeight : 1;
 
-canvas.onpointermove = e => send(MOTION_ABS, 8, dv => {
-  dv.setFloat32(1, e.offsetX * scaleX(), true);
-  dv.setFloat32(5, e.offsetY * scaleY(), true);
-});
+canvas.onpointermove = e => document.pointerLockElement
+  ? send(MOTION_REL, 8, dv => { dv.setFloat32(1, e.movementX, true); dv.setFloat32(5, e.movementY, true); })
+  : send(MOTION_ABS, 8, dv => { dv.setFloat32(1, e.offsetX * scaleX(), true); dv.setFloat32(5, e.offsetY * scaleY(), true); });
 canvas.onpointerdown = canvas.onpointerup = e => {
   const btn = BTN[e.button];
   if (btn === undefined) return;
@@ -142,5 +152,5 @@ document.getElementById('fs').onclick = async () => {
 };
 document.onfullscreenchange = () => { if (!document.fullscreenElement) navigator.keyboard?.unlock?.(); };
 
-window.bw = () => ({ frames, stream, awaitingKey, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
+window.bw = () => ({ frames, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
 connect();

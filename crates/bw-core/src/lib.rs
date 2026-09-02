@@ -44,6 +44,8 @@ pub enum Command {
 pub enum Event {
     /// The pointer image changed; `None` hides it. Drawn by the browser, not composited.
     Cursor(Option<CursorImage>),
+    /// A client locked (or released) the pointer; the browser should mirror it with the Pointer Lock API.
+    PointerLock(bool),
 }
 
 #[derive(Debug)]

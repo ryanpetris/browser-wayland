@@ -39,6 +39,8 @@ use smithay::{
         dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufState},
         fractional_scale::FractionalScaleManagerState,
         output::OutputManagerState,
+        pointer_constraints::PointerConstraintsState,
+        relative_pointer::RelativePointerManagerState,
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
         shell::xdg::{XdgShellState, decoration::XdgDecorationState},
         shm::ShmState,
@@ -108,6 +110,8 @@ pub struct State {
     pub seat: Seat<State>,
     pub pointer_location: Point<f64, Logical>,
     pub pressed_buttons: std::collections::HashSet<u32>,
+    /// A client holds an active pointer lock (mirrored to the browser).
+    pub pointer_locked: bool,
     pub cursor_status: CursorImageStatus,
     pub cursor: cursor::CursorTheme,
 
@@ -120,6 +124,8 @@ pub struct State {
     pub primary_selection_state: PrimarySelectionState,
     pub viewporter_state: ViewporterState,
     pub fractional_scale_state: FractionalScaleManagerState,
+    pub relative_pointer_state: RelativePointerManagerState,
+    pub pointer_constraints_state: PointerConstraintsState,
 }
 
 #[derive(Default)]
@@ -207,6 +213,7 @@ impl State {
             seat,
             pointer_location: (0.0, 0.0).into(),
             pressed_buttons: Default::default(),
+            pointer_locked: false,
             cursor_status: CursorImageStatus::default_named(),
             cursor: cursor::CursorTheme::load(),
             compositor_state: CompositorState::new::<State>(&dh),
@@ -218,6 +225,8 @@ impl State {
             primary_selection_state: PrimarySelectionState::new::<State>(&dh),
             viewporter_state: ViewporterState::new::<State>(&dh),
             fractional_scale_state: FractionalScaleManagerState::new::<State>(&dh),
+            relative_pointer_state: RelativePointerManagerState::new::<State>(&dh),
+            pointer_constraints_state: PointerConstraintsState::new::<State>(&dh),
             dh,
         };
         state.export_cursor(); // the default arrow, before any client sets one
