@@ -109,4 +109,5 @@ document.onvisibilitychange = () => { if (document.hidden) send(BLUR, 0); };
 let resizeTimer;
 window.onresize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(sendResize, 150); };
 
+window.bw = () => ({ frames, stream, awaitingKey, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
 connect();
