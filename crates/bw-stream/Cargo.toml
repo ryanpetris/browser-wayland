@@ -7,9 +7,9 @@ license.workspace = true
 [dependencies]
 bw-core = { path = "../bw-core" }
 anyhow.workspace = true
-bytes.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
-gstreamer = "0.25"
-gstreamer-app = "0.25"
-gstreamer-video = "0.25"
+gstreamer = { version = "0.25", features = ["v1_28"] }
+gstreamer-app = { version = "0.25", features = ["v1_28"] }
+gstreamer-video = { version = "0.25", features = ["v1_28"] }
+gstreamer-allocators = { version = "0.25", features = ["v1_28"] }

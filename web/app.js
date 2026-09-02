@@ -17,8 +17,8 @@ function connect() {
   ws.binaryType = 'arraybuffer';
   ws.onopen = sendResize;
   ws.onmessage = e => onMessage(e.data);
-  ws.onclose = e => {
-    status.textContent = e.code === 1008 || e.code === 1006 && !stream ? 'unauthorized? open the tokened URL' : 'disconnected, retrying…';
+  ws.onclose = () => {
+    status.textContent = stream ? 'disconnected, retrying…' : 'no stream; open the URL with ?token= printed by the server';
     setTimeout(connect, 1000);
   };
 }
@@ -39,38 +39,52 @@ function sendResize() {
   });
 }
 
-async function onMessage(buf) {
+// A decode error closes the decoder for good, so recovery means a fresh one plus a keyframe.
+function newDecoder() {
+  decoder?.close();
+  const d = new VideoDecoder({
+    output: frame => { try { ctx.drawImage(frame, 0, 0); frames++; } finally { frame.close(); } },
+    error: e => { console.error(e); if (d === decoder) resync(); },
+  });
+  d.configure({ codec: stream.codec, optimizeForLatency: true });
+  decoder = d;
+}
+
+function resync() {
+  newDecoder();
+  awaitingKey = true;
+  send(REQUEST_KEYFRAME, 0);
+}
+
+function onMessage(buf) {
   const dv = new DataView(buf);
   switch (dv.getUint8(0)) {
-    case CONFIG: {
+    case CONFIG:
       stream = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
       canvas.width = stream.width;
       canvas.height = stream.height;
-      decoder?.close();
-      decoder = new VideoDecoder({
-        output: frame => { ctx.drawImage(frame, 0, 0); frame.close(); frames++; },
-        error: e => { console.error(e); awaitingKey = true; send(REQUEST_KEYFRAME, 0); },
-      });
-      const cfg = { codec: stream.codec, optimizeForLatency: true, hardwareAcceleration: 'prefer-hardware' };
-      const hw = await VideoDecoder.isConfigSupported(cfg);
-      decoder.configure(hw.supported ? cfg : { ...cfg, hardwareAcceleration: 'no-preference' });
-      awaitingKey = true;
-      status.textContent = `${stream.codec} ${stream.width}×${stream.height} ${hw.supported ? 'hw' : 'sw'}`;
+      resync();
+      status.textContent = `${stream.codec} ${stream.width}×${stream.height}`;
       break;
-    }
     case VIDEO: {
-      if (!decoder || decoder.state !== 'configured') return;
+      if (!decoder) return;
       const key = (dv.getUint8(1) & 1) !== 0;
       if (!key && (awaitingKey || decoder.decodeQueueSize > 4)) {
         if (!awaitingKey) { awaitingKey = true; send(REQUEST_KEYFRAME, 0); }
         return;
       }
-      awaitingKey = false;
-      decoder.decode(new EncodedVideoChunk({
-        type: key ? 'key' : 'delta',
-        timestamp: Number(dv.getBigUint64(2, true)),
-        data: new Uint8Array(buf, 10),
-      }));
+      try {
+        decoder.decode(new EncodedVideoChunk({
+          type: key ? 'key' : 'delta',
+          timestamp: Number(dv.getBigUint64(2, true)),
+          data: new Uint8Array(buf, 10),
+          transfer: [buf],
+        }));
+        awaitingKey = false;
+      } catch (e) {
+        console.error(e);
+        resync();
+      }
     }
   }
 }
@@ -86,9 +100,11 @@ canvas.onpointermove = e => send(MOTION_ABS, 8, dv => {
   dv.setFloat32(5, e.offsetY * scaleY(), true);
 });
 canvas.onpointerdown = canvas.onpointerup = e => {
+  const btn = BTN[e.button];
+  if (btn === undefined) return;
   if (e.type === 'pointerdown') canvas.setPointerCapture(e.pointerId);
   canvas.onpointermove(e);
-  send(BUTTON, 3, dv => { dv.setUint16(1, BTN[e.button] ?? 0x110, true); dv.setUint8(3, e.type === 'pointerdown' ? 1 : 0); });
+  send(BUTTON, 3, dv => { dv.setUint16(1, btn, true); dv.setUint8(3, e.type === 'pointerdown' ? 1 : 0); });
 };
 canvas.oncontextmenu = e => e.preventDefault();
 canvas.addEventListener('wheel', e => {

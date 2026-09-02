@@ -18,7 +18,7 @@ impl State {
     pub fn handle_command(&mut self, cmd: Command) {
         match cmd {
             Command::Key { evdev, pressed } => self.key(evdev, pressed),
-            Command::ReleaseAllKeys => self.release_all(),
+            Command::ReleaseAllInput => self.release_all(),
             Command::PointerMotionAbsolute { x, y } => self.pointer_motion((x, y).into()),
             Command::PointerMotionRelative { dx, dy } => self.pointer_motion(self.pointer_location + Point::<f64, Logical>::from((dx, dy))),
             Command::PointerButton { button, pressed } => self.pointer_button(button, pressed),

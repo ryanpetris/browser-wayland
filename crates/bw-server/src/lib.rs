@@ -32,11 +32,12 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn default_data_dir() -> PathBuf {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"));
-        base.join("browser-wayland")
+    pub fn default_data_dir() -> Result<PathBuf> {
+        let base = match std::env::var_os("XDG_CONFIG_HOME") {
+            Some(d) => PathBuf::from(d),
+            None => PathBuf::from(std::env::var_os("HOME").context("neither XDG_CONFIG_HOME nor HOME is set")?).join(".config"),
+        };
+        Ok(base.join("browser-wayland"))
     }
 }
 
@@ -50,8 +51,12 @@ pub struct App {
 
 #[derive(Default)]
 struct Viewer {
+    /// Bumped per connection so a replaced session can't act for the current one.
+    generation: u64,
     tx: Option<mpsc::Sender<Bytes>>,
     info: Option<StreamInfo>,
+    /// Stream id whose Config the current viewer has been sent.
+    announced: Option<u32>,
     need_key: bool,
 }
 
@@ -79,13 +84,17 @@ pub async fn run(
         .route("/ws", get(websocket))
         .with_state(app.clone());
 
+    let tls_pem = if cfg.tls { Some(load_or_create_cert(&cfg.data_dir)?) } else { None };
+    if let Some((cert, _)) = &tls_pem {
+        // Compare this with the browser's certificate viewer before accepting the warning.
+        println!("certificate SHA-256: {}", fingerprint(cert)?);
+    }
     let scheme = if cfg.tls { "https" } else { "http" };
     for ip in lan_ips() {
         println!("{scheme}://{ip}:{}/?token={}", cfg.listen.port(), app.token);
     }
 
-    if cfg.tls {
-        let (cert, key) = load_or_create_cert(&cfg.data_dir)?;
+    if let Some((cert, key)) = tls_pem {
         let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert, key).await?;
         // WebSocket upgrades need HTTP/1.1; keep browsers off h2.
         let mut sc = (*tls.get_inner()).clone();
@@ -104,7 +113,7 @@ async fn index(Query(q): Query<HashMap<String, String>>, State(app): State<Arc<A
         Some(t) if app.token_ok(t) => {
             let secure = if app.tls { "; Secure" } else { "" };
             (
-                [(header::SET_COOKIE, format!("bw_token={t}; Path=/; HttpOnly; SameSite=Strict{secure}"))],
+                [(header::SET_COOKIE, format!("bw_token={t}; Path=/ws; HttpOnly; SameSite=Strict{secure}"))],
                 Redirect::to("/"),
             )
                 .into_response()
@@ -123,6 +132,12 @@ async fn websocket(
     headers: HeaderMap,
     State(app): State<Arc<App>>,
 ) -> Response {
+    // Same-site cookies still travel cross-origin from another port on this host: require a matching Origin.
+    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+    let origin_host = headers.get(header::ORIGIN).and_then(|o| o.to_str().ok()).map(|o| o.trim_start_matches("https://").trim_start_matches("http://"));
+    if origin_host.is_some_and(|o| Some(o) != host) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let cookie_token = headers
         .get(header::COOKIE)
         .and_then(|c| c.to_str().ok())
@@ -181,6 +196,7 @@ fn load_or_create_cert(dir: &Path) -> Result<(Vec<u8>, Vec<u8>)> {
     if let (Ok(c), Ok(k)) = (fs::read(&cert_path), fs::read(&key_path)) {
         return Ok((c, k));
     }
+    let _ = fs::remove_file(&key_path); // never leave a mismatched pair behind
     let mut sans = vec!["localhost".to_string()];
     sans.extend(if_addrs::get_if_addrs()?.iter().filter(|i| !i.is_loopback()).map(|i| i.ip().to_string()));
     let mut params = rcgen::CertificateParams::new(sans)?;
@@ -190,4 +206,12 @@ fn load_or_create_cert(dir: &Path) -> Result<(Vec<u8>, Vec<u8>)> {
     fs::write(&cert_path, cert.pem())?;
     write_private(&key_path, key.serialize_pem().as_bytes())?;
     Ok((cert.pem().into_bytes(), key.serialize_pem().into_bytes()))
+}
+
+/// Colon-separated SHA-256 of the certificate DER, as browsers display it.
+fn fingerprint(cert_pem: &[u8]) -> Result<String> {
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    use sha2::Digest;
+    let der = CertificateDer::from_pem_slice(cert_pem)?;
+    Ok(sha2::Sha256::digest(&der).iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":"))
 }

@@ -23,7 +23,8 @@ pub enum AxisSource {
 #[derive(Debug)]
 pub enum Command {
     Key { evdev: u32, pressed: bool },
-    ReleaseAllKeys,
+    /// Release every held key and pointer button (viewer blurred or went away).
+    ReleaseAllInput,
     /// Logical pixels (== browser CSS pixels).
     PointerMotionAbsolute { x: f64, y: f64 },
     PointerMotionRelative { dx: f64, dy: f64 },

@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 bw-core = { path = "../bw-core" }
+bw-compositor = { path = "../bw-compositor" }
 bw-server = { path = "../bw-server" }
 bw-stream = { path = "../bw-stream" }
 anyhow.workspace = true

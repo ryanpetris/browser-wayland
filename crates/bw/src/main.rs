@@ -1,6 +1,7 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::Result;
+use bw_core::{Command, OutputGeometry};
 use clap::Parser;
 use tokio::sync::mpsc;
 
@@ -19,6 +20,13 @@ struct Cli {
     /// Encoder bitrate in kbit/s.
     #[arg(long, default_value_t = 8000)]
     bitrate: u32,
+    /// Command to run (via `sh -c`) with WAYLAND_DISPLAY pointing at this compositor.
+    #[arg(long)]
+    exec: Option<String>,
+    #[arg(long, default_value = "/dev/dri/renderD128")]
+    render_node: PathBuf,
+    #[arg(long, default_value = "wayland-browser")]
+    socket_name: String,
 }
 
 fn main() -> Result<()> {
@@ -26,31 +34,52 @@ fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?))
         .init();
     let cli = Cli::parse();
-
-    let (commands, command_rx) = calloop::channel::channel();
     let (stream_tx, stream_rx) = mpsc::channel(16);
 
-    if !cli.fake_source {
-        anyhow::bail!("the compositor isn't wired up yet; run with --fake-source");
-    }
-    // No compositor: just log what the browser sends.
-    std::thread::spawn(move || {
-        let mut loop_ = calloop::EventLoop::<()>::try_new().unwrap();
-        loop_
-            .handle()
-            .insert_source(command_rx, |ev, _, _| {
-                if let calloop::channel::Event::Msg(cmd) = ev {
-                    tracing::info!(?cmd);
-                }
-            })
-            .unwrap();
-        loop_.run(None, &mut (), |_| {}).unwrap();
-    });
-    let stream = Arc::new(bw_stream::fake_source(
-        bw_stream::EncodeOpts { bitrate_kbps: cli.bitrate, ..Default::default() },
-        stream_tx,
-    )?);
+    let (commands, request_keyframe): (calloop::channel::Sender<Command>, Box<dyn Fn() + Send + Sync>) = if cli.fake_source {
+        // No compositor: just log what the browser sends.
+        let (commands, rx) = calloop::channel::channel();
+        std::thread::spawn(move || {
+            let mut event_loop = calloop::EventLoop::<()>::try_new().unwrap();
+            event_loop
+                .handle()
+                .insert_source(rx, |ev, _, _| {
+                    if let calloop::channel::Event::Msg(cmd) = ev {
+                        tracing::info!(?cmd);
+                    }
+                })
+                .unwrap();
+            event_loop.run(None, &mut (), |_| {}).unwrap();
+        });
+        let stream = bw_stream::fake_source(cli.bitrate, stream_tx)?;
+        (commands, Box::new(move || stream.request_keyframe()))
+    } else {
+        let sink = bw_stream::GstSink::new(cli.bitrate, stream_tx)?;
+        let compositor = bw_compositor::spawn(
+            bw_compositor::Config {
+                render_node: cli.render_node,
+                socket_name: cli.socket_name,
+                initial: OutputGeometry { width_px: 1920, height_px: 1080, scale: 1.0, refresh_mhz: 60_000 },
+            },
+            Box::new(sink.clone()),
+        )?;
+        tracing::info!(socket = %compositor.socket_name, "compositor ready");
+        if let Some(cmd) = &cli.exec {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .env("WAYLAND_DISPLAY", &compositor.socket_name)
+                .env_remove("DISPLAY")
+                .env_remove("WAYLAND_SOCKET")
+                .env("GDK_BACKEND", "wayland")
+                .env("QT_QPA_PLATFORM", "wayland")
+                .env("SDL_VIDEODRIVER", "wayland")
+                .env("MOZ_ENABLE_WAYLAND", "1")
+                .spawn()?;
+        }
+        (compositor.commands, Box::new(move || sink.request_keyframe()))
+    };
 
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, data_dir: bw_server::Config::default_data_dir() };
-    tokio::runtime::Runtime::new()?.block_on(bw_server::run(server, commands, stream_rx, move || stream.request_keyframe()))
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, data_dir: bw_server::Config::default_data_dir()? };
+    tokio::runtime::Runtime::new()?.block_on(bw_server::run(server, commands, stream_rx, request_keyframe))
 }

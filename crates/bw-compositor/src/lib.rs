@@ -133,7 +133,9 @@ impl State {
         let display: Display<State> = Display::new()?;
         let dh = display.handle();
 
+        let mut sink = sink;
         let gpu = gpu::Gpu::new(&cfg.render_node, &cfg.initial, &sink.accepted_formats())?;
+        sink.output_changed(cfg.initial, gpu.fourcc as u32, u64::from(gpu.modifier));
 
         let output = Output::new(
             "BROWSER-1".into(),
