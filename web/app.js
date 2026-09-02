@@ -135,5 +135,12 @@ document.onvisibilitychange = () => { if (document.hidden) send(BLUR, 0); };
 let resizeTimer;
 window.onresize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(sendResize, 150); };
 
+// Fullscreen + Keyboard Lock: Ctrl+W, Ctrl+T, Alt+Tab… reach the Wayland clients instead of the browser.
+document.getElementById('fs').onclick = async () => {
+  await document.documentElement.requestFullscreen();
+  navigator.keyboard?.lock?.();
+};
+document.onfullscreenchange = () => { if (!document.fullscreenElement) navigator.keyboard?.unlock?.(); };
+
 window.bw = () => ({ frames, stream, awaitingKey, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
 connect();

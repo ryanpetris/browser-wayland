@@ -6,7 +6,10 @@
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
   #s { position: fixed; left: 8px; bottom: 8px; color: #9a9; font: 12px monospace; pointer-events: none; }
+  #fs { position: fixed; right: 8px; bottom: 8px; background: #333; color: #ccc; border: 0; border-radius: 4px; font: 14px sans-serif; padding: 2px 8px; opacity: .6; }
+  :fullscreen #fs { display: none; }
 </style>
 <canvas id="c"></canvas>
 <div id="s">connecting…</div>
+<button id="fs" title="Fullscreen (browser shortcuts go to the desktop)">⛶</button>
 <script type="module" src="/app.js"></script>

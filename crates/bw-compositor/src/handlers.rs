@@ -7,8 +7,8 @@ use smithay::{
         allocator::dmabuf::Dmabuf,
         renderer::ImportDma,
     },
-    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale, delegate_output, delegate_seat,
-    delegate_shm, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale, delegate_output,
+    delegate_primary_selection, delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{PopupKind, Window, find_popup_root_surface, get_popup_toplevel_coords},
     input::{
         Seat, SeatHandler, SeatState,
@@ -38,6 +38,7 @@ use smithay::{
         selection::{
             SelectionHandler,
             data_device::{ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler, set_data_device_focus},
+            primary_selection::{PrimarySelectionHandler, PrimarySelectionState, set_primary_focus},
         },
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
@@ -299,7 +300,8 @@ impl SeatHandler for State {
     }
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let client = focused.and_then(|s| self.dh.get_client(s.id()).ok());
-        set_data_device_focus(&self.dh, seat, client);
+        set_data_device_focus(&self.dh, seat, client.clone());
+        set_primary_focus(&self.dh, seat, client);
     }
 }
 
@@ -309,6 +311,11 @@ impl SelectionHandler for State {
 impl DataDeviceHandler for State {
     fn data_device_state(&self) -> &DataDeviceState {
         &self.data_device_state
+    }
+}
+impl PrimarySelectionHandler for State {
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection_state
     }
 }
 impl ClientDndGrabHandler for State {}
@@ -351,6 +358,7 @@ delegate_xdg_shell!(State);
 delegate_xdg_decoration!(State);
 delegate_seat!(State);
 delegate_data_device!(State);
+delegate_primary_selection!(State);
 delegate_output!(State);
 delegate_dmabuf!(State);
 delegate_viewporter!(State);

@@ -67,7 +67,7 @@ fn main() -> Result<()> {
         )?;
         tracing::info!(socket = %compositor.socket_name, "compositor ready");
         if let Some(cmd) = &cli.exec {
-            std::process::Command::new("sh")
+            let mut child = std::process::Command::new("sh")
                 .arg("-c")
                 .arg(cmd)
                 .env("WAYLAND_DISPLAY", &compositor.socket_name)
@@ -78,6 +78,7 @@ fn main() -> Result<()> {
                 .env("SDL_VIDEODRIVER", "wayland")
                 .env("MOZ_ENABLE_WAYLAND", "1")
                 .spawn()?;
+            std::thread::spawn(move || tracing::info!(status = ?child.wait(), "--exec client exited"));
         }
         (compositor.commands, Box::new(move || sink.request_keyframe()))
     };
