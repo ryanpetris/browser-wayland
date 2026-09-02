@@ -35,6 +35,7 @@ fn main() -> Result<()> {
         .init();
     let cli = Cli::parse();
     let (stream_tx, stream_rx) = mpsc::channel(16);
+    let (events_tx, events_rx) = mpsc::unbounded_channel();
 
     let (commands, request_keyframe): (calloop::channel::Sender<Command>, Box<dyn Fn() + Send + Sync>) = if cli.fake_source {
         // No compositor: just log what the browser sends.
@@ -62,6 +63,7 @@ fn main() -> Result<()> {
                 initial: OutputGeometry { width_px: 1920, height_px: 1080, scale: 1.0, refresh_mhz: 60_000 },
             },
             Box::new(sink.clone()),
+            events_tx,
         )?;
         tracing::info!(socket = %compositor.socket_name, "compositor ready");
         if let Some(cmd) = &cli.exec {
@@ -81,5 +83,5 @@ fn main() -> Result<()> {
     };
 
     let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, data_dir: bw_server::Config::default_data_dir()? };
-    tokio::runtime::Runtime::new()?.block_on(bw_server::run(server, commands, stream_rx, request_keyframe))
+    tokio::runtime::Runtime::new()?.block_on(bw_server::run(server, commands, stream_rx, events_rx, request_keyframe))
 }

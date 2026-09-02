@@ -8,10 +8,15 @@ mod handlers;
 mod input;
 mod render;
 
-use std::{path::PathBuf, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    thread::JoinHandle,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
-use bw_core::{Command, FrameSink, OutputGeometry};
+use bw_core::{Command, Event, FrameSink, OutputGeometry};
 use smithay::{
     backend::renderer::{ImportDma, damage::OutputDamageTracker},
     desktop::{PopupManager, Space, Window},
@@ -56,10 +61,10 @@ pub struct CompositorHandle {
 }
 
 /// Start the compositor on its own thread. Returns once the Wayland socket exists.
-pub fn spawn(cfg: Config, sink: Box<dyn FrameSink>) -> Result<CompositorHandle> {
+pub fn spawn(cfg: Config, sink: Box<dyn FrameSink>, events: tokio::sync::mpsc::UnboundedSender<Event>) -> Result<CompositorHandle> {
     let (commands, rx) = channel::channel();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
-    let join = std::thread::Builder::new().name("compositor".into()).spawn(move || match State::new(cfg, sink) {
+    let join = std::thread::Builder::new().name("compositor".into()).spawn(move || match State::new(cfg, sink, events) {
         Ok((mut event_loop, state)) => {
             let _ = ready_tx.send(Ok(state.socket_name.clone()));
             state.run(&mut event_loop, rx);
@@ -86,7 +91,10 @@ pub struct State {
     pub dmabuf_state: DmabufState,
     pub dmabuf_feedback: DmabufFeedback,
     pub sink: Box<dyn FrameSink>,
+    pub events: tokio::sync::mpsc::UnboundedSender<Event>,
     pub frame_seq: u64,
+    pub frame_interval: Duration,
+    pub last_render: Instant,
     /// Something changed since the last render.
     pub dirty: bool,
     /// Next render redraws everything (age 0), e.g. after a viewer connects.
@@ -127,7 +135,7 @@ fn mode_for(geo: &OutputGeometry) -> Mode {
 }
 
 impl State {
-    fn new(cfg: Config, sink: Box<dyn FrameSink>) -> Result<(EventLoop<'static, State>, State)> {
+    fn new(cfg: Config, sink: Box<dyn FrameSink>, events: tokio::sync::mpsc::UnboundedSender<Event>) -> Result<(EventLoop<'static, State>, State)> {
         let event_loop: EventLoop<'static, State> = EventLoop::try_new()?;
         let handle = event_loop.handle();
         let display: Display<State> = Display::new()?;
@@ -173,7 +181,7 @@ impl State {
             Ok(PostAction::Continue)
         })?;
 
-        let state = State {
+        let mut state = State {
             handle,
             clock: Clock::new(),
             socket_name,
@@ -185,7 +193,10 @@ impl State {
             dmabuf_state,
             dmabuf_feedback,
             sink,
+            events,
             frame_seq: 0,
+            frame_interval: Duration::from_nanos(1_000_000_000_000 / cfg.initial.refresh_mhz as u64),
+            last_render: Instant::now(),
             dirty: true,
             force_full_frame: true,
             viewer_connected: false,
@@ -207,6 +218,7 @@ impl State {
             fractional_scale_state: FractionalScaleManagerState::new::<State>(&dh),
             dh,
         };
+        state.export_cursor(); // the default arrow, before any client sets one
         Ok((event_loop, state))
     }
 
@@ -218,7 +230,7 @@ impl State {
                 channel::Event::Closed => state.running = false,
             })
             .unwrap();
-        let interval = Duration::from_nanos(1_000_000_000_000 / self.geometry.refresh_mhz as u64);
+        let interval = self.frame_interval;
         handle
             .insert_source(Timer::from_duration(interval), move |_, _, state| {
                 state.tick();
@@ -230,6 +242,10 @@ impl State {
             .run(None, &mut self, |state| {
                 state.space.refresh();
                 state.popups.cleanup();
+                // Render right after input/commits when a frame period has passed, instead of waiting for the timer.
+                if state.dirty && state.last_render.elapsed() >= state.frame_interval {
+                    state.tick();
+                }
                 let _ = state.dh.flush_clients();
                 if !state.running {
                     signal.stop();

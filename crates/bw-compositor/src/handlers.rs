@@ -128,6 +128,10 @@ impl CompositorHandler for State {
             }
         }
         self.popups.commit(surface);
+        if matches!(&self.cursor_status, CursorImageStatus::Surface(s) if s == surface) {
+            self.export_cursor(); // client redrew its cursor
+            return;
+        }
         ensure_initial_configure(surface, self);
         grabs::handle_commit(&mut self.space, surface);
         self.dirty = true;
@@ -166,6 +170,8 @@ impl XdgShellHandler for State {
         surface.with_pending_state(|s| {
             s.bounds = Some(size);
             s.decoration_mode = Some(DecorationMode::ClientSide);
+            // no minimize: there is nowhere to minimize to
+            s.capabilities.replace([xdg_toplevel::WmCapabilities::Maximize, xdg_toplevel::WmCapabilities::Fullscreen]);
         });
         let n = self.space.elements().count() as i32 % 10;
         self.space.map_element(Window::new_wayland_window(surface), (40 + 30 * n, 40 + 30 * n), true);
@@ -289,7 +295,7 @@ impl SeatHandler for State {
     }
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
         self.cursor_status = image;
-        self.dirty = true;
+        self.export_cursor();
     }
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let client = focused.and_then(|s| self.dh.get_client(s.id()).ok());

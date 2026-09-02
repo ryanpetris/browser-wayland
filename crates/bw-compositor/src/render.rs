@@ -1,30 +1,14 @@
-use std::{os::fd::AsFd, time::Duration};
+use std::{os::fd::AsFd, time::{Duration, Instant}};
 
 use anyhow::{Context, Result};
 use bw_core::DmabufFrame;
 use smithay::{
-    backend::renderer::{
-        Bind, ImportAll, ImportMem,
-        element::{
-            Kind,
-            memory::MemoryRenderBufferRenderElement,
-            render_elements,
-            surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
-        },
-        gles::GlesRenderer,
-    },
+    backend::renderer::{Bind, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer},
     desktop::{space::render_output, utils::send_frames_surface_tree},
-    input::pointer::{CursorImageStatus, CursorImageSurfaceData},
-    wayland::compositor::with_states,
+    input::pointer::CursorImageStatus,
 };
 
 use crate::State;
-
-render_elements! {
-    pub CursorRenderElement<R> where R: ImportAll + ImportMem;
-    Surface = WaylandSurfaceRenderElement<R>,
-    Memory = MemoryRenderBufferRenderElement<R>,
-}
 
 const CLEAR: [f32; 4] = [0.12, 0.12, 0.14, 1.0];
 
@@ -45,19 +29,19 @@ impl State {
         // No free slot means the encoder still holds every buffer: skip this tick, stay dirty.
         let Some(slot) = self.gpu.swapchain.acquire()? else { return Ok(()) };
         let age = if self.force_full_frame { 0 } else { slot.age() as usize };
-        let scale = self.output.current_scale().fractional_scale();
-        let cursor = self.cursor_elements(scale);
 
         let mut dmabuf = (*slot).clone();
         let (sync, damaged) = {
             let mut fb = self.gpu.renderer.bind(&mut dmabuf)?;
-            let res = render_output::<_, CursorRenderElement<GlesRenderer>, _, _>(
-                &self.output, &mut self.gpu.renderer, &mut fb, 1.0, age, [&self.space], &cursor, &mut self.damage_tracker, CLEAR,
+            // The pointer is drawn by the browser, so there are no custom elements.
+            let res = render_output::<_, WaylandSurfaceRenderElement<GlesRenderer>, _, _>(
+                &self.output, &mut self.gpu.renderer, &mut fb, 1.0, age, [&self.space], &[], &mut self.damage_tracker, CLEAR,
             )?;
             (res.sync, res.damage.is_some())
         };
         self.dirty = false;
         self.force_full_frame = false;
+        self.last_render = Instant::now();
 
         let now = self.clock.now();
         for window in self.space.elements() {
@@ -91,32 +75,5 @@ impl State {
             lease: Box::new(slot),
         });
         Ok(())
-    }
-
-    fn cursor_elements(&mut self, scale: f64) -> Vec<CursorRenderElement<GlesRenderer>> {
-        let pos = self.pointer_location;
-        match &self.cursor_status {
-            CursorImageStatus::Hidden => vec![],
-            CursorImageStatus::Surface(surface) => {
-                let hotspot = with_states(surface, |states| {
-                    states.data_map.get::<CursorImageSurfaceData>().unwrap().lock().unwrap().hotspot
-                });
-                render_elements_from_surface_tree(
-                    &mut self.gpu.renderer,
-                    surface,
-                    (pos - hotspot.to_f64()).to_physical_precise_round(scale),
-                    scale,
-                    1.0,
-                    Kind::Cursor,
-                )
-            }
-            CursorImageStatus::Named(icon) => {
-                let Some((buffer, hotspot)) = self.cursor.get(*icon, scale) else { return vec![] };
-                let loc = (pos - hotspot.to_f64()).to_physical(scale);
-                MemoryRenderBufferRenderElement::from_buffer(&mut self.gpu.renderer, loc, buffer, None, None, None, Kind::Cursor)
-                    .map(|e| vec![CursorRenderElement::Memory(e)])
-                    .unwrap_or_default()
-            }
-        }
     }
 }

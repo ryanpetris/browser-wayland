@@ -1,10 +1,11 @@
 //! Binary WebSocket messages, little-endian, byte 0 = type. Mirrored in web/app.js.
 
-use bw_core::{Bytes, EncodedFrame, StreamInfo};
+use bw_core::{Bytes, CursorImage, EncodedFrame, StreamInfo};
 
 // server -> client
 pub const CONFIG: u8 = 0x01;
 pub const VIDEO: u8 = 0x02;
+pub const CURSOR: u8 = 0x03;
 // client -> server
 pub const RESIZE: u8 = 0x82;
 pub const MOTION_ABS: u8 = 0x83;
@@ -33,6 +34,19 @@ pub fn video(f: &EncodedFrame) -> Bytes {
     b.push(f.keyframe as u8);
     b.extend_from_slice(&f.pts_us.to_le_bytes());
     b.extend_from_slice(&f.data);
+    b.into()
+}
+
+/// `[CURSOR][u16 w][u16 h][i16 hot_x][i16 hot_y][straight RGBA]`; `w == 0` hides the pointer.
+pub fn cursor(img: Option<&CursorImage>) -> Bytes {
+    let Some(img) = img else { return Bytes::from_static(&[CURSOR, 0, 0, 0, 0, 0, 0, 0, 0]) };
+    let mut b = Vec::with_capacity(9 + img.rgba.len());
+    b.push(CURSOR);
+    b.extend_from_slice(&(img.width as u16).to_le_bytes());
+    b.extend_from_slice(&(img.height as u16).to_le_bytes());
+    b.extend_from_slice(&(img.hot_x as i16).to_le_bytes());
+    b.extend_from_slice(&(img.hot_y as i16).to_le_bytes());
+    b.extend_from_slice(&img.rgba);
     b.into()
 }
 

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::extract::ws::{Message, WebSocket};
-use bw_core::{AxisSource, Bytes, Command, OutputGeometry, StreamMsg};
+use bw_core::{AxisSource, Bytes, Command, Event, OutputGeometry, StreamMsg};
 use tokio::sync::mpsc;
 
 use crate::{App, protocol::{self, ClientMsg}};
@@ -47,17 +47,33 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
     }
 }
 
+/// Compositor events (cursor changes) to the current viewer.
+pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event>) {
+    while let Some(ev) = rx.recv().await {
+        let Event::Cursor(img) = ev;
+        let msg = protocol::cursor(img.as_ref());
+        let mut v = app.viewer.lock().unwrap();
+        if let Some(tx) = &v.tx {
+            let _ = tx.try_send(msg.clone());
+        }
+        v.cursor = Some(msg);
+    }
+}
+
 pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     let (tx, mut rx) = mpsc::channel::<Bytes>(8);
     // Taking over drops the previous viewer's only sender, which ends its session below.
-    let my_gen = {
+    let (my_gen, cursor) = {
         let mut v = app.viewer.lock().unwrap();
         v.generation += 1;
         v.tx = Some(tx);
         v.announced = None;
         v.need_key = true;
-        v.generation
+        (v.generation, v.cursor.clone())
     };
+    if let Some(c) = cursor {
+        let _ = socket.send(Message::Binary(c)).await;
+    }
     let _ = app.commands.send(Command::ViewerConnected);
     app.rekey();
 

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 bw-core = { path = "../bw-core" }
 anyhow.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 xcursor = "0.3"
 smithay = { version = "0.7", default-features = false, features = [

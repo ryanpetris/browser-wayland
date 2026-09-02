@@ -71,7 +71,6 @@ impl State {
         let pointer = self.seat.get_pointer().unwrap();
         pointer.motion(self, under, &MotionEvent { location, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
         pointer.frame(self);
-        self.dirty = true; // the composited cursor moved
     }
 
     fn pointer_button(&mut self, button: u32, pressed: bool) {

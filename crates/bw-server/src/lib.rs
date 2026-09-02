@@ -21,7 +21,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
 };
-use bw_core::{Bytes, Command, StreamInfo, StreamMsg};
+use bw_core::{Bytes, Command, Event, StreamInfo, StreamMsg};
 use tokio::sync::mpsc;
 
 pub struct Config {
@@ -58,12 +58,15 @@ struct Viewer {
     /// Stream id whose Config the current viewer has been sent.
     announced: Option<u32>,
     need_key: bool,
+    /// Last cursor message, replayed to a new viewer.
+    cursor: Option<Bytes>,
 }
 
 pub async fn run(
     cfg: Config,
     commands: calloop::channel::Sender<Command>,
     stream_rx: mpsc::Receiver<StreamMsg>,
+    events_rx: mpsc::UnboundedReceiver<Event>,
     request_keyframe: impl Fn() + Send + Sync + 'static,
 ) -> Result<()> {
     fs::create_dir_all(&cfg.data_dir)?;
@@ -76,6 +79,7 @@ pub async fn run(
         viewer: Mutex::default(),
     });
     tokio::spawn(ws::distribute(app.clone(), stream_rx));
+    tokio::spawn(ws::forward_events(app.clone(), events_rx));
 
     let router = Router::new()
         .route("/", get(index))

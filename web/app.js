@@ -2,7 +2,7 @@
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
 
-const CONFIG = 0x01, VIDEO = 0x02;
+const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03;
 const RESIZE = 0x82, MOTION_ABS = 0x83, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89;
 const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA
 
@@ -66,6 +66,16 @@ function onMessage(buf) {
       resync();
       status.textContent = `${stream.codec} ${stream.width}×${stream.height}`;
       break;
+    case CURSOR: {
+      // The compositor doesn't draw the pointer; we do, with zero latency.
+      const w = dv.getUint16(1, true), h = dv.getUint16(3, true);
+      if (!w || !h) { canvas.style.cursor = 'none'; break; }
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(buf, 9, w * h * 4), w, h), 0, 0);
+      canvas.style.cursor = `url(${c.toDataURL()}) ${dv.getInt16(5, true)} ${dv.getInt16(7, true)}, default`;
+      break;
+    }
     case VIDEO: {
       if (!decoder) return;
       const key = (dv.getUint8(1) & 1) !== 0;

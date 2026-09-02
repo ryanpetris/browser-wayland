@@ -39,6 +39,23 @@ pub enum Command {
     Quit,
 }
 
+/// Compositor -> server.
+#[derive(Debug)]
+pub enum Event {
+    /// The pointer image changed; `None` hides it. Drawn by the browser, not composited.
+    Cursor(Option<CursorImage>),
+}
+
+#[derive(Debug)]
+pub struct CursorImage {
+    pub width: u32,
+    pub height: u32,
+    pub hot_x: i32,
+    pub hot_y: i32,
+    /// Straight (non-premultiplied) RGBA.
+    pub rgba: Vec<u8>,
+}
+
 /// One composited frame, handed from the compositor to the encoder.
 pub struct DmabufFrame {
     /// A dup the sink owns.

@@ -313,6 +313,7 @@ dependencies = [
  "anyhow",
  "bw-core",
  "smithay",
+ "tokio",
  "tracing",
  "xcursor",
 ]
