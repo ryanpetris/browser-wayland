@@ -1,0 +1,193 @@
+//! HTTPS + WebSocket front end: serves the viewer page, authenticates with a
+//! shared token, streams encoded video out and turns browser input into `Command`s.
+
+mod protocol;
+mod ws;
+
+use std::{
+    collections::HashMap,
+    fs, io,
+    net::SocketAddr,
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
+
+use anyhow::{Context, Result};
+use axum::{
+    Router,
+    extract::{Query, State, ws::WebSocketUpgrade},
+    http::{HeaderMap, StatusCode, header},
+    response::{Html, IntoResponse, Redirect, Response},
+    routing::get,
+};
+use bw_core::{Bytes, Command, StreamInfo, StreamMsg};
+use tokio::sync::mpsc;
+
+pub struct Config {
+    pub listen: SocketAddr,
+    pub tls: bool,
+    /// Where `cert.pem`, `key.pem` and `token` live.
+    pub data_dir: PathBuf,
+}
+
+impl Config {
+    pub fn default_data_dir() -> PathBuf {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"));
+        base.join("browser-wayland")
+    }
+}
+
+pub struct App {
+    token: String,
+    tls: bool,
+    commands: calloop::channel::Sender<Command>,
+    request_keyframe: Box<dyn Fn() + Send + Sync>,
+    viewer: Mutex<Viewer>,
+}
+
+#[derive(Default)]
+struct Viewer {
+    tx: Option<mpsc::Sender<Bytes>>,
+    info: Option<StreamInfo>,
+    need_key: bool,
+}
+
+pub async fn run(
+    cfg: Config,
+    commands: calloop::channel::Sender<Command>,
+    stream_rx: mpsc::Receiver<StreamMsg>,
+    request_keyframe: impl Fn() + Send + Sync + 'static,
+) -> Result<()> {
+    fs::create_dir_all(&cfg.data_dir)?;
+    let token = load_or_create(&cfg.data_dir.join("token"), || Ok(random_hex(32)))?;
+    let app = Arc::new(App {
+        token,
+        tls: cfg.tls,
+        commands,
+        request_keyframe: Box::new(request_keyframe),
+        viewer: Mutex::default(),
+    });
+    tokio::spawn(ws::distribute(app.clone(), stream_rx));
+
+    let router = Router::new()
+        .route("/", get(index))
+        .route("/app.js", get(|| async { js(include_str!("../../../web/app.js")) }))
+        .route("/keycodes.js", get(|| async { js(include_str!("../../../web/keycodes.js")) }))
+        .route("/ws", get(websocket))
+        .with_state(app.clone());
+
+    let scheme = if cfg.tls { "https" } else { "http" };
+    for ip in lan_ips() {
+        println!("{scheme}://{ip}:{}/?token={}", cfg.listen.port(), app.token);
+    }
+
+    if cfg.tls {
+        let (cert, key) = load_or_create_cert(&cfg.data_dir)?;
+        let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert, key).await?;
+        // WebSocket upgrades need HTTP/1.1; keep browsers off h2.
+        let mut sc = (*tls.get_inner()).clone();
+        sc.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let tls = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(sc));
+        axum_server::bind_rustls(cfg.listen, tls).serve(router.into_make_service()).await?;
+    } else {
+        axum_server::bind(cfg.listen).serve(router.into_make_service()).await?;
+    }
+    Ok(())
+}
+
+/// `/?token=…` sets the auth cookie and redirects to `/`; otherwise serve the page.
+async fn index(Query(q): Query<HashMap<String, String>>, State(app): State<Arc<App>>) -> Response {
+    match q.get("token") {
+        Some(t) if app.token_ok(t) => {
+            let secure = if app.tls { "; Secure" } else { "" };
+            (
+                [(header::SET_COOKIE, format!("bw_token={t}; Path=/; HttpOnly; SameSite=Strict{secure}"))],
+                Redirect::to("/"),
+            )
+                .into_response()
+        }
+        _ => Html(include_str!("../../../web/index.html")).into_response(),
+    }
+}
+
+fn js(src: &'static str) -> Response {
+    ([(header::CONTENT_TYPE, "text/javascript")], src).into_response()
+}
+
+async fn websocket(
+    ws: WebSocketUpgrade,
+    Query(q): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    State(app): State<Arc<App>>,
+) -> Response {
+    let cookie_token = headers
+        .get(header::COOKIE)
+        .and_then(|c| c.to_str().ok())
+        .and_then(|c| c.split(';').find_map(|kv| kv.trim().strip_prefix("bw_token=")));
+    let ok = q.get("token").map(String::as_str).or(cookie_token).is_some_and(|t| app.token_ok(t));
+    if !ok {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    ws.max_message_size(64 << 10).on_upgrade(move |socket| ws::session(socket, app))
+}
+
+impl App {
+    fn token_ok(&self, t: &str) -> bool {
+        // constant-time compare, no dependency needed
+        t.len() == self.token.len()
+            && t.bytes().zip(self.token.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+    }
+}
+
+fn load_or_create(path: &Path, make: impl FnOnce() -> Result<String>) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(s.trim().to_string()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            let s = make()?;
+            write_private(path, s.as_bytes())?;
+            Ok(s)
+        }
+        Err(e) => Err(e).with_context(|| path.display().to_string()),
+    }
+}
+
+fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
+    use io::Write;
+    fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?.write_all(data)
+}
+
+fn random_hex(n: usize) -> String {
+    use io::Read;
+    let mut buf = vec![0u8; n];
+    fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf)).expect("/dev/urandom");
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn lan_ips() -> Vec<std::net::IpAddr> {
+    if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| !i.is_loopback() && i.ip().is_ipv4())
+        .map(|i| i.ip())
+        .collect()
+}
+
+/// Self-signed cert with every local address as a SAN. Delete the files to regenerate.
+fn load_or_create_cert(dir: &Path) -> Result<(Vec<u8>, Vec<u8>)> {
+    let (cert_path, key_path) = (dir.join("cert.pem"), dir.join("key.pem"));
+    if let (Ok(c), Ok(k)) = (fs::read(&cert_path), fs::read(&key_path)) {
+        return Ok((c, k));
+    }
+    let mut sans = vec!["localhost".to_string()];
+    sans.extend(if_addrs::get_if_addrs()?.iter().filter(|i| !i.is_loopback()).map(|i| i.ip().to_string()));
+    let mut params = rcgen::CertificateParams::new(sans)?;
+    params.distinguished_name.push(rcgen::DnType::CommonName, "browser-wayland");
+    let key = rcgen::KeyPair::generate()?;
+    let cert = params.self_signed(&key)?;
+    fs::write(&cert_path, cert.pem())?;
+    write_private(&key_path, key.serialize_pem().as_bytes())?;
+    Ok((cert.pem().into_bytes(), key.serialize_pem().into_bytes()))
+}
