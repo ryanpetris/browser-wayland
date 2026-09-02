@@ -1,15 +1,17 @@
-//! A `GstMeta` that owns an arbitrary Rust value and drops it when the buffer is freed.
+//! A `GstMeta` that owns an arbitrary Rust value and drops it when the last buffer carrying it is freed.
 //! Used to hand the compositor's swapchain slot back exactly when GStreamer is done reading it.
 
-use std::{any::Any, ptr, sync::OnceLock};
+use std::{any::Any, ptr, sync::{Arc, OnceLock}};
 
 use gstreamer as gst;
 use gstreamer::glib;
 
+type Lease = Arc<dyn Any + Send + Sync>;
+
 #[repr(C)]
 struct LeaseMeta {
     parent: gst::ffi::GstMeta,
-    lease: Option<Box<dyn Any + Send + Sync>>,
+    lease: Option<Lease>,
 }
 
 unsafe extern "C" fn init(meta: *mut gst::ffi::GstMeta, _: glib::ffi::gpointer, _: *mut gst::ffi::GstBuffer) -> glib::ffi::gboolean {
@@ -21,14 +23,22 @@ unsafe extern "C" fn free(meta: *mut gst::ffi::GstMeta, _: *mut gst::ffi::GstBuf
     unsafe { ptr::drop_in_place(&mut (*meta.cast::<LeaseMeta>()).lease) };
 }
 
+/// Buffer copies share the lease, so a copy keeps the slot busy too.
 unsafe extern "C" fn transform(
-    _: *mut gst::ffi::GstBuffer,
-    _: *mut gst::ffi::GstMeta,
-    _: *mut gst::ffi::GstBuffer,
-    _: glib::ffi::GQuark,
-    _: glib::ffi::gpointer,
+    dest: *mut gst::ffi::GstBuffer,
+    meta: *mut gst::ffi::GstMeta,
+    _src: *mut gst::ffi::GstBuffer,
+    _kind: glib::ffi::GQuark,
+    _data: glib::ffi::gpointer,
 ) -> glib::ffi::gboolean {
-    glib::ffi::GTRUE // copies of the buffer don't extend the lease
+    unsafe {
+        let copy = gst::ffi::gst_buffer_add_meta(dest, info(), ptr::null_mut()).cast::<LeaseMeta>();
+        if copy.is_null() {
+            return glib::ffi::GFALSE;
+        }
+        (*copy).lease = (*meta.cast::<LeaseMeta>()).lease.clone();
+    }
+    glib::ffi::GTRUE
 }
 
 struct Info(*const gst::ffi::GstMetaInfo);
@@ -52,10 +62,11 @@ fn info() -> *const gst::ffi::GstMetaInfo {
     .0
 }
 
-/// Keep `lease` alive exactly as long as `buffer`.
+/// Keep `lease` alive as long as `buffer` or any copy of it.
 pub fn attach(buffer: &mut gst::BufferRef, lease: Box<dyn Any + Send + Sync>) {
     unsafe {
         let meta = gst::ffi::gst_buffer_add_meta(buffer.as_mut_ptr(), info(), ptr::null_mut()).cast::<LeaseMeta>();
-        (*meta).lease = Some(lease);
+        assert!(!meta.is_null(), "gst_buffer_add_meta failed");
+        (*meta).lease = Some(Arc::from(lease));
     }
 }

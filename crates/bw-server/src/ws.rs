@@ -65,6 +65,9 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     // Taking over drops the previous viewer's only sender, which ends its session below.
     let (my_gen, cursor) = {
         let mut v = app.viewer.lock().unwrap();
+        if v.tx.is_some() {
+            let _ = app.commands.send(Command::ReleaseAllInput); // whatever the old viewer still held
+        }
         v.generation += 1;
         v.tx = Some(tx);
         v.announced = None;
@@ -87,10 +90,11 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) => {
+                    if app.viewer.lock().unwrap().generation != my_gen {
+                        break; // replaced: stop acting on this socket at all
+                    }
                     if let Some(cmd) = protocol::decode(&b).and_then(|m| app.command_for(m)) {
-                        if app.viewer.lock().unwrap().generation == my_gen {
-                            let _ = app.commands.send(cmd);
-                        }
+                        let _ = app.commands.send(cmd);
                     }
                 }
                 Some(Ok(Message::Pong(_))) => unanswered = 0,

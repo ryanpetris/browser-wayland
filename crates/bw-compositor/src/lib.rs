@@ -267,16 +267,25 @@ impl State {
         self.gpu.swapchain.resize(geo.width_px, geo.height_px);
         self.geometry = geo;
         let size = self.space.output_geometry(&self.output).map(|g| g.size).unwrap_or_default();
-        for window in self.space.elements() {
+        for window in self.space.elements().cloned().collect::<Vec<_>>() {
             let toplevel = window.toplevel().unwrap();
-            toplevel.with_pending_state(|s| {
+            let filled = toplevel.with_pending_state(|s| {
                 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as S;
                 s.bounds = Some(size);
-                if s.states.contains(S::Maximized) || s.states.contains(S::Fullscreen) {
+                let filled = s.states.contains(S::Maximized) || s.states.contains(S::Fullscreen);
+                if filled {
                     s.size = Some(size);
                 }
+                filled
             });
             toplevel.send_pending_configure();
+            // keep a corner of every floating window reachable
+            if let (false, Some(loc)) = (filled, self.space.element_location(&window)) {
+                let clamped = Point::from((loc.x.clamp(0, (size.w - 64).max(0)), loc.y.clamp(0, (size.h - 64).max(0))));
+                if clamped != loc {
+                    self.space.map_element(window.clone(), clamped, false);
+                }
+            }
             window.with_surfaces(|_, states| {
                 smithay::wayland::fractional_scale::with_fractional_scale(states, |f| f.set_preferred_scale(geo.scale));
             });

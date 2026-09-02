@@ -30,6 +30,15 @@ struct Cli {
 }
 
 fn main() -> Result<()> {
+    // Headless machines (no session) may lack XDG_RUNTIME_DIR; give the Wayland socket a private home.
+    if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = format!("/tmp/browser-wayland-{}", std::fs::metadata("/proc/self")?.uid());
+        std::fs::create_dir_all(&dir)?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        // Safety: single-threaded at this point.
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", &dir) };
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?))
         .init();
@@ -56,7 +65,7 @@ fn main() -> Result<()> {
         (commands, Box::new(move || stream.request_keyframe()))
     } else {
         let sink = bw_stream::GstSink::new(cli.bitrate, stream_tx)?;
-        let compositor = bw_compositor::spawn(
+        let bw_compositor::CompositorHandle { commands, socket_name, join } = bw_compositor::spawn(
             bw_compositor::Config {
                 render_node: cli.render_node,
                 socket_name: cli.socket_name,
@@ -65,12 +74,17 @@ fn main() -> Result<()> {
             Box::new(sink.clone()),
             events_tx,
         )?;
-        tracing::info!(socket = %compositor.socket_name, "compositor ready");
+        tracing::info!(socket = %socket_name, "compositor ready");
+        std::thread::spawn(move || {
+            let _ = join.join();
+            tracing::error!("compositor thread exited; shutting down");
+            std::process::exit(1);
+        });
         if let Some(cmd) = &cli.exec {
             let mut child = std::process::Command::new("sh")
                 .arg("-c")
                 .arg(cmd)
-                .env("WAYLAND_DISPLAY", &compositor.socket_name)
+                .env("WAYLAND_DISPLAY", &socket_name)
                 .env_remove("DISPLAY")
                 .env_remove("WAYLAND_SOCKET")
                 .env("GDK_BACKEND", "wayland")
@@ -80,7 +94,7 @@ fn main() -> Result<()> {
                 .spawn()?;
             std::thread::spawn(move || tracing::info!(status = ?child.wait(), "--exec client exited"));
         }
-        (compositor.commands, Box::new(move || sink.request_keyframe()))
+        (commands, Box::new(move || sink.request_keyframe()))
     };
 
     let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, data_dir: bw_server::Config::default_data_dir()? };

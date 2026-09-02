@@ -1,6 +1,6 @@
 //! Wayland protocol handlers and their delegate macros.
 
-use std::os::unix::io::OwnedFd;
+use std::{cell::RefCell, os::unix::io::OwnedFd};
 
 use smithay::{
     backend::{
@@ -25,7 +25,7 @@ use smithay::{
             protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
         },
     },
-    utils::Serial,
+    utils::{Logical, Point, Serial},
     wayland::{
         buffer::BufferHandler,
         compositor::{
@@ -117,6 +117,14 @@ impl CompositorHandler for State {
         });
     }
 
+    fn destroyed(&mut self, surface: &WlSurface) {
+        if matches!(&self.cursor_status, CursorImageStatus::Surface(s) if s == surface) {
+            self.cursor_status = CursorImageStatus::default_named();
+            self.export_cursor();
+        }
+        self.dirty = true;
+    }
+
     fn commit(&mut self, surface: &WlSurface) {
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
         if !is_sync_subsurface(surface) {
@@ -126,6 +134,11 @@ impl CompositorHandler for State {
             }
             if let Some(window) = self.window_for(&root) {
                 window.on_commit();
+                // wl_surface.offset: the client moved its buffer origin, so move the window with it
+                let delta = with_states(&root, |s| s.cached_state.get::<SurfaceAttributes>().current().buffer_delta.take());
+                if let (Some(delta), Some(loc)) = (delta, self.space.element_location(&window)) {
+                    self.space.map_element(window, loc + delta, false);
+                }
             }
         }
         self.popups.commit(surface);
@@ -237,6 +250,13 @@ impl XdgShellHandler for State {
         seat.get_pointer().unwrap().set_grab(self, grab, serial, Focus::Clear);
     }
 
+    fn toplevel_destroyed(&mut self, _surface: ToplevelSurface) {
+        self.dirty = true;
+    }
+    fn popup_destroyed(&mut self, _surface: PopupSurface) {
+        self.dirty = true;
+    }
+
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         self.fill_output(&surface, xdg_toplevel::State::Maximized);
     }
@@ -251,10 +271,18 @@ impl XdgShellHandler for State {
     }
 }
 
+/// Where a window was before it got maximized/fullscreened.
+type RestoreLocation = RefCell<Option<Point<i32, Logical>>>;
+
 impl State {
     fn fill_output(&mut self, surface: &ToplevelSurface, what: xdg_toplevel::State) {
         let Some(geo) = self.space.output_geometry(&self.output) else { return };
         let Some(window) = self.window_for(surface.wl_surface()) else { return };
+        window.user_data().insert_if_missing(RestoreLocation::default);
+        let restore = window.user_data().get::<RestoreLocation>().unwrap();
+        if restore.borrow().is_none() {
+            *restore.borrow_mut() = self.space.element_location(&window);
+        }
         surface.with_pending_state(|s| {
             s.states.set(what);
             s.size = Some(geo.size);
@@ -263,10 +291,23 @@ impl State {
         surface.send_pending_configure();
     }
     fn unfill_output(&mut self, surface: &ToplevelSurface, what: xdg_toplevel::State) {
-        surface.with_pending_state(|s| {
+        let other = match what {
+            xdg_toplevel::State::Maximized => xdg_toplevel::State::Fullscreen,
+            _ => xdg_toplevel::State::Maximized,
+        };
+        let still_filled = surface.with_pending_state(|s| {
             s.states.unset(what);
-            s.size = None;
+            s.states.contains(other)
         });
+        if !still_filled {
+            surface.with_pending_state(|s| s.size = None);
+            if let Some(window) = self.window_for(surface.wl_surface()) {
+                let saved = window.user_data().get::<RestoreLocation>().and_then(|r| r.borrow_mut().take());
+                if let Some(loc) = saved {
+                    self.space.map_element(window, loc, true);
+                }
+            }
+        }
         surface.send_pending_configure();
     }
 }

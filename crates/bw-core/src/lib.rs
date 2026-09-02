@@ -74,9 +74,11 @@ pub struct DmabufFrame {
     pub lease: Box<dyn Any + Send + Sync>,
 }
 
+pub type SinkError = Box<dyn std::error::Error + Send + Sync>;
+
 pub trait FrameSink: Send {
-    /// Must not block; the sink drops the frame if it can't take it.
-    fn submit(&mut self, frame: DmabufFrame);
+    /// Must not block. `Err` means the frame was not handed to the encoder.
+    fn submit(&mut self, frame: DmabufFrame) -> Result<(), SinkError>;
     fn output_changed(&mut self, geo: OutputGeometry, fourcc: u32, modifier: u64);
     /// `(fourcc, modifier)` pairs the encoder can import zero-copy.
     fn accepted_formats(&self) -> Vec<(u32, u64)>;

@@ -63,16 +63,25 @@ fn surface_cursor(surface: &WlSurface) -> Option<CursorImage> {
     let hotspot = with_states(surface, |s| s.data_map.get::<CursorImageSurfaceData>().map(|d| d.lock().unwrap().hotspot))?;
     let buffer = with_renderer_surface_state(surface, |s| s.buffer().cloned())??;
     with_buffer_contents(&buffer, |ptr, len, data| {
-        // Safety: shm buffer memory of `len` bytes, valid for the duration of the closure.
-        let src = unsafe { std::slice::from_raw_parts(ptr, len) };
-        let (w, h, stride) = (data.width as usize, data.height as usize, data.stride as usize);
-        let opaque = data.format == wl_shm::Format::Xrgb8888;
-        let rows = (0..h).flat_map(|y| src[data.offset as usize + y * stride..][..w * 4].chunks_exact(4));
+        let opaque = match data.format {
+            wl_shm::Format::Argb8888 => false,
+            wl_shm::Format::Xrgb8888 => true,
+            _ => return None,
+        };
+        let (w, h, stride, off) = (data.width as usize, data.height as usize, data.stride as usize, data.offset as usize);
+        if w == 0 || h == 0 || off + (h - 1) * stride + w * 4 > len {
+            return None;
+        }
+        // The client may write this memory at any time, so read through the raw pointer, never a slice.
         // wl_shm [AX]RGB8888 is little-endian: bytes are B, G, R, A.
-        let rgba = unpremultiply(rows.map(|p| (p[2], p[1], p[0], if opaque { 255 } else { p[3] })));
-        CursorImage { width: w as u32, height: h as u32, hot_x: hotspot.x, hot_y: hotspot.y, rgba }
+        let pixels = (0..h).flat_map(|y| (0..w).map(move |x| off + y * stride + x * 4)).map(|i| unsafe {
+            let p = ptr.add(i);
+            (p.add(2).read_volatile(), p.add(1).read_volatile(), p.read_volatile(), if opaque { 255 } else { p.add(3).read_volatile() })
+        });
+        Some(CursorImage { width: w as u32, height: h as u32, hot_x: hotspot.x, hot_y: hotspot.y, rgba: unpremultiply(pixels) })
     })
     .ok()
+    .flatten()
 }
 
 impl State {

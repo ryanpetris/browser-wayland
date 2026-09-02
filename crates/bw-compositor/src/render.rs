@@ -39,8 +39,6 @@ impl State {
             )?;
             (res.sync, res.damage.is_some())
         };
-        self.dirty = false;
-        self.force_full_frame = false;
         self.last_render = Instant::now();
 
         let now = self.clock.now();
@@ -53,15 +51,18 @@ impl State {
         }
 
         if !damaged || !self.viewer_connected {
+            self.dirty = false;
+            self.force_full_frame = false;
             return Ok(()); // nothing new to show (or nobody watching): don't encode
         }
-        sync.wait().ok(); // ponytail: CPU wait for the GPU; export the fence instead if it ever shows up in profiles
+        // ponytail: CPU wait for the GPU; export the fence instead if it ever shows up in profiles
+        while sync.wait().is_err() {} // Interrupted: wait again
         self.gpu.swapchain.submitted(&slot);
         slot.userdata().insert_if_missing_threadsafe(|| SlotId(self.frame_seq as u32));
         let slot_id = slot.userdata().get::<SlotId>().unwrap().0;
         self.frame_seq += 1;
 
-        self.sink.submit(DmabufFrame {
+        let submitted = self.sink.submit(DmabufFrame {
             fd: dmabuf.handles().next().context("dmabuf has no plane")?.as_fd().try_clone_to_owned()?,
             width: self.geometry.width_px,
             height: self.geometry.height_px,
@@ -74,6 +75,17 @@ impl State {
             seq: self.frame_seq,
             lease: Box::new(slot),
         });
+        match submitted {
+            Ok(()) => {
+                self.dirty = false;
+                self.force_full_frame = false;
+            }
+            Err(e) => {
+                // The damage tracker already advanced, so the retry must redraw everything.
+                tracing::warn!("frame not encoded: {e}");
+                self.force_full_frame = true;
+            }
+        }
         Ok(())
     }
 }

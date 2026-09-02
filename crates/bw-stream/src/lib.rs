@@ -12,12 +12,12 @@ use std::{
     os::fd::OwnedFd,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
 };
 
 use anyhow::{Context, Result};
-use bw_core::{Bytes, DmabufFrame, EncodedFrame, FrameSink, OutputGeometry, StreamInfo, StreamMsg};
+use bw_core::{Bytes, DmabufFrame, EncodedFrame, FrameSink, OutputGeometry, SinkError, StreamInfo, StreamMsg};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_allocators as gst_allocators;
@@ -30,6 +30,8 @@ use tokio::sync::mpsc;
 pub struct Stream {
     pipeline: gst::Pipeline,
     encoder: gst::Element,
+    /// Set by the bus watcher on a pipeline error; the sink then rebuilds on the next frame.
+    dead: Arc<AtomicBool>,
 }
 
 impl Drop for Stream {
@@ -117,10 +119,15 @@ fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<St
     );
 
     let bus = pipeline.bus().unwrap();
+    let dead = Arc::new(AtomicBool::new(false));
+    let flag = dead.clone();
     std::thread::spawn(move || {
         for msg in bus.iter_timed(gst::ClockTime::NONE) {
             match msg.view() {
-                gst::MessageView::Error(e) => tracing::error!(src = ?e.src().map(|s| s.path_string()), "gstreamer: {} ({:?})", e.error(), e.debug()),
+                gst::MessageView::Error(e) => {
+                    tracing::error!(src = ?e.src().map(|s| s.path_string()), "gstreamer: {} ({:?})", e.error(), e.debug());
+                    flag.store(true, Ordering::Relaxed);
+                }
                 gst::MessageView::Eos(_) => break,
                 _ => {}
             }
@@ -128,7 +135,7 @@ fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<St
     });
 
     pipeline.set_state(gst::State::Playing)?;
-    Ok(Stream { pipeline, encoder })
+    Ok(Stream { pipeline, encoder, dead })
 }
 
 /// `avc1.PPCCLL` from the first SPS in an Annex B access unit, per the WebCodecs AVC registration.
@@ -194,19 +201,29 @@ impl FrameSink for GstSink {
     fn output_changed(&mut self, geo: OutputGeometry, fourcc: u32, modifier: u64) {
         let mut i = self.0.lock().unwrap();
         i.geo = Some((geo, fourcc, modifier));
-        i.stream = None;
-        i.mems.clear();
+        let old = i.take_stream();
+        drop(i);
+        drop(old); // tearing down waits on streaming threads that may need this lock
     }
 
-    fn submit(&mut self, frame: DmabufFrame) {
+    fn submit(&mut self, frame: DmabufFrame) -> Result<(), SinkError> {
         let mut i = self.0.lock().unwrap();
-        if let Err(e) = i.push(frame) {
-            tracing::warn!("frame dropped: {e:#}");
+        if i.stream.as_ref().is_some_and(|(s, _)| s.dead.load(Ordering::Relaxed)) {
+            let old = i.take_stream();
+            drop(i);
+            drop(old);
+            i = self.0.lock().unwrap();
         }
+        Ok(i.push(frame)?)
     }
 }
 
 impl Inner {
+    /// Detach the pipeline and its imported memories; the caller drops them *after* unlocking.
+    fn take_stream(&mut self) -> (Option<(Stream, gst_app::AppSrc)>, HashMap<u32, gst::Memory>) {
+        (self.stream.take(), std::mem::take(&mut self.mems))
+    }
+
     fn start(&mut self) -> Result<()> {
         let (geo, fourcc, modifier) = self.geo.context("output_changed was never called")?;
         let head = format!(
