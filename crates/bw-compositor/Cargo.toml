@@ -1,0 +1,14 @@
+[package]
+name = "bw-compositor"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bw-core = { path = "../bw-core" }
+anyhow.workspace = true
+tracing.workspace = true
+xcursor = "0.3"
+smithay = { version = "0.7", default-features = false, features = [
+    "wayland_frontend", "desktop", "backend_drm", "backend_gbm", "backend_egl", "renderer_gl",
+] }

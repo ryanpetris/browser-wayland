@@ -29,7 +29,7 @@ pub enum Command {
     PointerMotionRelative { dx: f64, dy: f64 },
     /// Linux `BTN_*` code.
     PointerButton { button: u32, pressed: bool },
-    PointerAxis { source: AxisSource, dx: f64, dy: f64, v120: Option<(i32, i32)>, stop: bool },
+    PointerAxis { source: AxisSource, dx: f64, dy: f64, v120: Option<(i32, i32)> },
     Resize(OutputGeometry),
     ViewerConnected,
     ViewerDisconnected,
@@ -48,7 +48,6 @@ pub struct DmabufFrame {
     pub modifier: u64,
     pub stride: u32,
     pub offset: u32,
-    pub size: usize,
     /// Stable per swapchain slot; the sink caches its import per slot.
     pub slot_id: u32,
     pub pts: Duration,

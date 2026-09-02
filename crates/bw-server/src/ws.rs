@@ -96,7 +96,6 @@ impl App {
                 dx: dx as f64 * 15.0,
                 dy: dy as f64 * 15.0,
                 v120: Some(((dx * 120.0) as i32, (dy * 120.0) as i32)),
-                stop: false,
             },
             // ponytail: pixel (and page) deltas go out as finger scroll with no axis_stop;
             // add a stop timer if clients need kinetic scrolling.
@@ -105,7 +104,6 @@ impl App {
                 dx: dx as f64,
                 dy: dy as f64,
                 v120: None,
-                stop: false,
             },
             ClientMsg::Key { evdev, pressed } => Command::Key { evdev: evdev as u32, pressed },
             ClientMsg::Blur => Command::ReleaseAllKeys,

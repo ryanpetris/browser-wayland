@@ -1,0 +1,199 @@
+//! Interactive move and resize, driven by xdg_toplevel requests.
+
+use std::cell::RefCell;
+
+use smithay::{
+    desktop::{Space, Window},
+    input::pointer::{
+        AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
+        GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData,
+        MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
+    },
+    reexports::{
+        wayland_protocols::xdg::shell::server::xdg_toplevel::{self, ResizeEdge},
+        wayland_server::protocol::wl_surface::WlSurface,
+    },
+    utils::{Logical, Point, Rectangle, Size},
+    wayland::{compositor::with_states, shell::xdg::SurfaceCachedState},
+};
+
+use crate::State;
+
+const BTN_LEFT: u32 = 0x110;
+
+/// Everything a grab forwards unchanged.
+macro_rules! forward {
+    () => {
+        fn relative_motion(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, focus: Option<(WlSurface, Point<f64, Logical>)>, event: &RelativeMotionEvent) {
+            handle.relative_motion(data, focus, event);
+        }
+        fn axis(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, details: AxisFrame) {
+            handle.axis(data, details)
+        }
+        fn frame(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>) {
+            handle.frame(data)
+        }
+        fn gesture_swipe_begin(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &GestureSwipeBeginEvent) {
+            handle.gesture_swipe_begin(data, event)
+        }
+        fn gesture_swipe_update(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &GestureSwipeUpdateEvent) {
+            handle.gesture_swipe_update(data, event)
+        }
+        fn gesture_swipe_end(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &GestureSwipeEndEvent) {
+            handle.gesture_swipe_end(data, event)
+        }
+        fn gesture_pinch_begin(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &GesturePinchBeginEvent) {
+            handle.gesture_pinch_begin(data, event)
+        }
+        fn gesture_pinch_update(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &GesturePinchUpdateEvent) {
+            handle.gesture_pinch_update(data, event)
+        }
+        fn gesture_pinch_end(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &GesturePinchEndEvent) {
+            handle.gesture_pinch_end(data, event)
+        }
+        fn gesture_hold_begin(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &GestureHoldBeginEvent) {
+            handle.gesture_hold_begin(data, event)
+        }
+        fn gesture_hold_end(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &GestureHoldEndEvent) {
+            handle.gesture_hold_end(data, event)
+        }
+        fn start_data(&self) -> &GrabStartData<State> {
+            &self.start_data
+        }
+        fn unset(&mut self, _data: &mut State) {}
+    };
+}
+
+pub struct MoveGrab {
+    pub start_data: GrabStartData<State>,
+    pub window: Window,
+    pub initial_location: Point<i32, Logical>,
+}
+
+impl PointerGrab<State> for MoveGrab {
+    fn motion(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, event: &MotionEvent) {
+        handle.motion(data, None, event); // no focus while dragging
+        let delta = event.location - self.start_data.location;
+        let location = (self.initial_location.to_f64() + delta).to_i32_round();
+        data.space.map_element(self.window.clone(), location, true);
+        data.dirty = true;
+    }
+    fn button(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &ButtonEvent) {
+        handle.button(data, event);
+        if !handle.current_pressed().contains(&BTN_LEFT) {
+            handle.unset_grab(self, data, event.serial, event.time, true);
+        }
+    }
+    forward!();
+}
+
+pub struct ResizeGrab {
+    pub start_data: GrabStartData<State>,
+    pub window: Window,
+    pub edges: ResizeEdge,
+    pub initial_rect: Rectangle<i32, Logical>,
+    pub last_size: Size<i32, Logical>,
+}
+
+fn has_left(e: ResizeEdge) -> bool {
+    matches!(e, ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft)
+}
+fn has_right(e: ResizeEdge) -> bool {
+    matches!(e, ResizeEdge::Right | ResizeEdge::TopRight | ResizeEdge::BottomRight)
+}
+fn has_top(e: ResizeEdge) -> bool {
+    matches!(e, ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight)
+}
+fn has_bottom(e: ResizeEdge) -> bool {
+    matches!(e, ResizeEdge::Bottom | ResizeEdge::BottomLeft | ResizeEdge::BottomRight)
+}
+
+impl PointerGrab<State> for ResizeGrab {
+    fn motion(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, event: &MotionEvent) {
+        handle.motion(data, None, event);
+        let delta = event.location - self.start_data.location;
+        let (mut w, mut h) = (self.initial_rect.size.w as f64, self.initial_rect.size.h as f64);
+        if has_left(self.edges) {
+            w -= delta.x;
+        } else if has_right(self.edges) {
+            w += delta.x;
+        }
+        if has_top(self.edges) {
+            h -= delta.y;
+        } else if has_bottom(self.edges) {
+            h += delta.y;
+        }
+        let toplevel = self.window.toplevel().unwrap();
+        let (min, max) = with_states(toplevel.wl_surface(), |states| {
+            let mut guard = states.cached_state.get::<SurfaceCachedState>();
+            let d = guard.current();
+            (d.min_size, d.max_size)
+        });
+        let clamp = |v: f64, lo: i32, hi: i32| (v as i32).clamp(lo.max(1), if hi == 0 { i32::MAX } else { hi });
+        self.last_size = (clamp(w, min.w, max.w), clamp(h, min.h, max.h)).into();
+        toplevel.with_pending_state(|s| {
+            s.states.set(xdg_toplevel::State::Resizing);
+            s.size = Some(self.last_size);
+        });
+        toplevel.send_pending_configure();
+    }
+    fn button(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &ButtonEvent) {
+        handle.button(data, event);
+        if !handle.current_pressed().contains(&BTN_LEFT) {
+            handle.unset_grab(self, data, event.serial, event.time, true);
+            let toplevel = self.window.toplevel().unwrap();
+            toplevel.with_pending_state(|s| {
+                s.states.unset(xdg_toplevel::State::Resizing);
+                s.size = Some(self.last_size);
+            });
+            toplevel.send_pending_configure();
+            ResizeState::with(toplevel.wl_surface(), |st| {
+                *st = ResizeState::WaitingForLastCommit { edges: self.edges, initial_rect: self.initial_rect }
+            });
+        }
+    }
+    forward!();
+}
+
+/// Tracks a resize so top/left resizes can re-anchor the window when the client commits its new size.
+#[derive(Default, Clone, Copy)]
+pub enum ResizeState {
+    #[default]
+    Idle,
+    Resizing { edges: ResizeEdge, initial_rect: Rectangle<i32, Logical> },
+    WaitingForLastCommit { edges: ResizeEdge, initial_rect: Rectangle<i32, Logical> },
+}
+
+impl ResizeState {
+    pub fn with<T>(surface: &WlSurface, f: impl FnOnce(&mut Self) -> T) -> T {
+        with_states(surface, |states| {
+            states.data_map.insert_if_missing(RefCell::<Self>::default);
+            f(&mut states.data_map.get::<RefCell<Self>>().unwrap().borrow_mut())
+        })
+    }
+    fn take(&mut self) -> Option<(ResizeEdge, Rectangle<i32, Logical>)> {
+        match *self {
+            Self::Resizing { edges, initial_rect } => Some((edges, initial_rect)),
+            Self::WaitingForLastCommit { edges, initial_rect } => {
+                *self = Self::Idle;
+                Some((edges, initial_rect))
+            }
+            Self::Idle => None,
+        }
+    }
+}
+
+/// Called on every commit: moves a window being resized from its top/left edges.
+pub fn handle_commit(space: &mut Space<Window>, surface: &WlSurface) {
+    let Some(window) = space.elements().find(|w| w.toplevel().unwrap().wl_surface() == surface).cloned() else { return };
+    let Some(mut loc) = space.element_location(&window) else { return };
+    let size = window.geometry().size;
+    let Some((edges, initial)) = ResizeState::with(surface, |s| s.take()) else { return };
+    if has_left(edges) {
+        loc.x = initial.loc.x + (initial.size.w - size.w);
+    }
+    if has_top(edges) {
+        loc.y = initial.loc.y + (initial.size.h - size.h);
+    }
+    space.map_element(window, loc, false);
+}
