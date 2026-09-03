@@ -102,7 +102,7 @@ static STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
 fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<Stream> {
     let stream_id = STREAM_SEQ.fetch_add(1, Ordering::Relaxed);
     let desc = format!(
-        "{head} ! {} ! appsink name=sink sync=false max-buffers=1 leaky-type=downstream",
+        "{head} ! {} ! appsink name=sink sync=false max-buffers=0",
         encode_tail(opts.codec, opts.bitrate_kbps)
     );
     let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
@@ -119,6 +119,7 @@ fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<St
                 let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                 let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
                 let keyframe = !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
+                tracing::debug!(keyframe, bytes = map.len(), "encoded");
                 // First keyframe: derive the WebCodecs codec string from the SPS and announce the stream.
                 if keyframe && info.is_some() {
                     let mut i = info.take().unwrap();

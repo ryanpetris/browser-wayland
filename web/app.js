@@ -62,7 +62,7 @@ async function initRenderer() {
   }
 }
 
-let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [];
+let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [], keyframes = 0, decodeErrors = 0, dropped = 0;
 
 function connect() {
   connects++;
@@ -112,8 +112,9 @@ function newDecoder() {
     output: frame => {
       try { draw(frame); frames++; } finally { frame.close(); }
       if (lastInput) { latencyMs = performance.now() - lastInput; lastInput = 0; } // input -> next decoded frame
+      updateStatus();
     },
-    error: e => { console.error(e); if (d === decoder) resync(); },
+    error: e => { console.error(e); decodeErrors++; if (d === decoder) resync(); },
   });
   d.configure({ codec: stream.codec, optimizeForLatency: true });
   decoder = d;
@@ -133,7 +134,7 @@ function onMessage(buf) {
       canvas.width = stream.width;
       canvas.height = stream.height;
       resync();
-      status.textContent = `${stream.codec} ${stream.width}×${stream.height} ${renderer}`;
+      updateStatus();
       break;
     case CURSOR: {
       // The compositor doesn't draw the pointer; we do, with zero latency.
@@ -155,7 +156,9 @@ function onMessage(buf) {
       received++;
       if (!decoder) return;
       const key = (dv.getUint8(1) & 1) !== 0;
+      if (key) keyframes++;
       if (!key && (awaitingKey || decoder.decodeQueueSize > 4)) {
+        dropped++;
         if (!awaitingKey) { awaitingKey = true; send(REQUEST_KEYFRAME, 0); }
         return;
       }
@@ -173,6 +176,11 @@ function onMessage(buf) {
       }
     }
   }
+}
+
+function updateStatus() {
+  if (!stream) return;
+  status.textContent = `${stream.codec} ${stream.width}×${stream.height} ${renderer} · ${frames} frames, ${keyframes} key, ${dropped} dropped, ${decodeErrors} errors, ${latencyMs.toFixed(0)} ms`;
 }
 
 // Needs a user gesture: called on the lock event (usually right after the click that caused it) and retried on clicks.
@@ -231,5 +239,5 @@ document.getElementById('fs').onclick = async () => {
 };
 document.onfullscreenchange = () => { if (!document.fullscreenElement) navigator.keyboard?.unlock?.(); };
 
-window.bw = () => ({ frames, received, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
+window.bw = () => ({ frames, received, keyframes, decodeErrors, dropped, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
 initRenderer().then(connect);

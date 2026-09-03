@@ -41,10 +41,15 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
                 match tx.try_send(protocol::video(&f)) {
                     Ok(()) => v.need_key = false,
                     Err(_) => {
-                        // Viewer is slow: never send a delta after a gap.
+                        // Viewer is slow: never send a delta after a gap. Ask for a keyframe once per gap,
+                        // and again only if the keyframe itself had to be dropped.
+                        tracing::debug!(keyframe = f.keyframe, "viewer queue full, frame dropped");
+                        let ask = !v.need_key || f.keyframe;
                         v.need_key = true;
                         drop(v);
-                        app.rekey();
+                        if ask {
+                            app.rekey();
+                        }
                     }
                 }
             }
