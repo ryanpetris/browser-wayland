@@ -162,9 +162,15 @@ impl State {
                     }
                 }
                 if !pointer.is_grabbed() {
-                    // click-to-focus and raise; ponytail: bottom/background layers never get the keyboard
+                    // click-to-focus and raise
                     let clicked = self.space.element_under(self.pointer_location).map(|(w, _)| w.clone());
                     self.focus_window(clicked.as_ref(), serial);
+                    if clicked.is_none() {
+                        // empty desktop: a bottom/background layer may want the keyboard (on-demand panels)
+                        if let Some((layer, _, _)) = self.layer_under(self.pointer_location, false).filter(|(l, _, _)| l.can_receive_keyboard_focus()) {
+                            keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);
+                        }
+                    }
                 }
             }
         }
@@ -224,10 +230,12 @@ impl State {
     fn layer_under(&self, pos: Point<f64, Logical>, above: bool) -> Option<(LayerSurface, WlSurface, Point<f64, Logical>)> {
         let layers = layer_map_for_output(&self.output);
         let (a, b) = if above { (Layer::Overlay, Layer::Top) } else { (Layer::Bottom, Layer::Background) };
-        let layer = layers.layer_under(a, pos).or_else(|| layers.layer_under(b, pos))?;
-        let loc = layers.layer_geometry(layer)?.loc;
-        let (surface, p) = layer.surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)?;
-        Some((layer.clone(), surface, (p + loc).to_f64()))
+        // top-most first; a surface with an empty input region (OSDs) lets the point fall through to the next
+        layers.layers_on(a).rev().chain(layers.layers_on(b).rev()).find_map(|layer| {
+            let loc = layers.layer_geometry(layer)?.loc;
+            let (surface, p) = layer.surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)?;
+            Some((layer.clone(), surface, (p + loc).to_f64()))
+        })
     }
 
     pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {

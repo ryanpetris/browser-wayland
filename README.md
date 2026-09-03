@@ -46,6 +46,18 @@ flashes thin dark triangles (the nested shell's viewer is GTK too). Set it yours
 The devkit's window follows the browser size. Don't add `--virtual-monitor`: that adds a second
 monitor, and GNOME puts its top bar only on the first one.
 
+Panels work without a nested desktop: the compositor speaks wlr-layer-shell and
+wlr-foreign-toplevel-management, so waybar and xfce4-panel run as ordinary clients with working
+taskbars (maximized windows stay clear of the panels, minimize goes through the taskbar).
+
+```sh
+cargo run --release -- --exec 'waybar & exec foot'                              # add "wlr/taskbar" to modules-left for a taskbar
+cargo run --release -- --exec 'dbus-run-session -- sh -c "xfce4-panel & exec foot"'   # first run asks for the default config
+```
+
+xfce4-panel needs a D-Bus session bus for xfconfd; the wrapper is only needed where there is none.
+Its pager stays empty (no ext-workspace: there is one workspace).
+
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,
 then H.264), `--fake-source` (a test pattern instead of the compositor), `--socket-name`, `--render-node`.

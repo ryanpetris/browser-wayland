@@ -341,7 +341,9 @@ impl State {
     }
 
     pub(crate) fn fill_output(&mut self, surface: &ToplevelSurface, what: xdg_toplevel::State) {
-        let geo = self.fill_rect(what == xdg_toplevel::State::Fullscreen);
+        // fullscreen wins over maximized when both are set
+        let fullscreen = what == xdg_toplevel::State::Fullscreen || surface.with_pending_state(|s| s.states.contains(xdg_toplevel::State::Fullscreen));
+        let geo = self.fill_rect(fullscreen);
         let Some(window) = self.window_for(surface.wl_surface()) else { return };
         window.user_data().insert_if_missing(RestoreLocation::default);
         let restore = window.user_data().get::<RestoreLocation>().unwrap();

@@ -20,7 +20,8 @@ use smithay::{
 
 use crate::State;
 
-pub const VERSION: u32 = 3;
+/// v3 adds the `parent` event; we don't track window parents, so stay at 2.
+pub const VERSION: u32 = 2;
 
 #[derive(Default)]
 pub struct ForeignToplevels {
@@ -143,10 +144,11 @@ impl State {
     /// Maximize/fullscreen (or undo it) from a taskbar, through the same paths the clients' own requests take.
     fn fill(&mut self, window: &Window, what: XdgState, set: bool) {
         let fullscreen = what == XdgState::Fullscreen;
+        self.unminimize(window); // the fill paths only know mapped windows; a taskbar (un)maximizing one shows it anyway
         match window.underlying_surface() {
             WindowSurface::Wayland(t) if set => self.fill_output(t, what),
             WindowSurface::Wayland(t) => self.unfill_output(t, what),
-            WindowSurface::X11(x) if set => self.fill_x11(x.clone(), fullscreen, |w| if fullscreen { w.set_fullscreen(true) } else { w.set_maximized(true) }),
+            WindowSurface::X11(x) if set => self.fill_x11(x.clone(), |w| if fullscreen { w.set_fullscreen(true) } else { w.set_maximized(true) }),
             WindowSurface::X11(x) => self.unfill_x11(x.clone(), |w| if fullscreen { w.set_fullscreen(false) } else { w.set_maximized(false) }),
         }
     }

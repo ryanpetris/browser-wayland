@@ -99,7 +99,7 @@ impl XwmHandler for State {
         }
         let n = self.space.elements().count() as i32 % 10;
         let mut rect = window.geometry();
-        rect.loc = (40 + 30 * n, 40 + 30 * n).into();
+        rect.loc = self.work_area().loc + smithay::utils::Point::from((40 + 30 * n, 40 + 30 * n));
         self.place_x11(&win, &window, rect);
     }
 
@@ -167,13 +167,13 @@ impl XwmHandler for State {
         }
     }
     fn maximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
-        self.fill_x11(window, false, |w| w.set_maximized(true));
+        self.fill_x11(window, |w| w.set_maximized(true));
     }
     fn unmaximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
         self.unfill_x11(window, |w| w.set_maximized(false));
     }
     fn fullscreen_request(&mut self, _xwm: XwmId, window: X11Surface) {
-        self.fill_x11(window, true, |w| w.set_fullscreen(true));
+        self.fill_x11(window, |w| w.set_fullscreen(true));
     }
     fn unfullscreen_request(&mut self, _xwm: XwmId, window: X11Surface) {
         self.unfill_x11(window, |w| w.set_fullscreen(false));
@@ -259,9 +259,8 @@ impl State {
         (start.button == 0x110 && start.focus.as_ref().map(|(s, _)| s.clone()) == window.wl_surface()).then_some(start)
     }
 
-    pub(crate) fn fill_x11(&mut self, window: X11Surface, fullscreen: bool, set: impl Fn(&X11Surface) -> Result<(), smithay::reexports::x11rb::rust_connection::ConnectionError>) {
+    pub(crate) fn fill_x11(&mut self, window: X11Surface, set: impl Fn(&X11Surface) -> Result<(), smithay::reexports::x11rb::rust_connection::ConnectionError>) {
         let Some(win) = self.window_for_x11(&window) else { return };
-        let geo = self.fill_rect(fullscreen);
         win.user_data().insert_if_missing(Restore::default);
         let restore = win.user_data().get::<Restore>().unwrap();
         if restore.borrow().is_none() {
@@ -270,6 +269,7 @@ impl State {
             *restore.borrow_mut() = Some(r);
         }
         let _ = set(&window);
+        let geo = self.fill_rect(window.is_fullscreen()); // fullscreen wins over maximized when both are set
         self.place_x11(&win, &window, geo);
     }
 
