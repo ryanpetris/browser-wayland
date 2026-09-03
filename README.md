@@ -40,6 +40,9 @@ and `--kiosk` fullscreens every window. Together they run a whole nested desktop
 cargo run --release -- --kiosk --exec 'dbus-run-session -- gnome-shell --devkit'
 ```
 
+Clients from `--exec` also get `GSK_RENDERER=ngl`: GTK 4.22's default Vulkan renderer intermittently
+flashes thin dark triangles (the nested shell's viewer is GTK too). Set it yourself for GTK apps you start by hand.
+
 The devkit's window follows the browser size. Don't add `--virtual-monitor`: that adds a second
 monitor, and GNOME puts its top bar only on the first one.
 

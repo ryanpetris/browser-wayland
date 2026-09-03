@@ -286,6 +286,9 @@ impl State {
             .env("BW_HEIGHT", ((geo.height_px as f64 / geo.scale).round() as u32).to_string())
             .env_remove("WAYLAND_SOCKET")
             .env("GDK_BACKEND", "wayland")
+            // GTK 4.22's default Vulkan renderer intermittently draws hairline slivers from the window corner
+            // (seen with gnome-text-editor and mutter-devkit, never with its GL renderer). Drop when GTK fixes it.
+            .env("GSK_RENDERER", "ngl")
             .env("QT_QPA_PLATFORM", "wayland")
             .env("SDL_VIDEODRIVER", "wayland")
             .env("MOZ_ENABLE_WAYLAND", "1")
