@@ -20,6 +20,7 @@ The server prints the certificate fingerprint and a URL like `https://<lan-ip>:8
 Open it in a browser on the LAN, compare the fingerprint before accepting the self-signed
 certificate, and the desktop appears. The browser viewport size becomes the output size.
 The ⛶ button enters fullscreen with keyboard lock so shortcuts like Ctrl+W reach the desktop.
+Frames are drawn with WebGPU when the browser has it (zero-copy import of the decoded frame), else a 2D canvas.
 
 Other clients can join later: `WAYLAND_DISPLAY=wayland-browser some-app`.
 

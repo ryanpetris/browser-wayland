@@ -7,17 +7,71 @@ const HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON 
 const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA
 
 const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
 const status = document.getElementById('s');
+let draw, renderer; // set by initRenderer(): paints one VideoFrame
 
-let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false;
+// --- rendering -------------------------------------------------------------
+
+// WebGPU imports the decoded frame as an external texture (zero-copy) and draws it with a
+// full-screen triangle; the browser does the YUV->RGB conversion inside the sampler.
+async function initWebGPU() {
+  const adapter = await navigator.gpu?.requestAdapter();
+  if (!adapter) return null;
+  const device = await adapter.requestDevice();
+  device.lost.then(info => { console.warn('WebGPU device lost:', info.reason, info.message); location.reload(); }); // ponytail: a reload is the simplest recovery
+  const context = canvas.getContext('webgpu');
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  context.configure({ device, format, alphaMode: 'opaque' });
+  const module = device.createShaderModule({ code: `
+    struct V { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
+    @vertex fn vs(@builtin(vertex_index) i: u32) -> V {
+      let p = array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
+      var o: V;
+      o.pos = vec4f(p[i], 0, 1);
+      o.uv = vec2f(p[i].x * 0.5 + 0.5, 0.5 - p[i].y * 0.5);
+      return o;
+    }
+    @group(0) @binding(0) var s: sampler;
+    @group(0) @binding(1) var t: texture_external;
+    @fragment fn fs(v: V) -> @location(0) vec4f { return textureSampleBaseClampToEdge(t, s, v.uv); }` });
+  const pipeline = device.createRenderPipeline({ layout: 'auto', vertex: { module }, fragment: { module, targets: [{ format }] } });
+  const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+  return frame => {
+    const bindGroup = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [{ binding: 0, resource: sampler }, { binding: 1, resource: device.importExternalTexture({ source: frame }) }],
+    });
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{ view: context.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store' }],
+    });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(3);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+  };
+}
+
+async function initRenderer() {
+  try { draw = await initWebGPU(); } catch (e) { console.warn('WebGPU unavailable:', e); }
+  renderer = draw ? 'webgpu' : '2d';
+  if (!draw) {
+    const ctx = canvas.getContext('2d');
+    draw = frame => ctx.drawImage(frame, 0, 0);
+  }
+}
+
+let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [];
 
 function connect() {
+  connects++;
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = async () => { await sendHello(); sendResize(); };
   ws.onmessage = e => onMessage(e.data);
-  ws.onclose = () => {
+  ws.onclose = e => {
+    closes.push(`${e.code}:${e.reason}`);
     status.textContent = stream ? 'disconnected, retrying…' : 'no stream; open the URL with ?token= printed by the server';
     setTimeout(connect, 1000);
   };
@@ -56,7 +110,7 @@ function newDecoder() {
   if (decoder && decoder.state !== 'closed') decoder.close(); // a decode error closes it already
   const d = new VideoDecoder({
     output: frame => {
-      try { ctx.drawImage(frame, 0, 0); frames++; } finally { frame.close(); }
+      try { draw(frame); frames++; } finally { frame.close(); }
       if (lastInput) { latencyMs = performance.now() - lastInput; lastInput = 0; } // input -> next decoded frame
     },
     error: e => { console.error(e); if (d === decoder) resync(); },
@@ -79,7 +133,7 @@ function onMessage(buf) {
       canvas.width = stream.width;
       canvas.height = stream.height;
       resync();
-      status.textContent = `${stream.codec} ${stream.width}×${stream.height}`;
+      status.textContent = `${stream.codec} ${stream.width}×${stream.height} ${renderer}`;
       break;
     case CURSOR: {
       // The compositor doesn't draw the pointer; we do, with zero latency.
@@ -177,5 +231,5 @@ document.getElementById('fs').onclick = async () => {
 };
 document.onfullscreenchange = () => { if (!document.fullscreenElement) navigator.keyboard?.unlock?.(); };
 
-window.bw = () => ({ frames, received, latencyMs, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
-connect();
+window.bw = () => ({ frames, received, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
+initRenderer().then(connect);
