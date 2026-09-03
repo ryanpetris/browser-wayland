@@ -248,7 +248,7 @@ impl State {
         (start.button == 0x110 && start.focus.as_ref().map(|(s, _)| s.clone()) == window.wl_surface()).then_some(start)
     }
 
-    fn fill_x11(&mut self, window: X11Surface, fullscreen: bool, set: impl Fn(&X11Surface) -> Result<(), smithay::reexports::x11rb::rust_connection::ConnectionError>) {
+    pub(crate) fn fill_x11(&mut self, window: X11Surface, fullscreen: bool, set: impl Fn(&X11Surface) -> Result<(), smithay::reexports::x11rb::rust_connection::ConnectionError>) {
         let Some(win) = self.window_for_x11(&window) else { return };
         let geo = self.fill_rect(fullscreen);
         win.user_data().insert_if_missing(Restore::default);
@@ -262,7 +262,7 @@ impl State {
         self.place_x11(&win, &window, geo);
     }
 
-    fn unfill_x11(&mut self, window: X11Surface, set: impl Fn(&X11Surface) -> Result<(), smithay::reexports::x11rb::rust_connection::ConnectionError>) {
+    pub(crate) fn unfill_x11(&mut self, window: X11Surface, set: impl Fn(&X11Surface) -> Result<(), smithay::reexports::x11rb::rust_connection::ConnectionError>) {
         let _ = set(&window);
         let Some(win) = self.window_for_x11(&window) else { return };
         if window.is_maximized() || window.is_fullscreen() {

@@ -340,7 +340,7 @@ impl State {
         if fullscreen { self.space.output_geometry(&self.output).unwrap_or_default() } else { self.work_area() }
     }
 
-    fn fill_output(&mut self, surface: &ToplevelSurface, what: xdg_toplevel::State) {
+    pub(crate) fn fill_output(&mut self, surface: &ToplevelSurface, what: xdg_toplevel::State) {
         let geo = self.fill_rect(what == xdg_toplevel::State::Fullscreen);
         let Some(window) = self.window_for(surface.wl_surface()) else { return };
         window.user_data().insert_if_missing(RestoreLocation::default);
@@ -355,7 +355,7 @@ impl State {
         self.space.map_element(window, geo.loc, true);
         surface.send_pending_configure();
     }
-    fn unfill_output(&mut self, surface: &ToplevelSurface, what: xdg_toplevel::State) {
+    pub(crate) fn unfill_output(&mut self, surface: &ToplevelSurface, what: xdg_toplevel::State) {
         let other = match what {
             xdg_toplevel::State::Maximized => xdg_toplevel::State::Fullscreen,
             _ => xdg_toplevel::State::Maximized,

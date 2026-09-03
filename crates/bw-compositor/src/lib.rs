@@ -2,6 +2,7 @@
 //! and takes input as [`Command`]s. Everything runs on one thread with one calloop loop.
 
 mod cursor;
+mod foreign_toplevel;
 mod gpu;
 mod grabs;
 mod handlers;
@@ -29,6 +30,7 @@ use smithay::{
             generic::Generic,
             timer::{TimeoutAction, Timer},
         },
+        wayland_protocols_wlr::foreign_toplevel::v1::server::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1,
         wayland_server::{
             Display, DisplayHandle,
             backend::{ClientData, ClientId, DisconnectReason},
@@ -133,6 +135,7 @@ pub struct State {
     pub popups: PopupManager,
     /// Minimized windows (unmapped from the space) with where to put them back.
     pub minimized: Vec<(Window, Point<i32, Logical>)>,
+    pub foreign: foreign_toplevel::ForeignToplevels,
 
     pub seat_state: SeatState<State>,
     pub seat: Seat<State>,
@@ -225,6 +228,7 @@ impl State {
 
         // Explicit sync: Vulkan clients (GTK4 by default) put no implicit fences on their dmabufs.
         let syncobj_state = supports_syncobj_eventfd(&gpu.drm).then(|| DrmSyncobjState::new::<State>(&dh, gpu.drm.clone()));
+        dh.create_global::<State, ZwlrForeignToplevelManagerV1, ()>(foreign_toplevel::VERSION, ());
 
         let mut state = State {
             handle,
@@ -252,6 +256,7 @@ impl State {
             space,
             popups: PopupManager::default(),
             minimized: Vec::new(),
+            foreign: Default::default(),
             seat_state,
             seat,
             pointer_location: (0.0, 0.0).into(),
@@ -334,6 +339,7 @@ impl State {
                 state.space.refresh();
                 state.minimized.retain(|(w, _)| w.alive());
                 state.popups.cleanup();
+                state.refresh_foreign_toplevels();
                 if state.pointer_locked {
                     // constraints can go away without any input (client destroyed it, focus left)
                     let pointer = state.seat.get_pointer().unwrap();
