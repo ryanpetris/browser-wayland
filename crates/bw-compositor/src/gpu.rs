@@ -19,6 +19,7 @@ pub type DmabufSwapchain = Swapchain<DmabufAllocator<GbmAllocator<DrmDeviceFd>>>
 
 pub struct Gpu {
     pub node: DrmNode,
+    pub drm: DrmDeviceFd,
     pub renderer: GlesRenderer,
     pub swapchain: DmabufSwapchain,
     pub fourcc: Fourcc,
@@ -31,7 +32,7 @@ impl Gpu {
         let node = DrmNode::from_path(render_node)?;
         let file = OpenOptions::new().read(true).write(true).open(render_node)?;
         let fd = DrmDeviceFd::new(OwnedFd::from(file).into());
-        let gbm = GbmDevice::new(fd)?;
+        let gbm = GbmDevice::new(fd.clone())?;
         // Safety: the display is only used from this thread and outlives the renderer through the context.
         let egl = unsafe { EGLDisplay::new(gbm.clone())? };
         let renderer = unsafe { GlesRenderer::new(EGLContext::new(&egl)?)? };
@@ -50,6 +51,6 @@ impl Gpu {
 
         let allocator = DmabufAllocator(GbmAllocator::new(gbm, GbmBufferFlags::RENDERING));
         let swapchain = Swapchain::new(allocator, geo.width_px, geo.height_px, fourcc, vec![modifier]);
-        Ok(Gpu { node, renderer, swapchain, fourcc, modifier })
+        Ok(Gpu { node, drm: fd, renderer, swapchain, fourcc, modifier })
     }
 }

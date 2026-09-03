@@ -38,6 +38,7 @@ use smithay::{
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufState},
+        drm_syncobj::{DrmSyncobjState, supports_syncobj_eventfd},
         fractional_scale::FractionalScaleManagerState,
         output::OutputManagerState,
         pointer_constraints::PointerConstraintsState,
@@ -112,6 +113,7 @@ pub struct State {
     pub geometry: OutputGeometry,
     pub damage_tracker: OutputDamageTracker,
     pub dmabuf_state: DmabufState,
+    pub syncobj_state: Option<DrmSyncobjState>,
     pub dmabuf_feedback: DmabufFeedback,
     pub sink: Box<dyn FrameSink>,
     pub events: tokio::sync::mpsc::UnboundedSender<Event>,
@@ -215,6 +217,9 @@ impl State {
             Ok(PostAction::Continue)
         })?;
 
+        // Explicit sync: Vulkan clients (GTK4 by default) put no implicit fences on their dmabufs.
+        let syncobj_state = supports_syncobj_eventfd(&gpu.drm).then(|| DrmSyncobjState::new::<State>(&dh, gpu.drm.clone()));
+
         let mut state = State {
             handle,
             clock: Clock::new(),
@@ -228,6 +233,7 @@ impl State {
             geometry: cfg.initial,
             gpu,
             dmabuf_state,
+            syncobj_state,
             dmabuf_feedback,
             sink,
             events,

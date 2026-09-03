@@ -9,7 +9,7 @@ use smithay::{
     },
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale, delegate_output,
     delegate_pointer_constraints, delegate_primary_selection, delegate_relative_pointer, delegate_seat, delegate_shm,
-    delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_drm_syncobj, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{PopupKind, Window, find_popup_root_surface, get_popup_toplevel_coords},
     input::{
         Seat, SeatHandler, SeatState,
@@ -35,6 +35,7 @@ use smithay::{
             add_pre_commit_hook, get_parent, is_sync_subsurface, with_states,
         },
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier, get_dmabuf},
+        drm_syncobj::{DrmSyncobjCachedState, DrmSyncobjHandler, DrmSyncobjState},
         fractional_scale::{FractionalScaleHandler, with_fractional_scale},
         output::OutputHandler,
         pointer_constraints::PointerConstraintsHandler,
@@ -101,31 +102,33 @@ impl CompositorHandler for State {
 
     fn new_surface(&mut self, surface: &WlSurface) {
         add_pre_commit_hook::<Self, _>(surface, |state, _dh, surface| {
-            // ponytail: drop client opaque regions. Smithay 0.7's renderer draws them with blending off
-            // and occasionally with a bad rectangle, which paints transparent shadow texels as black
-            // wedges. Cost: no occlusion culling, so a window animating behind another one still
-            // causes renders and encoded frames. Remove once the renderer bug is fixed upstream.
-            with_states(surface, |data| data.cached_state.get::<SurfaceAttributes>().pending().opaque_region = None);
-            // Don't sample a client's dmabuf before its GPU work has finished.
-            let dmabuf = with_states(surface, |data| {
-                match data.cached_state.get::<SurfaceAttributes>().pending().buffer.as_ref() {
+            // Don't sample a client's dmabuf before its GPU work has finished: wait for the explicit-sync
+            // acquire point when the client gave one, else for the dmabuf's implicit fences.
+            let (dmabuf, acquire) = with_states(surface, |data| {
+                let dmabuf = match data.cached_state.get::<SurfaceAttributes>().pending().buffer.as_ref() {
                     Some(BufferAssignment::NewBuffer(b)) => get_dmabuf(b).cloned().ok(),
                     _ => None,
-                }
+                };
+                (dmabuf, data.cached_state.get::<DrmSyncobjCachedState>().pending().acquire_point.clone())
             });
             let Some(dmabuf) = dmabuf else { return };
-            let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) else { return };
             let Some(client) = surface.client() else { return };
-            let ok = state
-                .handle
-                .insert_source(source, move |_, _, state| {
-                    let dh = state.dh.clone();
-                    state.client_compositor_state(&client).blocker_cleared(state, &dh);
-                    Ok(())
-                })
-                .is_ok();
-            if ok {
-                add_blocker(surface, blocker);
+            let cleared = move |state: &mut State| {
+                let dh = state.dh.clone();
+                state.client_compositor_state(&client).blocker_cleared(state, &dh);
+            };
+            match acquire.and_then(|point| point.generate_blocker().ok()) {
+                Some((blocker, source)) => {
+                    if state.handle.insert_source(source, move |_, _, state| { cleared(state); Ok(()) }).is_ok() {
+                        add_blocker(surface, blocker);
+                    }
+                }
+                None => {
+                    let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) else { return };
+                    if state.handle.insert_source(source, move |_, _, state| { cleared(state); Ok(()) }).is_ok() {
+                        add_blocker(surface, blocker);
+                    }
+                }
             }
         });
     }
@@ -409,6 +412,13 @@ impl ServerDndGrabHandler for State {
 }
 
 impl OutputHandler for State {}
+
+impl DrmSyncobjHandler for State {
+    fn drm_syncobj_state(&mut self) -> Option<&mut DrmSyncobjState> {
+        self.syncobj_state.as_mut()
+    }
+}
+delegate_drm_syncobj!(State);
 
 impl DmabufHandler for State {
     fn dmabuf_state(&mut self) -> &mut DmabufState {

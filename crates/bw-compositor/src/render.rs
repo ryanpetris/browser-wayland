@@ -50,13 +50,14 @@ impl State {
             send_frames_surface_tree(s, &self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
         }
 
+        // ponytail: CPU wait for the GPU; export the fence instead if it ever shows up in profiles.
+        // Done before any early return: the next commit releases client buffers, so our reads must be over.
+        while sync.wait().is_err() {} // Interrupted: wait again
         if !damaged || !self.viewer_connected {
             self.dirty = false;
             self.force_full_frame = false;
             return Ok(()); // nothing new to show (or nobody watching): don't encode
         }
-        // ponytail: CPU wait for the GPU; export the fence instead if it ever shows up in profiles
-        while sync.wait().is_err() {} // Interrupted: wait again
         self.gpu.swapchain.submitted(&slot);
         slot.userdata().insert_if_missing_threadsafe(|| SlotId(self.frame_seq as u32));
         let slot_id = slot.userdata().get::<SlotId>().unwrap().0;
