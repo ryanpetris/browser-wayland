@@ -37,8 +37,11 @@ and `--kiosk` fullscreens every window. Together they run a whole nested desktop
 `mutter-devkit` package installed, GNOME:
 
 ```sh
-cargo run --release -- --kiosk --exec 'dbus-run-session -- gnome-shell --devkit --virtual-monitor ${BW_WIDTH}x${BW_HEIGHT}'
+cargo run --release -- --kiosk --exec 'dbus-run-session -- gnome-shell --devkit'
 ```
+
+The devkit's window follows the browser size. Don't add `--virtual-monitor`: that adds a second
+monitor, and GNOME puts its top bar only on the first one.
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,

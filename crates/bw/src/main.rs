@@ -28,7 +28,7 @@ struct Cli {
     #[arg(long)]
     exec: Option<String>,
     /// Fullscreen every window: for running a nested desktop such as
-    /// `--exec 'dbus-run-session -- gnome-shell --devkit --virtual-monitor ${BW_WIDTH}x${BW_HEIGHT}'`.
+    /// `--exec 'dbus-run-session -- gnome-shell --devkit'`.
     #[arg(long)]
     kiosk: bool,
     #[arg(long, default_value = "/dev/dri/renderD128")]
