@@ -24,9 +24,8 @@ function paint() {
   const frame = pendingFrame;
   pendingFrame = null;
   if (!frame) return;
-  try { draw(frame); frames++; } catch (e) { console.error(e); frame.close(); }
+  try { draw(frame); frames++; windowFrames++; } catch (e) { console.error(e); frame.close(); }
   if (lastInput) { latencyMs = performance.now() - lastInput; lastInput = 0; } // input -> next painted frame
-  updateStatus();
 }
 
 // --- rendering -------------------------------------------------------------
@@ -88,7 +87,7 @@ async function initRenderer() {
   }
 }
 
-let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [], keyframes = 0, decodeErrors = 0, dropped = 0;
+let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, fps = 0, mbps = 0, windowFrames = 0, windowBytes = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [], keyframes = 0, decodeErrors = 0, dropped = 0;
 
 function connect() {
   connects++;
@@ -149,6 +148,7 @@ function resync() {
 }
 
 function onMessage(buf) {
+  windowBytes += buf.byteLength;
   const dv = new DataView(buf);
   switch (dv.getUint8(0)) {
     case CONFIG:
@@ -205,8 +205,14 @@ function onMessage(buf) {
 
 function updateStatus() {
   if (!stream) return;
-  status.textContent = `${stream.codec} ${stream.width}×${stream.height} ${renderer} · ${frames} frames, ${keyframes} key, ${dropped} dropped, ${decodeErrors} errors, ${latencyMs.toFixed(0)} ms`;
+  status.textContent = `${stream.codec} ${stream.width}×${stream.height} ${renderer} · ${fps} fps · ${mbps.toFixed(1)} Mbit/s · ${latencyMs.toFixed(0)} ms · ${dropped} dropped, ${decodeErrors} errors`;
 }
+// frame rate and bandwidth (video + audio) over the last second
+setInterval(() => {
+  fps = windowFrames; mbps = windowBytes * 8 / 1e6;
+  windowFrames = 0; windowBytes = 0;
+  updateStatus();
+}, 1000);
 
 // Needs a user gesture: called on the lock event (usually right after the click that caused it) and retried on clicks.
 function requestLock() {
@@ -313,5 +319,5 @@ function audioStats() {
   for (let i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
   return { packets: audioPackets, decoded: audioDecoded, state: audioCtx.state, peakHz: Math.round(peak * audioCtx.sampleRate / 2 / bins.length), level: bins[peak] };
 }
-window.bw = () => ({ frames, received, audio: audioStats(), keyframes, decodeErrors, dropped, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
+window.bw = () => ({ frames, received, fps, mbps, audio: audioStats(), keyframes, decodeErrors, dropped, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
 initRenderer().then(connect);
