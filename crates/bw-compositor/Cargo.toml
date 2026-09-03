@@ -11,5 +11,5 @@ tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 xcursor = "0.3"
 smithay = { version = "0.7", default-features = false, features = [
-    "wayland_frontend", "desktop", "backend_drm", "backend_gbm", "backend_egl", "renderer_gl",
+    "wayland_frontend", "desktop", "backend_drm", "backend_gbm", "backend_egl", "renderer_gl", "xwayland",
 ] }

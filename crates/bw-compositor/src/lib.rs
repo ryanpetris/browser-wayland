@@ -7,6 +7,7 @@ mod grabs;
 mod handlers;
 mod input;
 mod render;
+mod xwayland;
 
 use std::{
     path::PathBuf,
@@ -19,7 +20,7 @@ use anyhow::{Context, Result};
 use bw_core::{Command, Event, FrameSink, OutputGeometry};
 use smithay::{
     backend::renderer::{ImportDma, damage::OutputDamageTracker},
-    desktop::{PopupManager, Space, Window},
+    desktop::{PopupManager, Space, Window, WindowSurface},
     input::{Seat, SeatState, pointer::CursorImageStatus},
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
@@ -33,7 +34,7 @@ use smithay::{
             backend::{ClientData, ClientId, DisconnectReason},
         },
     },
-    utils::{Clock, Logical, Monotonic, Point, Transform},
+    utils::{Clock, Logical, Monotonic, Point, Rectangle, Transform},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufState},
@@ -46,7 +47,9 @@ use smithay::{
         shm::ShmState,
         socket::ListeningSocketSource,
         viewporter::ViewporterState,
+        xwayland_shell::XWaylandShellState,
     },
+    xwayland::X11Wm,
 };
 
 pub struct Config {
@@ -59,6 +62,8 @@ pub struct Config {
 pub struct CompositorHandle {
     pub commands: channel::Sender<Command>,
     pub socket_name: String,
+    /// X11 display number, if Xwayland came up.
+    pub x11_display: Option<u32>,
     pub join: JoinHandle<()>,
 }
 
@@ -67,16 +72,23 @@ pub fn spawn(cfg: Config, sink: Box<dyn FrameSink>, events: tokio::sync::mpsc::U
     let (commands, rx) = channel::channel();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let join = std::thread::Builder::new().name("compositor".into()).spawn(move || match State::new(cfg, sink, events) {
-        Ok((mut event_loop, state)) => {
-            let _ = ready_tx.send(Ok(state.socket_name.clone()));
+        Ok((mut event_loop, mut state)) => {
+            // Give Xwayland a moment to come up so --exec children can get DISPLAY.
+            state.start_xwayland();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while state.x11_display.is_none() && Instant::now() < deadline {
+                let _ = event_loop.dispatch(Some(Duration::from_millis(50)), &mut state);
+                let _ = state.dh.flush_clients();
+            }
+            let _ = ready_tx.send(Ok((state.socket_name.clone(), state.x11_display)));
             state.run(&mut event_loop, rx);
         }
         Err(e) => {
             let _ = ready_tx.send(Err(e));
         }
     })?;
-    let socket_name = ready_rx.recv().context("compositor thread died")??;
-    Ok(CompositorHandle { commands, socket_name, join })
+    let (socket_name, x11_display) = ready_rx.recv().context("compositor thread died")??;
+    Ok(CompositorHandle { commands, socket_name, x11_display, join })
 }
 
 pub struct State {
@@ -128,6 +140,9 @@ pub struct State {
     pub fractional_scale_state: FractionalScaleManagerState,
     pub relative_pointer_state: RelativePointerManagerState,
     pub pointer_constraints_state: PointerConstraintsState,
+    pub xwayland_shell_state: XWaylandShellState,
+    pub xwm: Option<X11Wm>,
+    pub x11_display: Option<u32>,
 }
 
 #[derive(Default)]
@@ -230,6 +245,9 @@ impl State {
             fractional_scale_state: FractionalScaleManagerState::new::<State>(&dh),
             relative_pointer_state: RelativePointerManagerState::new::<State>(&dh),
             pointer_constraints_state: PointerConstraintsState::new::<State>(&dh),
+            xwayland_shell_state: XWaylandShellState::new::<State>(&dh),
+            xwm: None,
+            x11_display: None,
             dh,
         };
         state.export_cursor(); // the default arrow, before any client sets one
@@ -285,22 +303,36 @@ impl State {
         self.geometry = geo;
         let size = self.space.output_geometry(&self.output).map(|g| g.size).unwrap_or_default();
         for window in self.space.elements().cloned().collect::<Vec<_>>() {
-            let toplevel = window.toplevel().unwrap();
-            let filled = toplevel.with_pending_state(|s| {
-                use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as S;
-                s.bounds = Some(size);
-                let filled = s.states.contains(S::Maximized) || s.states.contains(S::Fullscreen);
-                if filled {
-                    s.size = Some(size);
+            let filled = match window.underlying_surface() {
+                WindowSurface::Wayland(toplevel) => {
+                    let filled = toplevel.with_pending_state(|s| {
+                        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as S;
+                        s.bounds = Some(size);
+                        let filled = s.states.contains(S::Maximized) || s.states.contains(S::Fullscreen);
+                        if filled {
+                            s.size = Some(size);
+                        }
+                        filled
+                    });
+                    toplevel.send_pending_configure();
+                    filled
                 }
-                filled
-            });
-            toplevel.send_pending_configure();
+                WindowSurface::X11(x11) => {
+                    let filled = x11.is_maximized() || x11.is_fullscreen();
+                    if filled {
+                        let _ = x11.configure(Rectangle::new((0, 0).into(), size));
+                    }
+                    filled
+                }
+            };
             // keep a corner of every floating window reachable
             if let (false, Some(loc)) = (filled, self.space.element_location(&window)) {
                 let clamped = Point::from((loc.x.clamp(0, (size.w - 64).max(0)), loc.y.clamp(0, (size.h - 64).max(0))));
                 if clamped != loc {
                     self.space.map_element(window.clone(), clamped, false);
+                    if let WindowSurface::X11(x11) = window.underlying_surface() {
+                        let _ = x11.configure(Rectangle::new(clamped, window.geometry().size));
+                    }
                 }
             }
             window.with_surfaces(|_, states| {

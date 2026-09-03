@@ -73,7 +73,7 @@ fn main() -> Result<()> {
         (commands, Box::new(bw_stream::fake_source(cli.bitrate, codec.unwrap_or(Codec::H264), stream_tx)?))
     } else {
         let sink = bw_stream::GstSink::new(cli.bitrate, stream_tx)?;
-        let bw_compositor::CompositorHandle { commands, socket_name, join } = bw_compositor::spawn(
+        let bw_compositor::CompositorHandle { commands, socket_name, x11_display, join } = bw_compositor::spawn(
             bw_compositor::Config {
                 render_node: cli.render_node,
                 socket_name: cli.socket_name,
@@ -82,7 +82,7 @@ fn main() -> Result<()> {
             Box::new(sink.clone()),
             events_tx,
         )?;
-        tracing::info!(socket = %socket_name, "compositor ready");
+        tracing::info!(socket = %socket_name, x11_display = ?x11_display.map(|d| format!(":{d}")), "compositor ready");
         std::thread::spawn(move || {
             let _ = join.join();
             tracing::error!("compositor thread exited; shutting down");
@@ -93,7 +93,7 @@ fn main() -> Result<()> {
                 .arg("-c")
                 .arg(cmd)
                 .env("WAYLAND_DISPLAY", &socket_name)
-                .env_remove("DISPLAY")
+                .env("DISPLAY", x11_display.map(|d| format!(":{d}")).unwrap_or_default())
                 .env_remove("WAYLAND_SOCKET")
                 .env("GDK_BACKEND", "wayland")
                 .env("QT_QPA_PLATFORM", "wayland")

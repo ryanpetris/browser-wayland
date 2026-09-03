@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 
 use smithay::{
-    desktop::{Space, Window},
+    desktop::{Space, Window, WindowSurface},
     input::pointer::{
         AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
         GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData,
@@ -14,7 +14,7 @@ use smithay::{
         wayland_server::protocol::wl_surface::WlSurface,
     },
     utils::{Logical, Point, Rectangle, Size},
-    wayland::{compositor::with_states, shell::xdg::SurfaceCachedState},
+    wayland::{compositor::with_states, seat::WaylandFocus, shell::xdg::SurfaceCachedState},
 };
 
 use crate::State;
@@ -76,6 +76,9 @@ impl PointerGrab<State> for MoveGrab {
         let delta = event.location - self.start_data.location;
         let location = (self.initial_location.to_f64() + delta).to_i32_round();
         data.space.map_element(self.window.clone(), location, true);
+        if let Some(x11) = self.window.x11_surface() {
+            let _ = x11.configure(Rectangle::new(location, self.window.geometry().size));
+        }
         data.dirty = true;
     }
     fn button(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &ButtonEvent) {
@@ -123,33 +126,53 @@ impl PointerGrab<State> for ResizeGrab {
         } else if has_bottom(self.edges) {
             h += delta.y;
         }
-        let toplevel = self.window.toplevel().unwrap();
-        let (min, max) = with_states(toplevel.wl_surface(), |states| {
-            let mut guard = states.cached_state.get::<SurfaceCachedState>();
-            let d = guard.current();
-            (d.min_size, d.max_size)
-        });
+        let (min, max) = match self.window.underlying_surface() {
+            WindowSurface::Wayland(t) => with_states(t.wl_surface(), |states| {
+                let mut guard = states.cached_state.get::<SurfaceCachedState>();
+                let d = guard.current();
+                (d.min_size, d.max_size)
+            }),
+            WindowSurface::X11(x) => (x.min_size().unwrap_or_default(), x.max_size().unwrap_or_default()),
+        };
         let clamp = |v: f64, lo: i32, hi: i32| (v as i32).clamp(lo.max(1), if hi == 0 { i32::MAX } else { hi });
         self.last_size = (clamp(w, min.w, max.w), clamp(h, min.h, max.h)).into();
-        toplevel.with_pending_state(|s| {
-            s.states.set(xdg_toplevel::State::Resizing);
-            s.size = Some(self.last_size);
-        });
-        toplevel.send_pending_configure();
+        match self.window.underlying_surface() {
+            WindowSurface::Wayland(toplevel) => {
+                toplevel.with_pending_state(|s| {
+                    s.states.set(xdg_toplevel::State::Resizing);
+                    s.size = Some(self.last_size);
+                });
+                toplevel.send_pending_configure();
+            }
+            WindowSurface::X11(x11) => {
+                // anchor the fixed edge: top/left resizes move the origin
+                let mut rect = Rectangle::new(self.initial_rect.loc, self.last_size);
+                if has_left(self.edges) {
+                    rect.loc.x = self.initial_rect.loc.x + (self.initial_rect.size.w - self.last_size.w);
+                }
+                if has_top(self.edges) {
+                    rect.loc.y = self.initial_rect.loc.y + (self.initial_rect.size.h - self.last_size.h);
+                }
+                data.space.map_element(self.window.clone(), rect.loc, false);
+                let _ = x11.configure(rect);
+                data.dirty = true;
+            }
+        }
     }
     fn button(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &ButtonEvent) {
         handle.button(data, event);
         if !handle.current_pressed().contains(&BTN_LEFT) {
             handle.unset_grab(self, data, event.serial, event.time, true);
-            let toplevel = self.window.toplevel().unwrap();
-            toplevel.with_pending_state(|s| {
-                s.states.unset(xdg_toplevel::State::Resizing);
-                s.size = Some(self.last_size);
-            });
-            toplevel.send_pending_configure();
-            ResizeState::with(toplevel.wl_surface(), |st| {
-                *st = ResizeState::WaitingForLastCommit { edges: self.edges, initial_rect: self.initial_rect }
-            });
+            if let Some(toplevel) = self.window.toplevel() {
+                toplevel.with_pending_state(|s| {
+                    s.states.unset(xdg_toplevel::State::Resizing);
+                    s.size = Some(self.last_size);
+                });
+                toplevel.send_pending_configure();
+                ResizeState::with(toplevel.wl_surface(), |st| {
+                    *st = ResizeState::WaitingForLastCommit { edges: self.edges, initial_rect: self.initial_rect }
+                });
+            }
         }
     }
     forward!();
@@ -185,7 +208,7 @@ impl ResizeState {
 
 /// Called on every commit: moves a window being resized from its top/left edges.
 pub fn handle_commit(space: &mut Space<Window>, surface: &WlSurface) {
-    let Some(window) = space.elements().find(|w| w.toplevel().unwrap().wl_surface() == surface).cloned() else { return };
+    let Some(window) = space.elements().find(|w| w.wl_surface().is_some_and(|s| *s == *surface)).cloned() else { return };
     let Some(mut loc) = space.element_location(&window) else { return };
     let size = window.geometry().size;
     let Some((edges, initial)) = ResizeState::with(surface, |s| s.take()) else { return };

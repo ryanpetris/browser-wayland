@@ -3,14 +3,14 @@
 use bw_core::{AxisSource as Src, Command, Event, OutputGeometry};
 use smithay::{
     backend::input::{Axis, AxisSource, ButtonState, KeyState, Keycode},
-    desktop::WindowSurfaceType,
+    desktop::{WindowSurface, WindowSurfaceType},
     input::{
         keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle, RelativeMotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, SERIAL_COUNTER},
-    wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint},
+    wayland::{pointer_constraints::{PointerConstraint, with_pointer_constraint}, seat::WaylandFocus},
 };
 
 use crate::State;
@@ -136,12 +136,24 @@ impl State {
             }
             if let Some(window) = &clicked {
                 self.space.raise_element(window, true);
-                keyboard.set_focus(self, Some(window.toplevel().unwrap().wl_surface().clone()), serial);
+                if let Some(x11) = window.x11_surface() {
+                    if let Some(xwm) = self.xwm.as_mut() {
+                        let _ = xwm.raise_window(x11);
+                    }
+                }
+                keyboard.set_focus(self, window.wl_surface().map(|s| s.into_owned()), serial);
             } else {
                 keyboard.set_focus(self, None, serial);
             }
             for window in self.space.elements() {
-                window.toplevel().unwrap().send_pending_configure();
+                match window.underlying_surface() {
+                    WindowSurface::Wayland(t) => {
+                        t.send_pending_configure();
+                    }
+                    WindowSurface::X11(x) => {
+                        let _ = x.set_activated(clicked.as_ref() == Some(window));
+                    }
+                }
             }
         }
         let state = if pressed { ButtonState::Pressed } else { ButtonState::Released };

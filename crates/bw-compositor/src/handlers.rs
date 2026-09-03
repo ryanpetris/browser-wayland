@@ -29,6 +29,7 @@ use smithay::{
     utils::{Logical, Point, Serial},
     wayland::{
         buffer::BufferHandler,
+        seat::WaylandFocus,
         compositor::{
             BufferAssignment, CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes, add_blocker,
             add_pre_commit_hook, get_parent, is_sync_subsurface, with_states,
@@ -38,7 +39,7 @@ use smithay::{
         output::OutputHandler,
         pointer_constraints::PointerConstraintsHandler,
         selection::{
-            SelectionHandler,
+            SelectionHandler, SelectionSource, SelectionTarget,
             data_device::{ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler, set_data_device_focus},
             primary_selection::{PrimarySelectionHandler, PrimarySelectionState, set_primary_focus},
         },
@@ -51,11 +52,13 @@ use smithay::{
     },
 };
 
+use smithay::xwayland::XWaylandClientData;
+
 use crate::{ClientState, State, grabs};
 
 impl State {
-    fn window_for(&self, surface: &WlSurface) -> Option<Window> {
-        self.space.elements().find(|w| w.toplevel().unwrap().wl_surface() == surface).cloned()
+    pub fn window_for(&self, surface: &WlSurface) -> Option<Window> {
+        self.space.elements().find(|w| w.wl_surface().is_some_and(|s| *s == *surface)).cloned()
     }
 
     /// The pointer grab this request belongs to, if the requesting client owns the focused surface.
@@ -90,6 +93,9 @@ impl CompositorHandler for State {
         &mut self.compositor_state
     }
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
+        if let Some(x) = client.get_data::<XWaylandClientData>() {
+            return &x.compositor_state; // Xwayland is registered by Smithay with its own client data
+        }
         &client.get_data::<ClientState>().unwrap().compositor_state
     }
 
@@ -156,9 +162,10 @@ impl CompositorHandler for State {
 
 fn ensure_initial_configure(surface: &WlSurface, state: &mut State) {
     if let Some(window) = state.window_for(surface) {
-        let toplevel = window.toplevel().unwrap();
-        if !toplevel.is_initial_configure_sent() {
-            toplevel.send_configure();
+        if let Some(toplevel) = window.toplevel() {
+            if !toplevel.is_initial_configure_sent() {
+                toplevel.send_configure();
+            }
         }
     } else if let Some(PopupKind::Xdg(popup)) = state.popups.find_popup(surface) {
         if !popup.is_initial_configure_sent() {
@@ -350,6 +357,25 @@ impl SeatHandler for State {
 
 impl SelectionHandler for State {
     type SelectionUserData = ();
+
+    /// A Wayland client took the clipboard/primary selection: offer it to X11 clients too.
+    fn new_selection(&mut self, ty: SelectionTarget, source: Option<SelectionSource>, _seat: Seat<Self>) {
+        if let Some(xwm) = self.xwm.as_mut() {
+            if let Err(e) = xwm.new_selection(ty, source.map(|s| s.mime_types())) {
+                tracing::warn!("xwayland selection: {e:?}");
+            }
+        }
+    }
+
+    /// A Wayland client wants data from a selection owned by an X11 client.
+    fn send_selection(&mut self, ty: SelectionTarget, mime_type: String, fd: OwnedFd, _seat: Seat<Self>, _user_data: &()) {
+        let handle = self.handle.clone();
+        if let Some(xwm) = self.xwm.as_mut() {
+            if let Err(e) = xwm.send_selection(ty, mime_type, fd, handle) {
+                tracing::warn!("xwayland selection transfer: {e:?}");
+            }
+        }
+    }
 }
 impl DataDeviceHandler for State {
     fn data_device_state(&self) -> &DataDeviceState {
