@@ -6,7 +6,7 @@ use smithay::{
     desktop::{WindowSurface, WindowSurfaceType},
     input::{
         keyboard::FilterResult,
-        pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle, RelativeMotionEvent},
+        pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent, PointerHandle, RelativeMotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, SERIAL_COUNTER},
@@ -14,6 +14,8 @@ use smithay::{
 };
 
 use crate::State;
+
+const BTN_LEFT: u32 = 0x110;
 
 impl State {
     pub fn handle_command(&mut self, cmd: Command) {
@@ -127,6 +129,18 @@ impl State {
         let serial = SERIAL_COUNTER.next_serial();
         if pressed {
             self.lock_suppressed = false; // a click is the user gesture the browser needs to lock again
+        }
+        // Super/Alt + left drag moves any window, decorated or not (X11 apps have no title bar here).
+        let mods = keyboard.modifier_state();
+        if pressed && button == BTN_LEFT && (mods.logo || mods.alt) && !pointer.is_grabbed() {
+            if let Some((window, loc)) = self.space.element_under(self.pointer_location).map(|(w, l)| (w.clone(), l)) {
+                self.space.raise_element(&window, true);
+                let start_data = GrabStartData { focus: None, button, location: self.pointer_location };
+                let grab = crate::grabs::MoveGrab { start_data, window, initial_location: loc };
+                self.pressed_buttons.insert(button);
+                pointer.set_grab(self, grab, serial, Focus::Clear);
+                return;
+            }
         }
         if pressed && !pointer.is_grabbed() {
             // click-to-focus and raise
