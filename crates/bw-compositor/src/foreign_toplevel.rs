@@ -177,6 +177,9 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for State {
 impl Dispatch<ZwlrForeignToplevelHandleV1, Window> for State {
     fn request(state: &mut Self, _: &Client, _: &ZwlrForeignToplevelHandleV1, request: handle::Request, window: &Window, _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
         use handle::Request as R;
+        if !state.foreign.windows.contains_key(window) {
+            return; // already `closed`: the protocol says the handle is inert
+        }
         match request {
             R::Activate { .. } => {
                 state.unminimize(window);

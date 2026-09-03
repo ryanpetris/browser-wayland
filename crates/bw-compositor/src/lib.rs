@@ -362,7 +362,11 @@ impl State {
         let Some(loc) = self.space.element_location(window) else { return };
         self.space.unmap_elem(window);
         self.minimized.push((window.clone(), loc));
-        let next = self.space.elements().last().cloned();
+        window.set_activated(false); // out of the space, so focus_window can't reach it any more
+        if let Some(t) = window.toplevel() {
+            t.send_pending_configure();
+        }
+        let next = self.space.elements().rev().find(|w| w.x11_surface().is_none_or(|x| !x.is_override_redirect())).cloned();
         self.focus_window(next.as_ref(), SERIAL_COUNTER.next_serial());
         self.dirty = true;
     }
@@ -370,9 +374,8 @@ impl State {
     pub fn unminimize(&mut self, window: &Window) {
         if let Some(i) = self.minimized.iter().position(|(w, _)| w == window) {
             let (window, loc) = self.minimized.remove(i);
-            let loc = self.clamp_to_output(loc);
             self.space.map_element(window, loc, false);
-            self.dirty = true;
+            self.relayout(); // the output or the panels may have changed meanwhile
         }
     }
 
@@ -460,20 +463,19 @@ impl State {
                     rect
                 }
             };
-            match (filled, self.space.element_location(&window)) {
-                (Some(rect), loc) if loc != Some(rect.loc) => self.space.map_element(window.clone(), rect.loc, false),
-                // keep a corner of every floating window reachable
+            // map_element raises: re-map every window in this back-to-front order to keep the stacking
+            let loc = match (filled, self.space.element_location(&window)) {
+                (Some(rect), _) => rect.loc,
                 (None, Some(loc)) => {
-                    let clamped = self.clamp_to_output(loc);
-                    if clamped != loc {
-                        self.space.map_element(window.clone(), clamped, false);
-                        if let WindowSurface::X11(x11) = window.underlying_surface() {
-                            let _ = x11.configure(Rectangle::new(clamped, window.geometry().size));
-                        }
+                    let clamped = self.clamp_to_output(loc); // keep a corner of every floating window reachable
+                    if let (true, WindowSurface::X11(x11)) = (clamped != loc, window.underlying_surface()) {
+                        let _ = x11.configure(Rectangle::new(clamped, window.geometry().size));
                     }
+                    clamped
                 }
-                _ => {}
-            }
+                (None, None) => continue,
+            };
+            self.space.map_element(window.clone(), loc, false);
             window.with_surfaces(|_, states| {
                 smithay::wayland::fractional_scale::with_fractional_scale(states, |f| f.set_preferred_scale(scale));
             });

@@ -151,10 +151,21 @@ impl XwmHandler for State {
         for w in self.space.elements().filter(|w| w.x11_surface().is_some()).cloned().collect::<Vec<_>>() {
             self.space.unmap_elem(&w);
         }
+        self.minimized.retain(|(w, _)| w.x11_surface().is_none());
         self.x11_display = None;
         self.dirty = true;
     }
 
+    fn minimize_request(&mut self, _xwm: XwmId, window: X11Surface) {
+        if let Some(win) = self.window_for_x11(&window) {
+            self.minimize(&win);
+        }
+    }
+    fn unminimize_request(&mut self, _xwm: XwmId, window: X11Surface) {
+        if let Some(win) = self.minimized.iter().map(|(w, _)| w).find(|w| w.x11_surface() == Some(&window)).cloned() {
+            self.unminimize(&win);
+        }
+    }
     fn maximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
         self.fill_x11(window, false, |w| w.set_maximized(true));
     }
