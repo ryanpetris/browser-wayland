@@ -18,6 +18,7 @@ pub const AXIS: u8 = 0x86;
 pub const KEY: u8 = 0x87;
 pub const REQUEST_KEYFRAME: u8 = 0x88;
 pub const BLUR: u8 = 0x89;
+pub const POINTER_LOCK_LOST: u8 = 0x8A;
 
 pub fn config(info: &StreamInfo) -> Bytes {
     let json = format!(
@@ -65,6 +66,7 @@ pub enum ClientMsg {
     Key { evdev: u16, pressed: bool },
     RequestKeyframe,
     Blur,
+    PointerLockLost,
 }
 
 /// Malformed messages decode to `None` and are ignored.
@@ -82,6 +84,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         KEY => ClientMsg::Key { evdev: u16_at(1)?, pressed: u8_at(3)? != 0 },
         REQUEST_KEYFRAME => ClientMsg::RequestKeyframe,
         BLUR => ClientMsg::Blur,
+        POINTER_LOCK_LOST => ClientMsg::PointerLockLost,
         _ => return None,
     })
 }

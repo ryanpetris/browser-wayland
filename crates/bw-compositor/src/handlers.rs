@@ -36,7 +36,7 @@ use smithay::{
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier, get_dmabuf},
         fractional_scale::{FractionalScaleHandler, with_fractional_scale},
         output::OutputHandler,
-        pointer_constraints::{PointerConstraintsHandler, with_pointer_constraint},
+        pointer_constraints::PointerConstraintsHandler,
         selection::{
             SelectionHandler,
             data_device::{ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler, set_data_device_focus},
@@ -391,13 +391,11 @@ impl FractionalScaleHandler for State {
 
 impl PointerConstraintsHandler for State {
     fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
-        // Activate right away if the pointer is already on that surface; otherwise on entering it.
-        if pointer.current_focus().as_ref() == Some(surface) {
-            with_pointer_constraint(surface, pointer, |c| {
-                if let Some(c) = c {
-                    c.activate();
-                }
-            });
+        // Activate right away if the pointer is already inside; otherwise on entering it.
+        if !self.lock_suppressed && pointer.current_focus().as_ref() == Some(surface) {
+            if let Some((_, origin)) = self.surface_under(self.pointer_location) {
+                crate::input::activate_lock(surface, pointer, self.pointer_location - origin);
+            }
         }
         self.sync_pointer_lock(pointer);
     }

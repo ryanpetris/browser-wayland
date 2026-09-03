@@ -55,7 +55,7 @@ pub struct App {
 }
 
 #[derive(Default)]
-struct Viewer {
+pub(crate) struct Viewer {
     /// Bumped per connection so a replaced session can't act for the current one.
     generation: u64,
     tx: Option<mpsc::Sender<Bytes>>,
@@ -65,6 +65,8 @@ struct Viewer {
     need_key: bool,
     /// Last cursor message, replayed to a new viewer.
     cursor: Option<Bytes>,
+    /// Whether a client currently holds a pointer lock, replayed to a new viewer.
+    locked: bool,
 }
 
 pub async fn run(

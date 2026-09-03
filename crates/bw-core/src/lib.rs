@@ -36,6 +36,8 @@ pub enum Command {
     ViewerDisconnected,
     /// Render a frame even if nothing changed (keyframe on connect).
     RequestFullFrame,
+    /// The browser lost its pointer lock (Escape etc.): release the client's lock and don't re-lock until the next click.
+    ReleasePointerLock,
     Quit,
 }
 
@@ -105,6 +107,8 @@ pub enum StreamMsg {
     /// A (re)started stream; always followed by a keyframe.
     Info(StreamInfo),
     Frame(EncodedFrame),
+    /// The pipeline died; whoever drives it should ask for a keyframe so it gets rebuilt.
+    Failed,
 }
 
 pub struct EncodedFrame {

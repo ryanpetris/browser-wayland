@@ -4,7 +4,7 @@ use axum::extract::ws::{Message, WebSocket};
 use bw_core::{AxisSource, Bytes, Codec, Command, Event, OutputGeometry, StreamMsg};
 use tokio::sync::mpsc;
 
-use crate::{App, protocol::{self, ClientMsg}};
+use crate::{App, Viewer, protocol::{self, ClientMsg}};
 
 /// Forwards encoder output to whoever is the current viewer.
 pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
@@ -15,6 +15,11 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
                 v.info = Some(info);
                 v.announced = None;
                 v.need_key = true;
+            }
+            StreamMsg::Failed => {
+                v.need_key = true;
+                drop(v);
+                app.rekey(); // drops the dead pipeline and forces a frame, which rebuilds it
             }
             StreamMsg::Frame(f) => {
                 let (Some(tx), Some(info)) = (v.tx.clone(), v.info.clone()) else { continue };
@@ -57,7 +62,10 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 v.cursor = Some(msg.clone());
                 msg
             }
-            Event::PointerLock(locked) => Bytes::from(vec![protocol::POINTER_LOCK, locked as u8]),
+            Event::PointerLock(locked) => {
+                v.locked = locked;
+                Bytes::from(vec![protocol::POINTER_LOCK, locked as u8])
+            }
         };
         if let Some(tx) = &v.tx {
             let _ = tx.try_send(msg);
@@ -68,7 +76,7 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
 pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     let (tx, mut rx) = mpsc::channel::<Bytes>(8);
     // Taking over drops the previous viewer's only sender, which ends its session below.
-    let (my_gen, cursor) = {
+    let (my_gen, cursor, locked) = {
         let mut v = app.viewer.lock().unwrap();
         if v.tx.is_some() {
             let _ = app.commands.send(Command::ReleaseAllInput); // whatever the old viewer still held
@@ -77,13 +85,15 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         v.tx = Some(tx);
         v.announced = None;
         v.need_key = true;
-        (v.generation, v.cursor.clone())
+        (v.generation, v.cursor.clone(), v.locked)
     };
     if let Some(c) = cursor {
         let _ = socket.send(Message::Binary(c)).await;
     }
-    let _ = app.commands.send(Command::ViewerConnected);
-    app.rekey();
+    if locked {
+        let _ = socket.send(Message::Binary(Bytes::from(vec![protocol::POINTER_LOCK, 1]))).await;
+    }
+    // Frames start once Hello has picked the codec (see command_for).
 
     let mut ping = tokio::time::interval(Duration::from_secs(5));
     let mut unanswered = 0;
@@ -95,11 +105,19 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) => {
-                    if app.viewer.lock().unwrap().generation != my_gen {
+                    // Hold the viewer lock from the generation check through the send, so a takeover
+                    // can't slip its ReleaseAllInput in between.
+                    let mut v = app.viewer.lock().unwrap();
+                    if v.generation != my_gen {
                         break; // replaced: stop acting on this socket at all
                     }
-                    if let Some(cmd) = protocol::decode(&b).and_then(|m| app.command_for(m)) {
+                    let (cmd, rekey) = protocol::decode(&b).map(|m| app.command_for(m, &mut v)).unwrap_or((None, false));
+                    if let Some(cmd) = cmd {
                         let _ = app.commands.send(cmd);
+                    }
+                    drop(v);
+                    if rekey {
+                        app.rekey();
                     }
                 }
                 Some(Ok(Message::Pong(_))) => unanswered = 0,
@@ -131,38 +149,43 @@ impl App {
         let _ = self.commands.send(Command::RequestFullFrame);
     }
 
-    /// Pick the codec for a browser that decodes `hw` in hardware and `sw` at all (bit0 H.264, bit1 HEVC, bit2 VP9).
+    /// Pick the codec for a browser whose `hw` mask passed the prefer-hardware probe and `sw` the plain one
+    /// (bit0 H.264, bit1 HEVC, bit2 VP9).
     fn choose_codec(&self, hw: u8, sw: u8) -> Codec {
         let bit = |c: Codec| match c {
             Codec::H264 => 1,
             Codec::Hevc => 2,
             Codec::Vp9 => 4,
         };
+        let preferred = [Codec::Hevc, Codec::Vp9, Codec::H264];
         match self.policy {
             Some(c) if sw & bit(c) != 0 => c,
             Some(c) => {
                 tracing::warn!(?c, "browser can't decode the requested codec; using H.264");
                 Codec::H264
             }
-            None => [Codec::Hevc, Codec::Vp9, Codec::H264].into_iter().find(|&c| hw & bit(c) != 0).unwrap_or(Codec::H264),
+            None => preferred
+                .into_iter()
+                .find(|&c| hw & bit(c) != 0)
+                .or_else(|| preferred.into_iter().find(|&c| sw & bit(c) != 0))
+                .unwrap_or(Codec::H264),
         }
     }
 
-    fn command_for(&self, m: ClientMsg) -> Option<Command> {
-        Some(match m {
+    /// Runs with the viewer lock held; returns the command to forward and whether to rekey after unlocking.
+    fn command_for(&self, m: ClientMsg, v: &mut Viewer) -> (Option<Command>, bool) {
+        let cmd = match m {
             ClientMsg::Hello { hw, sw } => {
                 let codec = self.choose_codec(hw, sw);
                 tracing::info!(?codec, hw, sw, "viewer codec");
-                self.control.set_codec(codec);
-                self.viewer.lock().unwrap().need_key = true;
-                self.rekey();
-                return None;
+                self.control.set_codec(codec); // non-blocking: the old pipeline is dropped elsewhere
+                v.need_key = true;
+                return (Some(Command::ViewerConnected), true);
             }
             // dpr bounds keep a bogus value from turning into a giant dmabuf allocation
             ClientMsg::Resize { css_w, css_h, dpr } if (0.5..=8.0).contains(&dpr) => {
                 Command::Resize(geometry(css_w, css_h, dpr as f64))
             }
-            ClientMsg::Resize { .. } => return None,
             ClientMsg::MotionAbs { x, y } => Command::PointerMotionAbsolute { x: x as f64, y: y as f64 },
             ClientMsg::MotionRel { dx, dy } => Command::PointerMotionRelative { dx: dx as f64, dy: dy as f64 },
             ClientMsg::Button { button, pressed } => Command::PointerButton { button: button as u32, pressed },
@@ -182,12 +205,14 @@ impl App {
             },
             ClientMsg::Key { evdev, pressed } => Command::Key { evdev: evdev as u32, pressed },
             ClientMsg::Blur => Command::ReleaseAllInput,
+            ClientMsg::PointerLockLost => Command::ReleasePointerLock,
             ClientMsg::RequestKeyframe => {
-                self.viewer.lock().unwrap().need_key = true;
-                self.rekey();
-                return None;
+                v.need_key = true;
+                return (None, true);
             }
-        })
+            ClientMsg::Resize { .. } => return (None, false),
+        };
+        (Some(cmd), false)
     }
 }
 

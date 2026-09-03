@@ -2,7 +2,6 @@
 
 use bw_core::{AxisSource as Src, Command, Event, OutputGeometry};
 use smithay::{
-    reexports::wayland_server::Resource,
     backend::input::{Axis, AxisSource, ButtonState, KeyState, Keycode},
     desktop::WindowSurfaceType,
     input::{
@@ -32,6 +31,7 @@ impl State {
             }
             Command::ViewerDisconnected => self.viewer_connected = false,
             Command::RequestFullFrame => self.force_full_frame = true,
+            Command::ReleasePointerLock => self.release_pointer_lock(),
             Command::Quit => self.running = false,
         }
     }
@@ -69,7 +69,6 @@ impl State {
         if self.locked(&pointer) {
             // Locked: the pointer stays put and the client only gets deltas.
             let under = self.surface_under(self.pointer_location);
-            tracing::debug!(?delta, focus = under.is_some(), "relative motion under lock");
             pointer.relative_motion(self, under, &relative);
             pointer.frame(self);
             return;
@@ -84,17 +83,24 @@ impl State {
         pointer.motion(self, under.clone(), &MotionEvent { location, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
         pointer.relative_motion(self, under.clone(), &relative);
         pointer.frame(self);
-        // entering a surface with a pending constraint activates it
-        if let Some((surface, origin)) = under {
+        // entering a surface with a pending lock activates it (unless the browser just bailed out of one)
+        if let (false, Some((surface, origin))) = (self.lock_suppressed, under) {
+            activate_lock(&surface, &pointer, location - origin);
+        }
+        self.sync_pointer_lock(&pointer);
+    }
+
+    /// The browser lost its pointer lock: release the client's, and stay unlocked until the next click.
+    fn release_pointer_lock(&mut self) {
+        let pointer = self.seat.get_pointer().unwrap();
+        if let Some(surface) = pointer.current_focus() {
             with_pointer_constraint(&surface, &pointer, |c| {
-                if let Some(c) = c.filter(|c| !c.is_active()) {
-                    let local = (location - origin).to_i32_round();
-                    if c.region().is_none_or(|r| r.contains(local)) {
-                        c.activate();
-                    }
+                if let Some(c) = c.filter(|c| c.is_active()) {
+                    c.deactivate();
                 }
             });
         }
+        self.lock_suppressed = true;
         self.sync_pointer_lock(&pointer);
     }
 
@@ -109,7 +115,6 @@ impl State {
     /// Tell the browser when a lock starts or ends so it can mirror it with the Pointer Lock API.
     pub fn sync_pointer_lock(&mut self, pointer: &PointerHandle<State>) {
         let locked = self.locked(pointer);
-        tracing::debug!(locked, was = self.pointer_locked, focus = ?pointer.current_focus().map(|s| s.id()), "sync_pointer_lock");
         if locked != self.pointer_locked {
             self.pointer_locked = locked;
             let _ = self.events.send(Event::PointerLock(locked));
@@ -120,6 +125,9 @@ impl State {
         let pointer = self.seat.get_pointer().unwrap();
         let keyboard = self.seat.get_keyboard().unwrap();
         let serial = SERIAL_COUNTER.next_serial();
+        if pressed {
+            self.lock_suppressed = false; // a click is the user gesture the browser needs to lock again
+        }
         if pressed && !pointer.is_grabbed() {
             // click-to-focus and raise
             let clicked = self.space.element_under(self.pointer_location).map(|(w, _)| w.clone());
@@ -172,4 +180,16 @@ impl State {
     pub fn output_geometry(&self) -> OutputGeometry {
         self.geometry
     }
+}
+
+/// Activate a pending *lock* whose region contains the pointer. Confinement is deliberately never
+/// activated: the browser can't confine its pointer, so the client keeps seeing an unconfined one.
+pub fn activate_lock(surface: &WlSurface, pointer: &PointerHandle<State>, local: Point<f64, Logical>) {
+    with_pointer_constraint(surface, pointer, |c| {
+        if let Some(c) = c.filter(|c| !c.is_active() && matches!(**c, PointerConstraint::Locked(_))) {
+            if c.region().is_none_or(|r| r.contains(local.to_i32_round())) {
+                c.activate();
+            }
+        }
+    });
 }

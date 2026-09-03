@@ -3,14 +3,14 @@
 import { KEYCODES } from './keycodes.js';
 
 const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04;
-const HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89;
+const HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A;
 const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const status = document.getElementById('s');
 
-let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '';
+let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false;
 
 function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
@@ -53,7 +53,7 @@ function sendResize() {
 
 // A decode error closes the decoder for good, so recovery means a fresh one plus a keyframe.
 function newDecoder() {
-  decoder?.close();
+  if (decoder && decoder.state !== 'closed') decoder.close(); // a decode error closes it already
   const d = new VideoDecoder({
     output: frame => {
       try { ctx.drawImage(frame, 0, 0); frames++; } finally { frame.close(); }
@@ -93,13 +93,8 @@ function onMessage(buf) {
     }
     case POINTER_LOCK:
       // A client locked the pointer (a game, say): lock the browser's too and send raw deltas.
-      if (dv.getUint8(1)) {
-        lockRequests++;
-        canvas.requestPointerLock({ unadjustedMovement: true })?.catch?.(e => {
-          lockError = String(e);
-          canvas.requestPointerLock()?.catch?.(e2 => { lockError += ' / ' + e2; });
-        });
-      }
+      wantLock = dv.getUint8(1) !== 0;
+      if (wantLock) requestLock();
       else if (document.pointerLockElement) document.exitPointerLock();
       break;
     case VIDEO: {
@@ -126,6 +121,19 @@ function onMessage(buf) {
   }
 }
 
+// Needs a user gesture: called on the lock event (usually right after the click that caused it) and retried on clicks.
+function requestLock() {
+  if (document.pointerLockElement) return;
+  lockRequests++;
+  canvas.requestPointerLock({ unadjustedMovement: true })?.catch?.(e => {
+    lockError = String(e);
+    canvas.requestPointerLock()?.catch?.(e2 => { lockError += ' / ' + e2; });
+  });
+}
+document.onpointerlockchange = () => {
+  if (!document.pointerLockElement && wantLock) { wantLock = false; send(POINTER_LOCK_LOST, 0); } // Escape etc.
+};
+
 // --- input -----------------------------------------------------------------
 
 // Stream logical px per canvas CSS px (1 except while a resize is in flight).
@@ -138,7 +146,7 @@ canvas.onpointermove = e => document.pointerLockElement
 canvas.onpointerdown = canvas.onpointerup = e => {
   const btn = BTN[e.button];
   if (btn === undefined) return;
-  if (e.type === 'pointerdown') canvas.setPointerCapture(e.pointerId);
+  if (e.type === 'pointerdown') { canvas.setPointerCapture(e.pointerId); if (wantLock) requestLock(); }
   canvas.onpointermove(e);
   send(BUTTON, 3, dv => { dv.setUint16(1, btn, true); dv.setUint8(3, e.type === 'pointerdown' ? 1 : 0); });
 };

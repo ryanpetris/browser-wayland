@@ -105,6 +105,8 @@ fn main() -> Result<()> {
         (commands, Box::new(sink))
     };
 
+    // the fake source can't switch codecs, so its policy is whatever it was built with
+    let codec = if cli.fake_source { Some(codec.unwrap_or(Codec::H264)) } else { codec };
     let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()? };
     tokio::runtime::Runtime::new()?.block_on(bw_server::run(server, commands, stream_rx, events_rx, control))
 }

@@ -110,6 +110,7 @@ fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<St
     let sink = pipeline.by_name("sink").context("sink element")?.downcast::<gst_app::AppSink>().unwrap();
 
     let (codec, width, height) = (opts.codec, opts.width, opts.height);
+    let failed_tx = tx.clone();
     let mut info = Some(StreamInfo { stream_id, codec: String::new(), width, height, scale: opts.scale });
     sink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
@@ -123,7 +124,12 @@ fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<St
                     let mut i = info.take().unwrap();
                     i.codec = codec_string(codec, &map, width, height).unwrap_or_else(|| {
                         tracing::error!("no parameter sets in the first keyframe; guessing the codec string");
-                        "avc1.640028".into()
+                        match codec {
+                            Codec::H264 => "avc1.640028",
+                            Codec::Hevc => "hev1.1.6.L120.90",
+                            Codec::Vp9 => "vp09.00.41.08",
+                        }
+                        .into()
                     });
                     tracing::info!(codec = %i.codec, width, height, "stream started");
                     let _ = tx.blocking_send(StreamMsg::Info(i));
@@ -149,11 +155,14 @@ fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<St
             match msg.view() {
                 gst::MessageView::Error(e) => {
                     tracing::error!(src = ?e.src().map(|s| s.path_string()), "gstreamer: {} ({:?})", e.error(), e.debug());
-                    flag.store(true, Ordering::Relaxed);
                 }
-                gst::MessageView::Eos(_) => break,
-                _ => {}
+                gst::MessageView::Eos(_) => {}
+                _ => continue,
             }
+            // Dead: the next keyframe request drops the pipeline (freeing its leases) and the next frame rebuilds it.
+            flag.store(true, Ordering::Relaxed);
+            let _ = failed_tx.blocking_send(StreamMsg::Failed);
+            break;
         }
     });
 
@@ -261,8 +270,21 @@ impl GstSink {
 
 impl StreamControl for GstSink {
     fn request_keyframe(&self) {
-        if let Some((stream, _)) = &self.0.lock().unwrap().stream {
-            stream.request_keyframe();
+        let mut i = self.0.lock().unwrap();
+        if i.stream.as_ref().is_some_and(|(s, _)| s.dead.load(Ordering::Relaxed)) {
+            let old = i.take_stream();
+            drop(i);
+            discard(old); // releases the compositor's leases so it can render the requested full frame
+            return;
+        }
+        // Send the event without holding the lock: it can wait on streaming threads.
+        let stream = i.stream.as_ref().map(|(s, _)| (s.encoder.clone(), s.dead.clone()));
+        drop(i);
+        if let Some((encoder, _)) = stream {
+            let ev = gst_video::UpstreamForceKeyUnitEvent::builder().all_headers(true).build();
+            if !encoder.send_event(ev) {
+                tracing::warn!("encoder refused the keyframe request");
+            }
         }
     }
 
@@ -274,7 +296,15 @@ impl StreamControl for GstSink {
         i.codec = codec;
         let old = i.take_stream();
         drop(i);
-        drop(old);
+        discard(old);
+    }
+}
+
+/// Tear a pipeline down off the caller's thread: stopping it waits for streaming threads,
+/// which may be waiting on the server, which may be waiting on us.
+fn discard(old: (Option<(Stream, gst_app::AppSrc)>, HashMap<u32, gst::Memory>)) {
+    if old.0.is_some() || !old.1.is_empty() {
+        std::thread::spawn(move || drop(old));
     }
 }
 
@@ -288,16 +318,14 @@ impl FrameSink for GstSink {
         i.geo = Some((geo, fourcc, modifier));
         let old = i.take_stream();
         drop(i);
-        drop(old); // tearing down waits on streaming threads that may need this lock
+        discard(old);
     }
 
     fn submit(&mut self, frame: DmabufFrame) -> Result<(), SinkError> {
         let mut i = self.0.lock().unwrap();
         if i.stream.as_ref().is_some_and(|(s, _)| s.dead.load(Ordering::Relaxed)) {
             let old = i.take_stream();
-            drop(i);
-            drop(old);
-            i = self.0.lock().unwrap();
+            discard(old);
         }
         Ok(i.push(frame)?)
     }
@@ -336,6 +364,9 @@ impl Inner {
                 let size = dmabuf_size(&frame.fd)?;
                 // Safety: the fd is a dmabuf and GStreamer takes ownership of it.
                 let m = unsafe { self.alloc.alloc_dmabuf(frame.fd, size) }?;
+                if self.mems.len() >= 8 {
+                    self.mems.clear(); // slots get replaced now and then; in-flight buffers hold their own refs
+                }
                 self.mems.insert(frame.slot_id, m.clone());
                 m
             }

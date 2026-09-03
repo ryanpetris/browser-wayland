@@ -112,6 +112,8 @@ pub struct State {
     pub pressed_buttons: std::collections::HashSet<u32>,
     /// A client holds an active pointer lock (mirrored to the browser).
     pub pointer_locked: bool,
+    /// The browser gave up its lock: don't re-activate a client's lock until the next click.
+    pub lock_suppressed: bool,
     pub cursor_status: CursorImageStatus,
     pub cursor: cursor::CursorTheme,
 
@@ -214,6 +216,7 @@ impl State {
             pointer_location: (0.0, 0.0).into(),
             pressed_buttons: Default::default(),
             pointer_locked: false,
+            lock_suppressed: false,
             cursor_status: CursorImageStatus::default_named(),
             cursor: cursor::CursorTheme::load(),
             compositor_state: CompositorState::new::<State>(&dh),
@@ -253,6 +256,11 @@ impl State {
             .run(None, &mut self, |state| {
                 state.space.refresh();
                 state.popups.cleanup();
+                if state.pointer_locked {
+                    // constraints can go away without any input (client destroyed it, focus left)
+                    let pointer = state.seat.get_pointer().unwrap();
+                    state.sync_pointer_lock(&pointer);
+                }
                 // Render right after input/commits when a frame period has passed, instead of waiting for the timer.
                 if state.dirty && state.last_render.elapsed() >= state.frame_interval {
                     state.tick();
