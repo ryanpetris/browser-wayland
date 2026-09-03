@@ -9,6 +9,25 @@ const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_L
 const canvas = document.getElementById('c');
 const status = document.getElementById('s');
 let draw, renderer; // set by initRenderer(): paints one VideoFrame
+let pendingFrame = null, rafId = 0;
+
+// Paint from requestAnimationFrame only: drawing a WebGPU canvas outside the animation-frame cycle
+// makes Chromium present a cleared texture now and then (visible as black flicker). One frame per
+// display refresh; if two arrive in between, the older one is dropped.
+function schedule(frame) {
+  if (pendingFrame) pendingFrame.close();
+  pendingFrame = frame;
+  if (!rafId) rafId = requestAnimationFrame(paint);
+}
+function paint() {
+  rafId = 0;
+  const frame = pendingFrame;
+  pendingFrame = null;
+  if (!frame) return;
+  try { draw(frame); frames++; } catch (e) { console.error(e); frame.close(); }
+  if (lastInput) { latencyMs = performance.now() - lastInput; lastInput = 0; } // input -> next painted frame
+  updateStatus();
+}
 
 // --- rendering -------------------------------------------------------------
 
@@ -50,15 +69,22 @@ async function initWebGPU() {
     pass.draw(3);
     pass.end();
     device.queue.submit([encoder.finish()]);
+    // Only release the frame to the decoder once the GPU has actually sampled it.
+    device.queue.onSubmittedWorkDone().then(() => frame.close(), () => frame.close());
   };
 }
 
+// `draw` takes ownership of the frame and closes it when done.
+// WebGPU is opt-in (`?renderer=webgpu`): Chromium on Linux presents a blank frame now and then when the
+// canvas samples decoder frames as external textures (measured ~2% of presented frames), which shows as flicker.
 async function initRenderer() {
-  try { draw = await initWebGPU(); } catch (e) { console.warn('WebGPU unavailable:', e); }
+  if (new URLSearchParams(location.search).get('renderer') === 'webgpu') {
+    try { draw = await initWebGPU(); } catch (e) { console.warn('WebGPU unavailable:', e); }
+  }
   renderer = draw ? 'webgpu' : '2d';
   if (!draw) {
     const ctx = canvas.getContext('2d');
-    draw = frame => ctx.drawImage(frame, 0, 0);
+    draw = frame => { try { ctx.drawImage(frame, 0, 0); } finally { frame.close(); } };
   }
 }
 
@@ -109,11 +135,7 @@ function sendResize() {
 function newDecoder() {
   if (decoder && decoder.state !== 'closed') decoder.close(); // a decode error closes it already
   const d = new VideoDecoder({
-    output: frame => {
-      try { draw(frame); frames++; } finally { frame.close(); }
-      if (lastInput) { latencyMs = performance.now() - lastInput; lastInput = 0; } // input -> next decoded frame
-      updateStatus();
-    },
+    output: schedule,
     error: e => { console.error(e); decodeErrors++; if (d === decoder) resync(); },
   });
   d.configure({ codec: stream.codec, optimizeForLatency: true });
