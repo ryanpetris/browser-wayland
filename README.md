@@ -56,7 +56,12 @@ cargo run --release -- --exec 'dbus-run-session -- sh -c "xfce4-panel & exec foo
 ```
 
 xfce4-panel needs a D-Bus session bus for xfconfd; the wrapper is only needed where there is none.
-Its pager stays empty (no ext-workspace: there is one workspace).
+Its pager stays empty (no ext-workspace: there is one workspace). Waybar's default config draws its
+icons with Font Awesome (`otf-font-awesome`); GTK only shows icons in the Xfce menus with
+`gtk-menu-images=1` in `~/.config/gtk-3.0/settings.ini`, which xfsettingsd normally sets.
+
+The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps, and
+Firefox, with PipeWire for audio. Build and run instructions are in its header.
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,
