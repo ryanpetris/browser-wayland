@@ -100,8 +100,12 @@ impl CompositorHandler for State {
     }
 
     fn new_surface(&mut self, surface: &WlSurface) {
-        // Don't sample a client's dmabuf before its GPU work has finished.
         add_pre_commit_hook::<Self, _>(surface, |state, _dh, surface| {
+            // ponytail: drop client opaque regions. Smithay 0.7's renderer draws them with blending off
+            // and, with fractional scale, occasionally with a bad rectangle, which paints transparent
+            // shadow texels as black wedges. Blending everything costs a little fill rate, nothing else.
+            with_states(surface, |data| data.cached_state.get::<SurfaceAttributes>().pending().opaque_region = None);
+            // Don't sample a client's dmabuf before its GPU work has finished.
             let dmabuf = with_states(surface, |data| {
                 match data.cached_state.get::<SurfaceAttributes>().pending().buffer.as_ref() {
                     Some(BufferAssignment::NewBuffer(b)) => get_dmabuf(b).cloned().ok(),
