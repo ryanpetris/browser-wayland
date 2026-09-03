@@ -30,6 +30,24 @@ struct Cli {
     render_node: PathBuf,
     #[arg(long, default_value = "wayland-browser")]
     socket_name: String,
+    /// Don't capture the clients' audio for the browser.
+    #[arg(long)]
+    no_audio: bool,
+}
+
+const AUDIO_SINK: &str = "browser-wayland";
+
+/// A private PulseAudio/PipeWire sink for our clients; its monitor is what we stream.
+fn ensure_audio_sink() -> Result<()> {
+    let sinks = std::process::Command::new("pactl").args(["list", "short", "sinks"]).output()?;
+    if String::from_utf8_lossy(&sinks.stdout).lines().any(|l| l.split('\t').nth(1) == Some(AUDIO_SINK)) {
+        return Ok(()); // left over from an earlier run; reuse it
+    }
+    let out = std::process::Command::new("pactl")
+        .args(["load-module", "module-null-sink", &format!("sink_name={AUDIO_SINK}"), &format!("sink_properties=device.description={AUDIO_SINK}")])
+        .output()?;
+    anyhow::ensure!(out.status.success(), "pactl load-module failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -54,6 +72,17 @@ fn main() -> Result<()> {
     };
     let (stream_tx, stream_rx) = mpsc::channel(16);
     let (events_tx, events_rx) = mpsc::unbounded_channel();
+
+    let mut audio = None;
+    if !cli.fake_source && !cli.no_audio {
+        match ensure_audio_sink().and_then(|()| bw_stream::audio_source(&format!("{AUDIO_SINK}.monitor"), stream_tx.clone())) {
+            Ok(a) => {
+                tracing::info!("audio: clients started with PULSE_SINK={AUDIO_SINK} play in the browser");
+                audio = Some(a);
+            }
+            Err(e) => tracing::warn!("audio disabled: {e:#}"),
+        }
+    }
 
     let (commands, control): (calloop::channel::Sender<Command>, Box<dyn StreamControl>) = if cli.fake_source {
         // No compositor: just log what the browser sends.
@@ -94,6 +123,7 @@ fn main() -> Result<()> {
                 .arg(cmd)
                 .env("WAYLAND_DISPLAY", &socket_name)
                 .env("DISPLAY", x11_display.map(|d| format!(":{d}")).unwrap_or_default())
+                .env("PULSE_SINK", if audio.is_some() { AUDIO_SINK } else { "" })
                 .env_remove("WAYLAND_SOCKET")
                 .env("GDK_BACKEND", "wayland")
                 .env("QT_QPA_PLATFORM", "wayland")
@@ -108,5 +138,7 @@ fn main() -> Result<()> {
     // the fake source can't switch codecs, so its policy is whatever it was built with
     let codec = if cli.fake_source { Some(codec.unwrap_or(Codec::H264)) } else { codec };
     let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()? };
-    tokio::runtime::Runtime::new()?.block_on(bw_server::run(server, commands, stream_rx, events_rx, control))
+    let result = tokio::runtime::Runtime::new()?.block_on(bw_server::run(server, commands, stream_rx, events_rx, control));
+    drop(audio);
+    result
 }

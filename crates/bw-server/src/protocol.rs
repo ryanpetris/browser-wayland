@@ -7,6 +7,7 @@ pub const CONFIG: u8 = 0x01;
 pub const VIDEO: u8 = 0x02;
 pub const CURSOR: u8 = 0x03;
 pub const POINTER_LOCK: u8 = 0x04;
+pub const AUDIO: u8 = 0x05;
 // client -> server
 /// `[HELLO][u8 hw][u8 sw]`: codec families the browser decodes (bit0 H.264, bit1 HEVC, bit2 VP9), with/without hardware.
 pub const HELLO: u8 = 0x81;
@@ -51,6 +52,16 @@ pub fn cursor(img: Option<&CursorImage>) -> Bytes {
     b.extend_from_slice(&(img.hot_x as i16).to_le_bytes());
     b.extend_from_slice(&(img.hot_y as i16).to_le_bytes());
     b.extend_from_slice(&img.rgba);
+    b.into()
+}
+
+/// `[AUDIO][0][pts_us: u64][opus packet]`, same header shape as video.
+pub fn audio(pts_us: u64, data: &[u8]) -> Bytes {
+    let mut b = Vec::with_capacity(10 + data.len());
+    b.push(AUDIO);
+    b.push(0);
+    b.extend_from_slice(&pts_us.to_le_bytes());
+    b.extend_from_slice(data);
     b.into()
 }
 

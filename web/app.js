@@ -2,7 +2,7 @@
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
 
-const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04;
+const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05;
 const HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A;
 const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA
 
@@ -174,6 +174,9 @@ function onMessage(buf) {
       if (wantLock) requestLock();
       else if (document.pointerLockElement) document.exitPointerLock();
       break;
+    case AUDIO:
+      onAudio(buf);
+      break;
     case VIDEO: {
       received++;
       if (!decoder) return;
@@ -218,6 +221,46 @@ document.onpointerlockchange = () => {
   if (!document.pointerLockElement && wantLock) { wantLock = false; send(POINTER_LOCK_LOST, 0); } // Escape etc.
 };
 
+// --- audio -----------------------------------------------------------------
+
+// Opus packets decode with WebCodecs and are scheduled back to back on an AudioContext, a small
+// lead ahead of the clock as a jitter buffer. Browsers keep the context suspended until a user
+// gesture, so it's resumed from the first click or key.
+let audioCtx, audioDecoder, nextPlay = 0, analyser, audioPackets = 0, audioDecoded = 0;
+const AUDIO_LEAD = 0.06;
+function onAudio(buf) {
+  if (!audioCtx) {
+    audioCtx = new AudioContext({ sampleRate: 48000 });
+    analyser = audioCtx.createAnalyser(); // debug: lets window.bw() report what is playing
+    analyser.connect(audioCtx.destination);
+    audioDecoder = new AudioDecoder({
+      output: data => {
+        audioDecoded++;
+        const ab = audioCtx.createBuffer(data.numberOfChannels, data.numberOfFrames, data.sampleRate);
+        for (let ch = 0; ch < data.numberOfChannels; ch++) {
+          const plane = new Float32Array(data.numberOfFrames);
+          data.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
+          ab.copyToChannel(plane, ch);
+        }
+        data.close();
+        const src = audioCtx.createBufferSource();
+        src.buffer = ab;
+        src.connect(analyser);
+        const now = audioCtx.currentTime;
+        if (nextPlay < now + 0.01) nextPlay = now + AUDIO_LEAD; // (re)start after a gap or underrun
+        src.start(nextPlay);
+        nextPlay += ab.duration;
+      },
+      error: e => { console.error(e); audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 }); },
+    });
+    audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
+  }
+  audioPackets++;
+  const dv = new DataView(buf);
+  audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: Number(dv.getBigUint64(2, true)), data: new Uint8Array(buf, 10) }));
+}
+const resumeAudio = () => { if (audioCtx?.state === 'suspended') audioCtx.resume(); };
+
 // --- input -----------------------------------------------------------------
 
 // Stream logical px per canvas CSS px (1 except while a resize is in flight).
@@ -230,7 +273,7 @@ canvas.onpointermove = e => document.pointerLockElement
 canvas.onpointerdown = canvas.onpointerup = e => {
   const btn = BTN[e.button];
   if (btn === undefined) return;
-  if (e.type === 'pointerdown') { canvas.setPointerCapture(e.pointerId); if (wantLock) requestLock(); }
+  if (e.type === 'pointerdown') { canvas.setPointerCapture(e.pointerId); resumeAudio(); if (wantLock) requestLock(); }
   canvas.onpointermove(e);
   send(BUTTON, 3, dv => { dv.setUint16(1, btn, true); dv.setUint8(3, e.type === 'pointerdown' ? 1 : 0); });
 };
@@ -244,6 +287,7 @@ const onKey = e => {
   const code = KEYCODES[e.code];
   if (!code || e.repeat) return; // clients repeat keys themselves (wl_keyboard.repeat_info)
   e.preventDefault();
+  resumeAudio();
   lastInput = performance.now();
   send(KEY, 3, dv => { dv.setUint16(1, code, true); dv.setUint8(3, e.type === 'keydown' ? 1 : 0); });
 };
@@ -261,5 +305,13 @@ document.getElementById('fs').onclick = async () => {
 };
 document.onfullscreenchange = () => { if (!document.fullscreenElement) navigator.keyboard?.unlock?.(); };
 
-window.bw = () => ({ frames, received, keyframes, decodeErrors, dropped, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
+function audioStats() {
+  if (!analyser) return null;
+  const bins = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(bins);
+  let peak = 0;
+  for (let i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
+  return { packets: audioPackets, decoded: audioDecoded, state: audioCtx.state, peakHz: Math.round(peak * audioCtx.sampleRate / 2 / bins.length), level: bins[peak] };
+}
+window.bw = () => ({ frames, received, audio: audioStats(), keyframes, decodeErrors, dropped, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
 initRenderer().then(connect);

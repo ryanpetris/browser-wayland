@@ -8,6 +8,7 @@ browser decodes it with WebCodecs. Mouse and keyboard input flow back the same w
 
 - Linux with a GPU render node (`/dev/dri/renderD128`) and Mesa.
 - GStreamer 1.24+ with the VA plugin: `gst-plugin-va` on Arch (`vapostproc`, `vah264enc`).
+- `xorg-xwayland` for X11 clients, and PipeWire or PulseAudio with `pactl` for audio (both optional).
 - Rust stable. The browser needs WebCodecs (Chromium, Firefox 130+, Safari 26+).
 
 ## Run
@@ -23,7 +24,13 @@ The ⛶ button enters fullscreen with keyboard lock so shortcuts like Ctrl+W rea
 Frames are painted on a 2D canvas. `?renderer=webgpu` in the URL uses a WebGPU external-texture path
 instead; it is opt-in because Chromium on Linux occasionally presents a blank frame that way, which looks like flicker.
 
-Other clients can join later: `WAYLAND_DISPLAY=wayland-browser some-app`.
+Other clients can join later: `WAYLAND_DISPLAY=wayland-browser some-app`. X11 apps work too: an
+Xwayland is started automatically and the log prints its `DISPLAY`. Super (or Alt) + left drag moves
+any window, which is how undecorated X11 windows get moved.
+
+Audio from clients goes to the browser instead of the host speakers: the server creates a private
+`browser-wayland` sink and captures it as Opus. Clients started with `--exec` get `PULSE_SINK` set;
+for others use `PULSE_SINK=browser-wayland some-app`. `--no-audio` turns this off.
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,

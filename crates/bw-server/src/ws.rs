@@ -16,6 +16,11 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
                 v.announced = None;
                 v.need_key = true;
             }
+            StreamMsg::Audio { pts_us, data } => {
+                if let Some(tx) = &v.tx {
+                    let _ = tx.try_send(protocol::audio(pts_us, &data)); // a dropped packet is a 20 ms glitch
+                }
+            }
             StreamMsg::Failed => {
                 v.need_key = true;
                 drop(v);

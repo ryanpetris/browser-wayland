@@ -109,6 +109,8 @@ pub enum StreamMsg {
     Frame(EncodedFrame),
     /// The pipeline died; whoever drives it should ask for a keyframe so it gets rebuilt.
     Failed,
+    /// One 20 ms Opus packet from the clients' audio sink.
+    Audio { pts_us: u64, data: Bytes },
 }
 
 pub struct EncodedFrame {

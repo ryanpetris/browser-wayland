@@ -233,6 +233,40 @@ fn nal_units(au: &[u8]) -> impl Iterator<Item = &[u8]> {
     starts.into_iter().zip(ends).map(move |(s, e)| &au[s..e.max(s)]).filter(|n| !n.is_empty())
 }
 
+/// Opus-encodes whatever plays into `device` (a sink monitor); drop to stop.
+pub struct AudioStream(gst::Pipeline);
+
+impl Drop for AudioStream {
+    fn drop(&mut self) {
+        let _ = self.0.set_state(gst::State::Null);
+    }
+}
+
+pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<AudioStream> {
+    gst::init()?;
+    let desc = format!(
+        "pulsesrc device={device} buffer-time=40000 latency-time=10000 ! audio/x-raw,rate=48000,channels=2 \
+         ! audioconvert ! audioresample ! opusenc bitrate=96000 frame-size=20 audio-type=generic \
+         ! appsink name=sink sync=false max-buffers=0"
+    );
+    let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
+    let sink = pipeline.by_name("sink").context("sink element")?.downcast::<gst_app::AppSink>().unwrap();
+    sink.set_callbacks(
+        gst_app::AppSinkCallbacks::builder()
+            .new_sample(move |sink| {
+                let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+                let pts_us = buffer.pts().map(|t| t.useconds()).unwrap_or(0);
+                let _ = tx.blocking_send(StreamMsg::Audio { pts_us, data: Bytes::copy_from_slice(&map) });
+                Ok(gst::FlowSuccess::Ok)
+            })
+            .build(),
+    );
+    pipeline.set_state(gst::State::Playing)?;
+    Ok(AudioStream(pipeline))
+}
+
 /// The real sink: compositor dmabufs → `appsrc`. Clone it for a keyframe handle before moving it into the compositor.
 #[derive(Clone)]
 pub struct GstSink(Arc<Mutex<Inner>>);
