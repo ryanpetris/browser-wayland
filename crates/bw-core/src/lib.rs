@@ -76,6 +76,20 @@ pub struct DmabufFrame {
     pub lease: Box<dyn Any + Send + Sync>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Codec {
+    H264,
+    Hevc,
+    Vp9,
+}
+
+/// What the server may ask of the running encoder.
+pub trait StreamControl: Send + Sync {
+    fn request_keyframe(&self);
+    /// Switch codecs; the stream restarts with a new id.
+    fn set_codec(&self, codec: Codec);
+}
+
 pub type SinkError = Box<dyn std::error::Error + Send + Sync>;
 
 pub trait FrameSink: Send {

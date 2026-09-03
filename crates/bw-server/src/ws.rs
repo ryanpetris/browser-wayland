@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::extract::ws::{Message, WebSocket};
-use bw_core::{AxisSource, Bytes, Command, Event, OutputGeometry, StreamMsg};
+use bw_core::{AxisSource, Bytes, Codec, Command, Event, OutputGeometry, StreamMsg};
 use tokio::sync::mpsc;
 
 use crate::{App, protocol::{self, ClientMsg}};
@@ -127,12 +127,37 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
 impl App {
     /// Ask for a keyframe. The compositor only renders on damage, so also force a frame.
     pub fn rekey(&self) {
-        (self.request_keyframe)();
+        self.control.request_keyframe();
         let _ = self.commands.send(Command::RequestFullFrame);
+    }
+
+    /// Pick the codec for a browser that decodes `hw` in hardware and `sw` at all (bit0 H.264, bit1 HEVC, bit2 VP9).
+    fn choose_codec(&self, hw: u8, sw: u8) -> Codec {
+        let bit = |c: Codec| match c {
+            Codec::H264 => 1,
+            Codec::Hevc => 2,
+            Codec::Vp9 => 4,
+        };
+        match self.policy {
+            Some(c) if sw & bit(c) != 0 => c,
+            Some(c) => {
+                tracing::warn!(?c, "browser can't decode the requested codec; using H.264");
+                Codec::H264
+            }
+            None => [Codec::Hevc, Codec::Vp9, Codec::H264].into_iter().find(|&c| hw & bit(c) != 0).unwrap_or(Codec::H264),
+        }
     }
 
     fn command_for(&self, m: ClientMsg) -> Option<Command> {
         Some(match m {
+            ClientMsg::Hello { hw, sw } => {
+                let codec = self.choose_codec(hw, sw);
+                tracing::info!(?codec, hw, sw, "viewer codec");
+                self.control.set_codec(codec);
+                self.viewer.lock().unwrap().need_key = true;
+                self.rekey();
+                return None;
+            }
             // dpr bounds keep a bogus value from turning into a giant dmabuf allocation
             ClientMsg::Resize { css_w, css_h, dpr } if (0.5..=8.0).contains(&dpr) => {
                 Command::Resize(geometry(css_w, css_h, dpr as f64))

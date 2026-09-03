@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::Result;
-use bw_core::{Command, OutputGeometry};
+use bw_core::{Codec, Command, OutputGeometry, StreamControl};
 use clap::Parser;
 use tokio::sync::mpsc;
 
@@ -20,6 +20,9 @@ struct Cli {
     /// Encoder bitrate in kbit/s.
     #[arg(long, default_value_t = 8000)]
     bitrate: u32,
+    /// Video codec: auto picks HEVC, VP9 or H.264 by what the browser decodes in hardware.
+    #[arg(long, default_value = "auto", value_parser = ["auto", "h264", "hevc", "vp9"])]
+    codec: String,
     /// Command to run (via `sh -c`) with WAYLAND_DISPLAY pointing at this compositor.
     #[arg(long)]
     exec: Option<String>,
@@ -43,10 +46,16 @@ fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?))
         .init();
     let cli = Cli::parse();
+    let codec = match cli.codec.as_str() {
+        "h264" => Some(Codec::H264),
+        "hevc" => Some(Codec::Hevc),
+        "vp9" => Some(Codec::Vp9),
+        _ => None,
+    };
     let (stream_tx, stream_rx) = mpsc::channel(16);
     let (events_tx, events_rx) = mpsc::unbounded_channel();
 
-    let (commands, request_keyframe): (calloop::channel::Sender<Command>, Box<dyn Fn() + Send + Sync>) = if cli.fake_source {
+    let (commands, control): (calloop::channel::Sender<Command>, Box<dyn StreamControl>) = if cli.fake_source {
         // No compositor: just log what the browser sends.
         let (commands, rx) = calloop::channel::channel();
         std::thread::spawn(move || {
@@ -61,8 +70,7 @@ fn main() -> Result<()> {
                 .unwrap();
             event_loop.run(None, &mut (), |_| {}).unwrap();
         });
-        let stream = bw_stream::fake_source(cli.bitrate, stream_tx)?;
-        (commands, Box::new(move || stream.request_keyframe()))
+        (commands, Box::new(bw_stream::fake_source(cli.bitrate, codec.unwrap_or(Codec::H264), stream_tx)?))
     } else {
         let sink = bw_stream::GstSink::new(cli.bitrate, stream_tx)?;
         let bw_compositor::CompositorHandle { commands, socket_name, join } = bw_compositor::spawn(
@@ -94,9 +102,9 @@ fn main() -> Result<()> {
                 .spawn()?;
             std::thread::spawn(move || tracing::info!(status = ?child.wait(), "--exec client exited"));
         }
-        (commands, Box::new(move || sink.request_keyframe()))
+        (commands, Box::new(sink))
     };
 
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, data_dir: bw_server::Config::default_data_dir()? };
-    tokio::runtime::Runtime::new()?.block_on(bw_server::run(server, commands, stream_rx, events_rx, request_keyframe))
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()? };
+    tokio::runtime::Runtime::new()?.block_on(bw_server::run(server, commands, stream_rx, events_rx, control))
 }

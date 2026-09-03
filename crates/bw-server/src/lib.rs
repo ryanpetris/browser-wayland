@@ -21,12 +21,16 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     routing::get,
 };
-use bw_core::{Bytes, Command, Event, StreamInfo, StreamMsg};
+use bw_core::{Bytes, Codec, Command, Event, StreamControl, StreamInfo, StreamMsg};
 use tokio::sync::mpsc;
+
+/// `None` = automatic: HEVC, then VP9, then H.264, first one the browser decodes in hardware.
+pub type CodecPolicy = Option<Codec>;
 
 pub struct Config {
     pub listen: SocketAddr,
     pub tls: bool,
+    pub codec: CodecPolicy,
     /// Where `cert.pem`, `key.pem` and `token` live.
     pub data_dir: PathBuf,
 }
@@ -45,7 +49,8 @@ pub struct App {
     token: String,
     tls: bool,
     commands: calloop::channel::Sender<Command>,
-    request_keyframe: Box<dyn Fn() + Send + Sync>,
+    control: Box<dyn StreamControl>,
+    policy: CodecPolicy,
     viewer: Mutex<Viewer>,
 }
 
@@ -67,7 +72,7 @@ pub async fn run(
     commands: calloop::channel::Sender<Command>,
     stream_rx: mpsc::Receiver<StreamMsg>,
     events_rx: mpsc::UnboundedReceiver<Event>,
-    request_keyframe: impl Fn() + Send + Sync + 'static,
+    control: Box<dyn StreamControl>,
 ) -> Result<()> {
     fs::create_dir_all(&cfg.data_dir)?;
     let token = load_or_create(&cfg.data_dir.join("token"), || Ok(random_hex(32)))?;
@@ -75,7 +80,8 @@ pub async fn run(
         token,
         tls: cfg.tls,
         commands,
-        request_keyframe: Box::new(request_keyframe),
+        control,
+        policy: cfg.codec,
         viewer: Mutex::default(),
     });
     tokio::spawn(ws::distribute(app.clone(), stream_rx));

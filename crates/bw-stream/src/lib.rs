@@ -17,7 +17,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use bw_core::{Bytes, DmabufFrame, EncodedFrame, FrameSink, OutputGeometry, SinkError, StreamInfo, StreamMsg};
+use bw_core::{Bytes, Codec, DmabufFrame, EncodedFrame, FrameSink, OutputGeometry, SinkError, StreamControl, StreamInfo, StreamMsg};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_allocators as gst_allocators;
@@ -53,22 +53,47 @@ impl Stream {
     }
 }
 
+/// The fake source only ever speaks H.264.
+impl StreamControl for Stream {
+    fn request_keyframe(&self) {
+        Stream::request_keyframe(self)
+    }
+    fn set_codec(&self, _codec: Codec) {}
+}
+
 struct EncodeOpts {
     width: u32,
     height: u32,
     scale: f64,
     bitrate_kbps: u32,
+    codec: Codec,
+}
+
+/// Encoder + parser for a codec, producing one WebCodecs chunk per buffer.
+fn encode_tail(codec: Codec, bitrate_kbps: u32) -> String {
+    let common = format!("name=enc rate-control=cbr bitrate={bitrate_kbps} target-usage=7 ref-frames=1");
+    match codec {
+        Codec::H264 => format!(
+            "vah264enc {common} b-frames=0 ! video/x-h264,profile=high ! h264parse config-interval=-1 \
+             ! video/x-h264,stream-format=byte-stream,alignment=au"
+        ),
+        Codec::Hevc => format!(
+            "vah265enc {common} b-frames=0 ! video/x-h265,profile=main ! h265parse config-interval=-1 \
+             ! video/x-h265,stream-format=byte-stream,alignment=au"
+        ),
+        Codec::Vp9 => format!("vavp9enc {common} ! vp9parse ! video/x-vp9"),
+    }
 }
 
 /// Test source: an animated pattern, no compositor. Emits `StreamMsg` on `tx`.
-pub fn fake_source(bitrate_kbps: u32, tx: mpsc::Sender<StreamMsg>) -> Result<Stream> {
+pub fn fake_source(bitrate_kbps: u32, codec: Codec, tx: mpsc::Sender<StreamMsg>) -> Result<Stream> {
     gst::init()?;
     let (width, height) = (1920, 1080);
     let head = format!(
         "videotestsrc is-live=true pattern=ball ! video/x-raw,format=BGRA,width={width},height={height},framerate=60/1 \
          ! timeoverlay ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12"
     );
-    build(&head, EncodeOpts { width, height, scale: 1.0, bitrate_kbps }, tx)
+    build(&head, EncodeOpts { width, height, scale: 1.0, bitrate_kbps, codec }, tx)
 }
 
 static STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -77,18 +102,15 @@ static STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
 fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<Stream> {
     let stream_id = STREAM_SEQ.fetch_add(1, Ordering::Relaxed);
     let desc = format!(
-        "{head} \
-         ! vah264enc name=enc rate-control=cbr bitrate={} target-usage=7 b-frames=0 ref-frames=1 \
-         ! video/x-h264,profile=high ! h264parse config-interval=-1 \
-         ! video/x-h264,stream-format=byte-stream,alignment=au \
-         ! appsink name=sink sync=false max-buffers=1 leaky-type=downstream",
-        opts.bitrate_kbps
+        "{head} ! {} ! appsink name=sink sync=false max-buffers=1 leaky-type=downstream",
+        encode_tail(opts.codec, opts.bitrate_kbps)
     );
     let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
     let encoder = pipeline.by_name("enc").context("enc element")?;
     let sink = pipeline.by_name("sink").context("sink element")?.downcast::<gst_app::AppSink>().unwrap();
 
-    let mut info = Some(StreamInfo { stream_id, codec: String::new(), width: opts.width, height: opts.height, scale: opts.scale });
+    let (codec, width, height) = (opts.codec, opts.width, opts.height);
+    let mut info = Some(StreamInfo { stream_id, codec: String::new(), width, height, scale: opts.scale });
     sink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |sink| {
@@ -99,10 +121,11 @@ fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<St
                 // First keyframe: derive the WebCodecs codec string from the SPS and announce the stream.
                 if keyframe && info.is_some() {
                     let mut i = info.take().unwrap();
-                    i.codec = codec_string(&map).unwrap_or_else(|| {
-                        tracing::error!("no SPS in the first keyframe; guessing the codec string");
+                    i.codec = codec_string(codec, &map, width, height).unwrap_or_else(|| {
+                        tracing::error!("no parameter sets in the first keyframe; guessing the codec string");
                         "avc1.640028".into()
                     });
+                    tracing::info!(codec = %i.codec, width, height, "stream started");
                     let _ = tx.blocking_send(StreamMsg::Info(i));
                 }
                 // ponytail: blocking send so no frame silently vanishes between encoder and server;
@@ -138,20 +161,66 @@ fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<St
     Ok(Stream { pipeline, encoder, dead })
 }
 
-/// `avc1.PPCCLL` from the first SPS in an Annex B access unit, per the WebCodecs AVC registration.
-fn codec_string(au: &[u8]) -> Option<String> {
-    let mut i = 0;
-    while i + 4 < au.len() {
-        let sc4 = au[i] == 0 && au[i + 1] == 0 && au[i + 2] == 0 && au[i + 3] == 1;
-        let sc3 = au[i] == 0 && au[i + 1] == 0 && au[i + 2] == 1;
-        let nal = if sc4 { i + 4 } else if sc3 { i + 3 } else { i += 1; continue };
-        if au.get(nal)? & 0x1f == 7 {
-            let p = au.get(nal + 1..nal + 4)?;
-            return Some(format!("avc1.{:02X}{:02X}{:02X}", p[0], p[1], p[2]));
+/// The WebCodecs codec string for the first keyframe, per the AVC/HEVC/VP9 codec registrations.
+fn codec_string(codec: Codec, au: &[u8], width: u32, height: u32) -> Option<String> {
+    match codec {
+        Codec::H264 => {
+            // SPS (nal type 7): profile_idc, constraint flags, level_idc
+            let sps = nal_units(au).find(|n| n[0] & 0x1f == 7)?;
+            Some(format!("avc1.{:02X}{:02X}{:02X}", sps.get(1)?, sps.get(2)?, sps.get(3)?))
         }
-        i = nal;
+        Codec::Hevc => {
+            // SPS (nal type 33): 2-byte header, 1 byte, then profile_tier_level
+            let sps = unescape(nal_units(au).find(|n| (n[0] >> 1) & 0x3f == 33)?);
+            let ptl = sps.get(3..15)?;
+            let profile = ptl[0] & 0x1f;
+            let tier = if ptl[0] & 0x20 != 0 { 'H' } else { 'L' };
+            let compat = u32::from_be_bytes([ptl[1], ptl[2], ptl[3], ptl[4]]).reverse_bits();
+            let mut constraints: Vec<u8> = ptl[5..11].to_vec();
+            while constraints.len() > 1 && constraints.last() == Some(&0) {
+                constraints.pop();
+            }
+            let constraints = constraints.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(".");
+            Some(format!("hev1.{profile}.{compat:X}.{tier}{}.{constraints}", ptl[11]))
+        }
+        Codec::Vp9 => {
+            // profile 0, 8-bit; the level only has to be high enough for the picture size
+            let level = if width * height <= 1920 * 1080 { "41" } else if width * height <= 4096 * 2176 { "51" } else { "61" };
+            Some(format!("vp09.00.{level}.08"))
+        }
     }
-    None
+}
+
+/// Remove emulation-prevention bytes (`00 00 03` → `00 00`) from a NAL unit.
+fn unescape(nal: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(nal.len());
+    let mut zeros = 0;
+    for &b in nal {
+        if zeros >= 2 && b == 3 {
+            zeros = 0;
+            continue;
+        }
+        zeros = if b == 0 { zeros + 1 } else { 0 };
+        out.push(b);
+    }
+    out
+}
+
+/// NAL unit payloads (header byte first) of an Annex B access unit.
+fn nal_units(au: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut starts = vec![];
+    let mut i = 0;
+    while i + 3 <= au.len() {
+        if au[i] == 0 && au[i + 1] == 0 && au[i + 2] == 1 {
+            starts.push(i + 3);
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    let mut ends: Vec<usize> = starts.iter().skip(1).map(|&s| s - 3).collect();
+    ends.push(au.len());
+    starts.into_iter().zip(ends).map(move |(s, e)| &au[s..e.max(s)]).filter(|n| !n.is_empty())
 }
 
 /// The real sink: compositor dmabufs → `appsrc`. Clone it for a keyframe handle before moving it into the compositor.
@@ -161,6 +230,7 @@ pub struct GstSink(Arc<Mutex<Inner>>);
 struct Inner {
     tx: mpsc::Sender<StreamMsg>,
     bitrate_kbps: u32,
+    codec: Codec,
     accepted: Vec<(u32, u64)>,
     /// Set by `output_changed`; the pipeline is (re)built lazily on the next frame.
     geo: Option<(OutputGeometry, u32, u64)>,
@@ -178,6 +248,7 @@ impl GstSink {
         Ok(GstSink(Arc::new(Mutex::new(Inner {
             tx,
             bitrate_kbps,
+            codec: Codec::H264,
             accepted,
             geo: None,
             stream: None,
@@ -186,10 +257,24 @@ impl GstSink {
         }))))
     }
 
-    pub fn request_keyframe(&self) {
+}
+
+impl StreamControl for GstSink {
+    fn request_keyframe(&self) {
         if let Some((stream, _)) = &self.0.lock().unwrap().stream {
             stream.request_keyframe();
         }
+    }
+
+    fn set_codec(&self, codec: Codec) {
+        let mut i = self.0.lock().unwrap();
+        if i.codec == codec {
+            return;
+        }
+        i.codec = codec;
+        let old = i.take_stream();
+        drop(i);
+        drop(old);
     }
 }
 
@@ -234,7 +319,7 @@ impl Inner {
             geo.width_px,
             geo.height_px
         );
-        let opts = EncodeOpts { width: geo.width_px, height: geo.height_px, scale: geo.scale, bitrate_kbps: self.bitrate_kbps };
+        let opts = EncodeOpts { width: geo.width_px, height: geo.height_px, scale: geo.scale, bitrate_kbps: self.bitrate_kbps, codec: self.codec };
         let stream = build(&head, opts, self.tx.clone())?;
         let appsrc = stream.pipeline.by_name("src").unwrap().downcast::<gst_app::AppSrc>().unwrap();
         self.stream = Some((stream, appsrc));
@@ -308,8 +393,18 @@ mod tests {
 
     #[test]
     fn parses_high_level_42() {
-        let au = [0, 0, 0, 1, 0x67, 0x64, 0x00, 0x2a, 0xac];
-        assert_eq!(codec_string(&au).as_deref(), Some("avc1.64002A"));
+        let au = [0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x67, 0x64, 0x00, 0x2a, 0xac];
+        assert_eq!(codec_string(Codec::H264, &au, 1920, 1080).as_deref(), Some("avc1.64002A"));
+    }
+
+    #[test]
+    fn parses_hevc_main_level_4() {
+        // VPS then SPS: profile_space 0, tier L, profile 1 (Main), compat flags 0x60000000, progressive+frame_only, level 120
+        let mut au = vec![0, 0, 0, 1, 0x40, 0x01, 0x0c];
+        // constraint bytes `90 00 00 00 00 00` appear escaped on the wire: `90 00 00 03 00 00 03 00`
+        au.extend([0, 0, 0, 1, 0x42, 0x01, 0x01, 0x01, 0x60, 0, 0, 0x03, 0, 0x90, 0, 0, 0x03, 0, 0, 0x03, 0, 120, 0xa0]);
+        assert_eq!(codec_string(Codec::Hevc, &au, 1920, 1080).as_deref(), Some("hev1.1.6.L120.90"));
+        assert_eq!(codec_string(Codec::Vp9, &au, 2560, 1440).as_deref(), Some("vp09.00.51.08"));
     }
 
     #[test]

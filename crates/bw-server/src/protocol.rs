@@ -8,6 +8,8 @@ pub const VIDEO: u8 = 0x02;
 pub const CURSOR: u8 = 0x03;
 pub const POINTER_LOCK: u8 = 0x04;
 // client -> server
+/// `[HELLO][u8 hw][u8 sw]`: codec families the browser decodes (bit0 H.264, bit1 HEVC, bit2 VP9), with/without hardware.
+pub const HELLO: u8 = 0x81;
 pub const RESIZE: u8 = 0x82;
 pub const MOTION_ABS: u8 = 0x83;
 pub const MOTION_REL: u8 = 0x84;
@@ -53,6 +55,7 @@ pub fn cursor(img: Option<&CursorImage>) -> Bytes {
 
 #[derive(Debug, PartialEq)]
 pub enum ClientMsg {
+    Hello { hw: u8, sw: u8 },
     Resize { css_w: u16, css_h: u16, dpr: f32 },
     MotionAbs { x: f32, y: f32 },
     MotionRel { dx: f32, dy: f32 },
@@ -70,6 +73,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
     let u16_at = |i: usize| Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?));
     let f32_at = |i: usize| Some(f32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?));
     Some(match u8_at(0)? {
+        HELLO => ClientMsg::Hello { hw: u8_at(1)?, sw: u8_at(2)? },
         RESIZE => ClientMsg::Resize { css_w: u16_at(1)?, css_h: u16_at(3)?, dpr: f32_at(5)? },
         MOTION_ABS => ClientMsg::MotionAbs { x: f32_at(1)?, y: f32_at(5)? },
         MOTION_REL => ClientMsg::MotionRel { dx: f32_at(1)?, dy: f32_at(5)? },

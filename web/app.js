@@ -3,19 +3,19 @@
 import { KEYCODES } from './keycodes.js';
 
 const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04;
-const RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89;
+const HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89;
 const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const status = document.getElementById('s');
 
-let ws, decoder, stream, awaitingKey = true, frames = 0, lockRequests = 0, lockError = '';
+let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, lockRequests = 0, lockError = '';
 
 function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = sendResize;
+  ws.onopen = async () => { await sendHello(); sendResize(); };
   ws.onmessage = e => onMessage(e.data);
   ws.onclose = () => {
     status.textContent = stream ? 'disconnected, retrying…' : 'no stream; open the URL with ?token= printed by the server';
@@ -29,6 +29,18 @@ function send(type, size, fill) {
   dv.setUint8(0, type);
   fill?.(dv);
   ws.send(buf);
+}
+
+// Which codec families this browser decodes, in hardware and at all (bit0 H.264, bit1 HEVC, bit2 VP9).
+async function sendHello() {
+  const probes = ['avc1.640028', 'hev1.1.6.L120.90', 'vp09.00.40.08'];
+  let hw = 0, sw = 0;
+  for (const [i, codec] of probes.entries()) {
+    const ok = async hardwareAcceleration => (await VideoDecoder.isConfigSupported({ codec, hardwareAcceleration }).catch(() => ({}))).supported;
+    if (await ok('prefer-hardware')) hw |= 1 << i;
+    if (await ok('no-preference')) sw |= 1 << i;
+  }
+  send(HELLO, 2, dv => { dv.setUint8(1, hw); dv.setUint8(2, sw); });
 }
 
 function sendResize() {
@@ -88,6 +100,7 @@ function onMessage(buf) {
       else if (document.pointerLockElement) document.exitPointerLock();
       break;
     case VIDEO: {
+      received++;
       if (!decoder) return;
       const key = (dv.getUint8(1) & 1) !== 0;
       if (!key && (awaitingKey || decoder.decodeQueueSize > 4)) {
@@ -152,5 +165,5 @@ document.getElementById('fs').onclick = async () => {
 };
 document.onfullscreenchange = () => { if (!document.fullscreenElement) navigator.keyboard?.unlock?.(); };
 
-window.bw = () => ({ frames, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
+window.bw = () => ({ frames, received, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
 connect();
