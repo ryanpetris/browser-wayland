@@ -19,8 +19,6 @@ use smithay::{
 
 use crate::State;
 
-const BTN_LEFT: u32 = 0x110;
-
 /// Everything a grab forwards unchanged.
 macro_rules! forward {
     () => {
@@ -83,7 +81,7 @@ impl PointerGrab<State> for MoveGrab {
     }
     fn button(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &ButtonEvent) {
         handle.button(data, event);
-        if !handle.current_pressed().contains(&BTN_LEFT) {
+        if !handle.current_pressed().contains(&self.start_data.button) {
             handle.unset_grab(self, data, event.serial, event.time, true);
         }
     }
@@ -161,7 +159,7 @@ impl PointerGrab<State> for ResizeGrab {
     }
     fn button(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &ButtonEvent) {
         handle.button(data, event);
-        if !handle.current_pressed().contains(&BTN_LEFT) {
+        if !handle.current_pressed().contains(&self.start_data.button) {
             handle.unset_grab(self, data, event.serial, event.time, true);
             if let Some(toplevel) = self.window.toplevel() {
                 toplevel.with_pending_state(|s| {

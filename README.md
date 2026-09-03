@@ -29,8 +29,16 @@ Xwayland is started automatically and the log prints its `DISPLAY`. Super (or Al
 any window, which is how undecorated X11 windows get moved.
 
 Audio from clients goes to the browser instead of the host speakers: the server creates a private
-`browser-wayland` sink and captures it as Opus. Clients started with `--exec` get `PULSE_SINK` set;
-for others use `PULSE_SINK=browser-wayland some-app`. `--no-audio` turns this off.
+`browser-wayland-<pid>` sink (printed in the log) and captures it as Opus. Clients started with
+`--exec` get `PULSE_SINK` set; for others use `PULSE_SINK=<that name> some-app`. `--no-audio` turns this off.
+
+`--exec` runs when the first viewer connects, with `BW_WIDTH`/`BW_HEIGHT` set to the browser's size,
+and `--kiosk` fullscreens every window. Together they run a whole nested desktop; with the
+`mutter-devkit` package installed, GNOME:
+
+```sh
+cargo run --release -- --kiosk --exec 'dbus-run-session -- gnome-shell --devkit --virtual-monitor ${BW_WIDTH}x${BW_HEIGHT}'
+```
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,

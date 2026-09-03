@@ -23,7 +23,10 @@ function paint() {
   rafId = 0;
   const frame = pendingFrame;
   pendingFrame = null;
-  if (!frame) return;
+  if (frame) paintNow(frame);
+}
+// The 2D canvas is fine with immediate draws, and it saves up to one display refresh of latency.
+function paintNow(frame) {
   try { draw(frame); frames++; windowFrames++; } catch (e) { console.error(e); frame.close(); }
   if (lastInput) { latencyMs = performance.now() - lastInput; lastInput = 0; } // input -> next painted frame
 }
@@ -134,7 +137,7 @@ function sendResize() {
 function newDecoder() {
   if (decoder && decoder.state !== 'closed') decoder.close(); // a decode error closes it already
   const d = new VideoDecoder({
-    output: schedule,
+    output: renderer === 'webgpu' ? schedule : paintNow,
     error: e => { console.error(e); decodeErrors++; if (d === decoder) resync(); },
   });
   d.configure({ codec: stream.codec, optimizeForLatency: true });
@@ -153,6 +156,7 @@ function onMessage(buf) {
   switch (dv.getUint8(0)) {
     case CONFIG:
       stream = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
+      if (pendingFrame) { pendingFrame.close(); pendingFrame = null; } // don't paint the old stream into the new canvas
       canvas.width = stream.width;
       canvas.height = stream.height;
       resync();

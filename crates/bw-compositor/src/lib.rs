@@ -57,6 +57,12 @@ pub struct Config {
     pub socket_name: String,
     /// Output size until a viewer connects and resizes it.
     pub initial: OutputGeometry,
+    /// Shell command started when the first viewer connects, with WAYLAND_DISPLAY, DISPLAY,
+    /// BW_WIDTH/BW_HEIGHT (logical output size) and `exec_env` set.
+    pub exec: Option<String>,
+    pub exec_env: Vec<(String, String)>,
+    /// Every new window is fullscreened (for running a nested desktop).
+    pub kiosk: bool,
 }
 
 pub struct CompositorHandle {
@@ -97,6 +103,9 @@ pub struct State {
     pub clock: Clock<Monotonic>,
     pub socket_name: String,
     pub running: bool,
+    pub exec: Option<String>,
+    pub exec_env: Vec<(String, String)>,
+    pub kiosk: bool,
 
     pub gpu: gpu::Gpu,
     pub output: Output,
@@ -211,6 +220,9 @@ impl State {
             clock: Clock::new(),
             socket_name,
             running: true,
+            exec: cfg.exec,
+            exec_env: cfg.exec_env,
+            kiosk: cfg.kiosk,
             damage_tracker: OutputDamageTracker::from_output(&output),
             output,
             geometry: cfg.initial,
@@ -256,6 +268,34 @@ impl State {
         Ok((event_loop, state))
     }
 
+    /// `--exec` runs once the first viewer has told us its size, so a nested desktop can match it.
+    fn spawn_exec_once(&mut self, geo: OutputGeometry) {
+        let Some(cmd) = self.exec.take() else { return };
+        let mut command = std::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg(&cmd)
+            .env("WAYLAND_DISPLAY", &self.socket_name)
+            .env("BW_WIDTH", ((geo.width_px as f64 / geo.scale).round() as u32).to_string())
+            .env("BW_HEIGHT", ((geo.height_px as f64 / geo.scale).round() as u32).to_string())
+            .env_remove("WAYLAND_SOCKET")
+            .env("GDK_BACKEND", "wayland")
+            .env("QT_QPA_PLATFORM", "wayland")
+            .env("SDL_VIDEODRIVER", "wayland")
+            .env("MOZ_ENABLE_WAYLAND", "1")
+            .envs(self.exec_env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        match self.x11_display {
+            Some(d) => command.env("DISPLAY", format!(":{d}")),
+            None => command.env_remove("DISPLAY"),
+        };
+        match command.spawn() {
+            Ok(mut child) => {
+                std::thread::spawn(move || tracing::info!(status = ?child.wait(), "--exec client exited"));
+            }
+            Err(e) => tracing::error!("--exec {cmd:?}: {e}"),
+        }
+    }
+
     fn run(mut self, event_loop: &mut EventLoop<'static, State>, rx: channel::Channel<Command>) {
         let handle = event_loop.handle();
         handle
@@ -293,8 +333,15 @@ impl State {
             .unwrap();
     }
 
+    /// Keep at least a corner of a window at `loc` reachable on the current output.
+    pub fn clamp_to_output(&self, loc: Point<i32, Logical>) -> Point<i32, Logical> {
+        let size = self.space.output_geometry(&self.output).map(|g| g.size).unwrap_or_default();
+        Point::from((loc.x.clamp(0, (size.w - 64).max(0)), loc.y.clamp(0, (size.h - 64).max(0))))
+    }
+
     /// Apply a new output size/scale from the viewer.
     pub fn resize(&mut self, geo: OutputGeometry) {
+        self.spawn_exec_once(geo);
         if geo == self.geometry {
             return;
         }
@@ -329,7 +376,7 @@ impl State {
             };
             // keep a corner of every floating window reachable
             if let (false, Some(loc)) = (filled, self.space.element_location(&window)) {
-                let clamped = Point::from((loc.x.clamp(0, (size.w - 64).max(0)), loc.y.clamp(0, (size.h - 64).max(0))));
+                let clamped = self.clamp_to_output(loc);
                 if clamped != loc {
                     self.space.map_element(window.clone(), clamped, false);
                     if let WindowSurface::X11(x11) = window.underlying_surface() {

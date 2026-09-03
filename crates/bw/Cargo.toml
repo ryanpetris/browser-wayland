@@ -14,7 +14,7 @@ bw-compositor = { path = "../bw-compositor" }
 bw-server = { path = "../bw-server" }
 bw-stream = { path = "../bw-stream" }
 anyhow.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "signal"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }

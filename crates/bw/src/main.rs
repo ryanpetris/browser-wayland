@@ -23,9 +23,14 @@ struct Cli {
     /// Video codec: auto picks HEVC, VP9 or H.264 by what the browser decodes in hardware.
     #[arg(long, default_value = "auto", value_parser = ["auto", "h264", "hevc", "vp9"])]
     codec: String,
-    /// Command to run (via `sh -c`) with WAYLAND_DISPLAY pointing at this compositor.
+    /// Command to run (via `sh -c`) once the first viewer connects; WAYLAND_DISPLAY, DISPLAY,
+    /// PULSE_SINK and BW_WIDTH/BW_HEIGHT (the browser's size) are set for it.
     #[arg(long)]
     exec: Option<String>,
+    /// Fullscreen every window: for running a nested desktop such as
+    /// `--exec 'dbus-run-session -- gnome-shell --devkit --virtual-monitor ${BW_WIDTH}x${BW_HEIGHT}'`.
+    #[arg(long)]
+    kiosk: bool,
     #[arg(long, default_value = "/dev/dri/renderD128")]
     render_node: PathBuf,
     #[arg(long, default_value = "wayland-browser")]
@@ -35,19 +40,28 @@ struct Cli {
     no_audio: bool,
 }
 
-const AUDIO_SINK: &str = "browser-wayland";
+/// A private PulseAudio/PipeWire sink for this instance's clients; its monitor is what we stream.
+/// Per process, so two instances never hear each other; unloaded on drop.
+struct AudioSink {
+    name: String,
+    module: String,
+}
 
-/// A private PulseAudio/PipeWire sink for our clients; its monitor is what we stream.
-fn ensure_audio_sink() -> Result<()> {
-    let sinks = std::process::Command::new("pactl").args(["list", "short", "sinks"]).output()?;
-    if String::from_utf8_lossy(&sinks.stdout).lines().any(|l| l.split('\t').nth(1) == Some(AUDIO_SINK)) {
-        return Ok(()); // left over from an earlier run; reuse it
+impl AudioSink {
+    fn create() -> Result<AudioSink> {
+        let name = format!("browser-wayland-{}", std::process::id());
+        let out = std::process::Command::new("pactl")
+            .args(["load-module", "module-null-sink", &format!("sink_name={name}"), &format!("sink_properties=device.description={name}")])
+            .output()?;
+        anyhow::ensure!(out.status.success(), "pactl load-module failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        Ok(AudioSink { name, module: String::from_utf8_lossy(&out.stdout).trim().to_string() })
     }
-    let out = std::process::Command::new("pactl")
-        .args(["load-module", "module-null-sink", &format!("sink_name={AUDIO_SINK}"), &format!("sink_properties=device.description={AUDIO_SINK}")])
-        .output()?;
-    anyhow::ensure!(out.status.success(), "pactl load-module failed: {}", String::from_utf8_lossy(&out.stderr).trim());
-    Ok(())
+}
+
+impl Drop for AudioSink {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("pactl").args(["unload-module", &self.module]).status();
+    }
 }
 
 fn main() -> Result<()> {
@@ -75,10 +89,10 @@ fn main() -> Result<()> {
 
     let mut audio = None;
     if !cli.fake_source && !cli.no_audio {
-        match ensure_audio_sink().and_then(|()| bw_stream::audio_source(&format!("{AUDIO_SINK}.monitor"), stream_tx.clone())) {
-            Ok(a) => {
-                tracing::info!("audio: clients started with PULSE_SINK={AUDIO_SINK} play in the browser");
-                audio = Some(a);
+        match AudioSink::create().and_then(|sink| bw_stream::audio_source(&format!("{}.monitor", sink.name), stream_tx.clone()).map(|s| (sink, s))) {
+            Ok((sink, stream)) => {
+                tracing::info!("audio: clients started with PULSE_SINK={} play in the browser", sink.name);
+                audio = Some((sink, stream));
             }
             Err(e) => tracing::warn!("audio disabled: {e:#}"),
         }
@@ -107,6 +121,9 @@ fn main() -> Result<()> {
                 render_node: cli.render_node,
                 socket_name: cli.socket_name,
                 initial: OutputGeometry { width_px: 1920, height_px: 1080, scale: 1.0, refresh_mhz: 60_000 },
+                exec: cli.exec.clone(),
+                exec_env: audio.as_ref().map(|(sink, _)| ("PULSE_SINK".to_string(), sink.name.clone())).into_iter().collect(),
+                kiosk: cli.kiosk,
             },
             Box::new(sink.clone()),
             events_tx,
@@ -117,35 +134,19 @@ fn main() -> Result<()> {
             tracing::error!("compositor thread exited; shutting down");
             std::process::exit(1);
         });
-        if let Some(cmd) = &cli.exec {
-            let mut command = std::process::Command::new("sh");
-            match x11_display {
-                Some(d) => command.env("DISPLAY", format!(":{d}")),
-                None => command.env_remove("DISPLAY"),
-            };
-            match audio {
-                Some(_) => command.env("PULSE_SINK", AUDIO_SINK),
-                None => command.env_remove("PULSE_SINK"),
-            };
-            let mut child = command
-                .arg("-c")
-                .arg(cmd)
-                .env("WAYLAND_DISPLAY", &socket_name)
-                .env_remove("WAYLAND_SOCKET")
-                .env("GDK_BACKEND", "wayland")
-                .env("QT_QPA_PLATFORM", "wayland")
-                .env("SDL_VIDEODRIVER", "wayland")
-                .env("MOZ_ENABLE_WAYLAND", "1")
-                .spawn()?;
-            std::thread::spawn(move || tracing::info!(status = ?child.wait(), "--exec client exited"));
-        }
         (commands, Box::new(sink))
     };
 
     // the fake source can't switch codecs, so its policy is whatever it was built with
     let codec = if cli.fake_source { Some(codec.unwrap_or(Codec::H264)) } else { codec };
     let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()? };
-    let result = tokio::runtime::Runtime::new()?.block_on(bw_server::run(server, commands, stream_rx, events_rx, control));
+    // Ctrl+C returns here so the audio sink gets unloaded and the pipelines stopped.
+    let result = tokio::runtime::Runtime::new()?.block_on(async {
+        tokio::select! {
+            r = bw_server::run(server, commands, stream_rx, events_rx, control) => r,
+            _ = tokio::signal::ctrl_c() => Ok(()),
+        }
+    });
     drop(audio);
     result
 }

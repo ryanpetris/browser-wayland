@@ -203,6 +203,14 @@ impl XdgShellHandler for State {
             // no minimize: there is nowhere to minimize to
             s.capabilities.replace([xdg_toplevel::WmCapabilities::Maximize, xdg_toplevel::WmCapabilities::Fullscreen]);
         });
+        if self.kiosk {
+            surface.with_pending_state(|s| {
+                s.states.set(xdg_toplevel::State::Fullscreen);
+                s.size = Some(size);
+            });
+            self.space.map_element(Window::new_wayland_window(surface), (0, 0), true);
+            return;
+        }
         let n = self.space.elements().count() as i32 % 10;
         self.space.map_element(Window::new_wayland_window(surface), (40 + 30 * n, 40 + 30 * n), true);
     }
@@ -320,6 +328,7 @@ impl State {
             if let Some(window) = self.window_for(surface.wl_surface()) {
                 let saved = window.user_data().get::<RestoreLocation>().and_then(|r| r.borrow_mut().take());
                 if let Some(loc) = saved {
+                    let loc = self.clamp_to_output(loc);
                     self.space.map_element(window, loc, true);
                 }
             }

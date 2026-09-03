@@ -65,20 +65,24 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
 /// Compositor events (cursor changes) to the current viewer.
 pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event>) {
     while let Some(ev) = rx.recv().await {
-        let mut v = app.viewer.lock().unwrap();
-        let msg = match ev {
-            Event::Cursor(img) => {
-                let msg = protocol::cursor(img.as_ref());
-                v.cursor = Some(msg.clone());
-                msg
-            }
-            Event::PointerLock(locked) => {
-                v.locked = locked;
-                Bytes::from(vec![protocol::POINTER_LOCK, locked as u8])
-            }
+        let (msg, tx) = {
+            let mut v = app.viewer.lock().unwrap();
+            let msg = match ev {
+                Event::Cursor(img) => {
+                    let msg = protocol::cursor(img.as_ref());
+                    v.cursor = Some(msg.clone());
+                    msg
+                }
+                Event::PointerLock(locked) => {
+                    v.locked = locked;
+                    Bytes::from(vec![protocol::POINTER_LOCK, locked as u8])
+                }
+            };
+            (msg, v.tx.clone())
         };
-        if let Some(tx) = &v.tx {
-            let _ = tx.try_send(msg);
+        // State, not a frame: wait for room rather than drop it. A replaced viewer's sender just fails.
+        if let Some(tx) = tx {
+            let _ = tx.send(msg).await;
         }
     }
 }

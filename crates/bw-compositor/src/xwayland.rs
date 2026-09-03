@@ -35,7 +35,8 @@ type Restore = std::cell::RefCell<Option<Rectangle<i32, Logical>>>;
 impl State {
     /// Launch Xwayland; `x11_display` is set once it is ready and the window manager is attached.
     pub fn start_xwayland(&mut self) {
-        let (xwayland, client) = match XWayland::spawn(&self.dh, None, std::iter::empty::<(String, String)>(), true, Stdio::null(), Stdio::null(), |_| {}) {
+        // No abstract socket: it has no permissions at all, and X clients get the whole display.
+        let (xwayland, client) = match XWayland::spawn(&self.dh, None, std::iter::empty::<(String, String)>(), false, Stdio::null(), Stdio::null(), |_| {}) {
             Ok(x) => x,
             Err(e) => {
                 tracing::warn!("no Xwayland ({e}); X11 clients won't work");
@@ -48,6 +49,11 @@ impl State {
             match event {
                 XWaylandEvent::Ready { x11_socket, display_number } => match X11Wm::start_wm(handle.clone(), x11_socket, client.clone()) {
                     Ok(wm) => {
+                        // Only this user may connect to the display.
+                        let sock = format!("/tmp/.X11-unix/X{display_number}");
+                        if let Err(e) = std::fs::set_permissions(&sock, std::os::unix::fs::PermissionsExt::from_mode(0o600)) {
+                            tracing::warn!("chmod {sock}: {e}");
+                        }
                         tracing::info!(display = display_number, "xwayland ready");
                         state.xwm = Some(wm);
                         state.x11_display = Some(display_number);
@@ -85,6 +91,12 @@ impl XwmHandler for State {
     fn map_window_request(&mut self, _xwm: XwmId, window: X11Surface) {
         let _ = window.set_mapped(true);
         let win = Window::new_x11_window(window.clone());
+        if self.kiosk {
+            let _ = window.set_fullscreen(true);
+            let geo = self.space.output_geometry(&self.output).unwrap_or_default();
+            self.place_x11(&win, &window, geo);
+            return;
+        }
         let n = self.space.elements().count() as i32 % 10;
         let mut rect = window.geometry();
         rect.loc = (40 + 30 * n, 40 + 30 * n).into();
@@ -157,7 +169,7 @@ impl XwmHandler for State {
 
     fn resize_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32, edges: ResizeEdge) {
         let pointer = self.seat.get_pointer().unwrap();
-        let (Some(start_data), Some(win)) = (pointer.grab_start_data(), self.window_for_x11(&window)) else { return };
+        let (Some(start_data), Some(win)) = (self.x11_grab_start(&window), self.window_for_x11(&window)) else { return };
         let mut initial_rect = win.geometry();
         initial_rect.loc = self.space.element_location(&win).unwrap();
         let edges = match edges {
@@ -218,7 +230,7 @@ impl XwmHandler for State {
 
     fn move_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32) {
         let pointer = self.seat.get_pointer().unwrap();
-        let (Some(start_data), Some(win)) = (pointer.grab_start_data(), self.window_for_x11(&window)) else { return };
+        let (Some(start_data), Some(win)) = (self.x11_grab_start(&window), self.window_for_x11(&window)) else { return };
         let initial_location = self.space.element_location(&win).unwrap();
         let grab = grabs::MoveGrab { start_data, window: win, initial_location };
         pointer.set_grab(self, grab, smithay::utils::SERIAL_COUNTER.next_serial(), Focus::Clear);
@@ -226,6 +238,15 @@ impl XwmHandler for State {
 }
 
 impl State {
+    /// The pointer grab a move/resize request may take over: a left press on that very window.
+    fn x11_grab_start(&self, window: &X11Surface) -> Option<smithay::input::pointer::GrabStartData<State>> {
+        if window.is_override_redirect() || window.is_maximized() || window.is_fullscreen() {
+            return None;
+        }
+        let start = self.seat.get_pointer()?.grab_start_data()?;
+        (start.button == 0x110 && start.focus.as_ref().map(|(s, _)| s.clone()) == window.wl_surface()).then_some(start)
+    }
+
     fn fill_x11(&mut self, window: X11Surface, set: impl Fn(&X11Surface) -> Result<(), smithay::reexports::x11rb::rust_connection::ConnectionError>) {
         let (Some(win), Some(geo)) = (self.window_for_x11(&window), self.space.output_geometry(&self.output)) else { return };
         win.user_data().insert_if_missing(Restore::default);
@@ -246,7 +267,8 @@ impl State {
             return; // still filled the other way
         }
         let saved = win.user_data().get::<Restore>().and_then(|r| r.borrow_mut().take());
-        if let Some(rect) = saved {
+        if let Some(mut rect) = saved {
+            rect.loc = self.clamp_to_output(rect.loc); // the output may have shrunk meanwhile
             self.place_x11(&win, &window, rect);
         }
     }

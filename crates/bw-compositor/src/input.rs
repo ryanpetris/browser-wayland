@@ -133,7 +133,15 @@ impl State {
         // Super/Alt + left drag moves any window, decorated or not (X11 apps have no title bar here).
         let mods = keyboard.modifier_state();
         if pressed && button == BTN_LEFT && (mods.logo || mods.alt) && !pointer.is_grabbed() {
-            if let Some((window, loc)) = self.space.element_under(self.pointer_location).map(|(w, l)| (w.clone(), l)) {
+            let draggable = |w: &smithay::desktop::Window| match w.underlying_surface() {
+                WindowSurface::X11(x) => !(x.is_override_redirect() || x.is_maximized() || x.is_fullscreen()),
+                WindowSurface::Wayland(t) => {
+                    use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as S;
+                    let st = t.current_state().states;
+                    !(st.contains(S::Maximized) || st.contains(S::Fullscreen))
+                }
+            };
+            if let Some((window, loc)) = self.space.element_under(self.pointer_location).filter(|(w, _)| draggable(w)).map(|(w, l)| (w.clone(), l)) {
                 self.space.raise_element(&window, true);
                 let start_data = GrabStartData { focus: None, button, location: self.pointer_location };
                 let grab = crate::grabs::MoveGrab { start_data, window, initial_location: loc };
