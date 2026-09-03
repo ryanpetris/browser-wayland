@@ -10,7 +10,7 @@ const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 const status = document.getElementById('s');
 
-let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, lockRequests = 0, lockError = '';
+let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '';
 
 function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
@@ -55,7 +55,10 @@ function sendResize() {
 function newDecoder() {
   decoder?.close();
   const d = new VideoDecoder({
-    output: frame => { try { ctx.drawImage(frame, 0, 0); frames++; } finally { frame.close(); } },
+    output: frame => {
+      try { ctx.drawImage(frame, 0, 0); frames++; } finally { frame.close(); }
+      if (lastInput) { latencyMs = performance.now() - lastInput; lastInput = 0; } // input -> next decoded frame
+    },
     error: e => { console.error(e); if (d === decoder) resync(); },
   });
   d.configure({ codec: stream.codec, optimizeForLatency: true });
@@ -149,6 +152,7 @@ const onKey = e => {
   const code = KEYCODES[e.code];
   if (!code || e.repeat) return; // clients repeat keys themselves (wl_keyboard.repeat_info)
   e.preventDefault();
+  lastInput = performance.now();
   send(KEY, 3, dv => { dv.setUint16(1, code, true); dv.setUint8(3, e.type === 'keydown' ? 1 : 0); });
 };
 window.onkeydown = window.onkeyup = onKey;
@@ -165,5 +169,5 @@ document.getElementById('fs').onclick = async () => {
 };
 document.onfullscreenchange = () => { if (!document.fullscreenElement) navigator.keyboard?.unlock?.(); };
 
-window.bw = () => ({ frames, received, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
+window.bw = () => ({ frames, received, latencyMs, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
 connect();

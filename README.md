@@ -23,7 +23,11 @@ The ⛶ button enters fullscreen with keyboard lock so shortcuts like Ctrl+W rea
 
 Other clients can join later: `WAYLAND_DISPLAY=wayland-browser some-app`.
 
-Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`, `--fake-source`
-(a test pattern instead of the compositor), `--socket-name`, `--render-node`.
+Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
+`--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,
+then H.264), `--fake-source` (a test pattern instead of the compositor), `--socket-name`, `--render-node`.
+
+Games and other clients that lock the pointer get raw mouse deltas: the page mirrors the lock with the
+Pointer Lock API; Escape releases it.
 
 Certificate and token live in `$XDG_CONFIG_HOME/browser-wayland/`; delete them to regenerate.
