@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use bw_core::{Command, Event, FrameSink, OutputGeometry};
 use smithay::{
     backend::renderer::{ImportDma, damage::OutputDamageTracker},
-    desktop::{PopupManager, Space, Window, WindowSurface},
+    desktop::{PopupManager, Space, Window, WindowSurface, layer_map_for_output},
     input::{Seat, SeatState, pointer::CursorImageStatus},
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
@@ -44,7 +44,10 @@ use smithay::{
         pointer_constraints::PointerConstraintsState,
         relative_pointer::RelativePointerManagerState,
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
-        shell::xdg::{XdgShellState, decoration::XdgDecorationState},
+        shell::{
+            wlr_layer::WlrLayerShellState,
+            xdg::{XdgShellState, decoration::XdgDecorationState},
+        },
         shm::ShmState,
         socket::ListeningSocketSource,
         viewporter::ViewporterState,
@@ -144,6 +147,7 @@ pub struct State {
     pub shm_state: ShmState,
     pub xdg_shell_state: XdgShellState,
     pub xdg_decoration_state: XdgDecorationState,
+    pub layer_shell_state: WlrLayerShellState,
     pub output_manager_state: OutputManagerState,
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
@@ -257,6 +261,7 @@ impl State {
             shm_state: ShmState::new::<State>(&dh, vec![]),
             xdg_shell_state: XdgShellState::new::<State>(&dh),
             xdg_decoration_state: XdgDecorationState::new::<State>(&dh),
+            layer_shell_state: WlrLayerShellState::new::<State>(&dh),
             output_manager_state: OutputManagerState::new_with_xdg_output::<State>(&dh),
             data_device_state: DataDeviceState::new::<State>(&dh),
             primary_selection_state: PrimarySelectionState::new::<State>(&dh),
@@ -342,10 +347,16 @@ impl State {
             .unwrap();
     }
 
-    /// Keep at least a corner of a window at `loc` reachable on the current output.
+    /// The output minus the panels' exclusive zones: where windows go.
+    pub fn work_area(&self) -> Rectangle<i32, Logical> {
+        layer_map_for_output(&self.output).non_exclusive_zone()
+    }
+
+    /// Keep at least a corner of a window at `loc` reachable in the work area.
     pub fn clamp_to_output(&self, loc: Point<i32, Logical>) -> Point<i32, Logical> {
-        let size = self.space.output_geometry(&self.output).map(|g| g.size).unwrap_or_default();
-        Point::from((loc.x.clamp(0, (size.w - 64).max(0)), loc.y.clamp(0, (size.h - 64).max(0))))
+        let work = self.work_area();
+        let max = |lo: i32, len: i32| (lo + len - 64).max(lo);
+        Point::from((loc.x.clamp(work.loc.x, max(work.loc.x, work.size.w)), loc.y.clamp(work.loc.y, max(work.loc.y, work.size.h))))
     }
 
     /// Apply a new output size/scale from the viewer.
@@ -359,46 +370,85 @@ impl State {
         self.output.set_preferred(mode);
         self.gpu.swapchain.resize(geo.width_px, geo.height_px);
         self.geometry = geo;
-        let size = self.space.output_geometry(&self.output).map(|g| g.size).unwrap_or_default();
-        for window in self.space.elements().cloned().collect::<Vec<_>>() {
-            let filled = match window.underlying_surface() {
-                WindowSurface::Wayland(toplevel) => {
-                    let filled = toplevel.with_pending_state(|s| {
-                        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as S;
-                        s.bounds = Some(size);
-                        let filled = s.states.contains(S::Maximized) || s.states.contains(S::Fullscreen);
-                        if filled {
-                            s.size = Some(size);
-                        }
-                        filled
-                    });
-                    toplevel.send_pending_configure();
-                    filled
-                }
-                WindowSurface::X11(x11) => {
-                    let filled = x11.is_maximized() || x11.is_fullscreen();
-                    if filled {
-                        let _ = x11.configure(Rectangle::new((0, 0).into(), size));
-                    }
-                    filled
-                }
-            };
-            // keep a corner of every floating window reachable
-            if let (false, Some(loc)) = (filled, self.space.element_location(&window)) {
-                let clamped = self.clamp_to_output(loc);
-                if clamped != loc {
-                    self.space.map_element(window.clone(), clamped, false);
-                    if let WindowSurface::X11(x11) = window.underlying_surface() {
-                        let _ = x11.configure(Rectangle::new(clamped, window.geometry().size));
-                    }
-                }
-            }
-            window.with_surfaces(|_, states| {
-                smithay::wayland::fractional_scale::with_fractional_scale(states, |f| f.set_preferred_scale(geo.scale));
-            });
-        }
+        layer_map_for_output(&self.output).arrange();
+        self.relayout();
         self.sink.output_changed(geo, self.gpu.fourcc as u32, u64::from(self.gpu.modifier));
         self.force_full_frame = true;
+        self.dirty = true;
+    }
+
+    /// Re-arrange the panels; re-fit the windows if that moved the work area.
+    /// (`arrange()` only reports panel size changes, not a panel coming or going.)
+    pub fn arrange_layers(&mut self) {
+        let mut layers = layer_map_for_output(&self.output);
+        let before = layers.non_exclusive_zone();
+        layers.arrange();
+        let changed = layers.non_exclusive_zone() != before;
+        drop(layers);
+        if changed {
+            self.relayout();
+        }
+    }
+
+    /// Re-fit every window after the output or the panels' exclusive zones changed.
+    pub fn relayout(&mut self) {
+        let output = self.space.output_geometry(&self.output).unwrap_or_default();
+        let work = self.work_area();
+        let scale = self.geometry.scale;
+        for window in self.space.elements().cloned().collect::<Vec<_>>() {
+            // maximized windows fill the work area, fullscreen ones the whole output
+            let filled = match window.underlying_surface() {
+                WindowSurface::Wayland(toplevel) => {
+                    let rect = toplevel.with_pending_state(|s| {
+                        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as S;
+                        s.bounds = Some(work.size);
+                        let rect = if s.states.contains(S::Fullscreen) {
+                            Some(output)
+                        } else if s.states.contains(S::Maximized) {
+                            Some(work)
+                        } else {
+                            None
+                        };
+                        if let Some(r) = rect {
+                            s.size = Some(r.size);
+                        }
+                        rect
+                    });
+                    toplevel.send_pending_configure();
+                    rect
+                }
+                WindowSurface::X11(x11) => {
+                    let rect = if x11.is_fullscreen() {
+                        Some(output)
+                    } else if x11.is_maximized() {
+                        Some(work)
+                    } else {
+                        None
+                    };
+                    if let Some(r) = rect {
+                        let _ = x11.configure(r);
+                    }
+                    rect
+                }
+            };
+            match (filled, self.space.element_location(&window)) {
+                (Some(rect), loc) if loc != Some(rect.loc) => self.space.map_element(window.clone(), rect.loc, false),
+                // keep a corner of every floating window reachable
+                (None, Some(loc)) => {
+                    let clamped = self.clamp_to_output(loc);
+                    if clamped != loc {
+                        self.space.map_element(window.clone(), clamped, false);
+                        if let WindowSurface::X11(x11) = window.underlying_surface() {
+                            let _ = x11.configure(Rectangle::new(clamped, window.geometry().size));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            window.with_surfaces(|_, states| {
+                smithay::wayland::fractional_scale::with_fractional_scale(states, |f| f.set_preferred_scale(scale));
+            });
+        }
         self.dirty = true;
     }
 }

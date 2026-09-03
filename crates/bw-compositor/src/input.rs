@@ -3,14 +3,18 @@
 use bw_core::{AxisSource as Src, Command, Event, OutputGeometry};
 use smithay::{
     backend::input::{Axis, AxisSource, ButtonState, KeyState, Keycode},
-    desktop::{WindowSurface, WindowSurfaceType},
+    desktop::{LayerSurface, Window, WindowSurface, WindowSurfaceType, layer_map_for_output},
     input::{
         keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent, PointerHandle, RelativeMotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
-    utils::{Logical, Point, SERIAL_COUNTER},
-    wayland::{pointer_constraints::{PointerConstraint, with_pointer_constraint}, seat::WaylandFocus},
+    utils::{Logical, Point, SERIAL_COUNTER, Serial},
+    wayland::{
+        pointer_constraints::{PointerConstraint, with_pointer_constraint},
+        seat::WaylandFocus,
+        shell::wlr_layer::Layer,
+    },
 };
 
 use crate::State;
@@ -130,50 +134,37 @@ impl State {
         if pressed {
             self.lock_suppressed = false; // a click is the user gesture the browser needs to lock again
         }
-        // Super/Alt + left drag moves any window, decorated or not (X11 apps have no title bar here).
-        let mods = keyboard.modifier_state();
-        if pressed && button == BTN_LEFT && (mods.logo || mods.alt) && !pointer.is_grabbed() {
-            let draggable = |w: &smithay::desktop::Window| match w.underlying_surface() {
-                WindowSurface::X11(x) => !(x.is_override_redirect() || x.is_maximized() || x.is_fullscreen()),
-                WindowSurface::Wayland(t) => {
-                    use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as S;
-                    let st = t.current_state().states;
-                    !(st.contains(S::Maximized) || st.contains(S::Fullscreen))
-                }
-            };
-            if let Some((window, loc)) = self.space.element_under(self.pointer_location).filter(|(w, _)| draggable(w)).map(|(w, l)| (w.clone(), l)) {
-                self.space.raise_element(&window, true);
-                let start_data = GrabStartData { focus: None, button, location: self.pointer_location };
-                let grab = crate::grabs::MoveGrab { start_data, window, initial_location: loc };
-                pointer.set_grab(self, grab, serial, Focus::Clear);
-                // fall through: the press goes to the grab (which sends nothing) and keeps the pressed set right
-            }
-        }
         if pressed && !pointer.is_grabbed() {
-            // click-to-focus and raise
-            let clicked = self.space.element_under(self.pointer_location).map(|(w, _)| w.clone());
-            for window in self.space.elements() {
-                window.set_activated(false);
-            }
-            if let Some(window) = &clicked {
-                self.space.raise_element(window, true);
-                if let Some(x11) = window.x11_surface().filter(|x| !x.is_override_redirect()) {
-                    if let Some(xwm) = self.xwm.as_mut() {
-                        let _ = xwm.raise_window(x11);
+            if let Some((layer, _, _)) = self.layer_under(self.pointer_location, true) {
+                // a panel: the windows under it stay where they are; it gets the keyboard only if it asked
+                if layer.can_receive_keyboard_focus() {
+                    self.focus_window(None, serial);
+                    keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);
+                }
+            } else {
+                // Super/Alt + left drag moves any window, decorated or not (X11 apps have no title bar here).
+                let mods = keyboard.modifier_state();
+                if button == BTN_LEFT && (mods.logo || mods.alt) {
+                    let draggable = |w: &Window| match w.underlying_surface() {
+                        WindowSurface::X11(x) => !(x.is_override_redirect() || x.is_maximized() || x.is_fullscreen()),
+                        WindowSurface::Wayland(t) => {
+                            use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as S;
+                            let st = t.current_state().states;
+                            !(st.contains(S::Maximized) || st.contains(S::Fullscreen))
+                        }
+                    };
+                    if let Some((window, loc)) = self.space.element_under(self.pointer_location).filter(|(w, _)| draggable(w)).map(|(w, l)| (w.clone(), l)) {
+                        self.space.raise_element(&window, true);
+                        let start_data = GrabStartData { focus: None, button, location: self.pointer_location };
+                        let grab = crate::grabs::MoveGrab { start_data, window, initial_location: loc };
+                        pointer.set_grab(self, grab, serial, Focus::Clear);
+                        // fall through: the press goes to the grab (which sends nothing) and keeps the pressed set right
                     }
                 }
-                keyboard.set_focus(self, window.wl_surface().map(|s| s.into_owned()), serial);
-            } else {
-                keyboard.set_focus(self, None, serial);
-            }
-            for window in self.space.elements() {
-                match window.underlying_surface() {
-                    WindowSurface::Wayland(t) => {
-                        t.send_pending_configure();
-                    }
-                    WindowSurface::X11(x) => {
-                        let _ = x.set_activated(clicked.as_ref() == Some(window));
-                    }
+                if !pointer.is_grabbed() {
+                    // click-to-focus and raise; ponytail: bottom/background layers never get the keyboard
+                    let clicked = self.space.element_under(self.pointer_location).map(|(w, _)| w.clone());
+                    self.focus_window(clicked.as_ref(), serial);
                 }
             }
         }
@@ -202,12 +193,55 @@ impl State {
         pointer.frame(self);
     }
 
+    /// Raise and activate `window` (none: just deactivate everything) and give it the keyboard.
+    pub fn focus_window(&mut self, window: Option<&Window>, serial: Serial) {
+        let keyboard = self.seat.get_keyboard().unwrap();
+        for w in self.space.elements() {
+            w.set_activated(false);
+        }
+        if let Some(window) = window {
+            self.space.raise_element(window, true);
+            if let Some(x11) = window.x11_surface().filter(|x| !x.is_override_redirect()) {
+                if let Some(xwm) = self.xwm.as_mut() {
+                    let _ = xwm.raise_window(x11);
+                }
+            }
+        }
+        keyboard.set_focus(self, window.and_then(|w| w.wl_surface().map(|s| s.into_owned())), serial);
+        for w in self.space.elements() {
+            match w.underlying_surface() {
+                WindowSurface::Wayland(t) => {
+                    t.send_pending_configure();
+                }
+                WindowSurface::X11(x) => {
+                    let _ = x.set_activated(Some(w) == window);
+                }
+            }
+        }
+    }
+
+    /// Layer surface under `pos` on the layers drawn above the windows (Overlay, Top) or below them (Bottom, Background).
+    fn layer_under(&self, pos: Point<f64, Logical>, above: bool) -> Option<(LayerSurface, WlSurface, Point<f64, Logical>)> {
+        let layers = layer_map_for_output(&self.output);
+        let (a, b) = if above { (Layer::Overlay, Layer::Top) } else { (Layer::Bottom, Layer::Background) };
+        let layer = layers.layer_under(a, pos).or_else(|| layers.layer_under(b, pos))?;
+        let loc = layers.layer_geometry(layer)?.loc;
+        let (surface, p) = layer.surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)?;
+        Some((layer.clone(), surface, (p + loc).to_f64()))
+    }
+
     pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space.element_under(pos).and_then(|(window, location)| {
-            window
-                .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
-                .map(|(s, p)| (s, (p + location).to_f64()))
-        })
+        if let Some((_, surface, loc)) = self.layer_under(pos, true) {
+            return Some((surface, loc));
+        }
+        self.space
+            .element_under(pos)
+            .and_then(|(window, location)| {
+                window
+                    .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
+                    .map(|(s, p)| (s, (p + location).to_f64()))
+            })
+            .or_else(|| self.layer_under(pos, false).map(|(_, s, p)| (s, p)))
     }
 
     pub fn output_geometry(&self) -> OutputGeometry {

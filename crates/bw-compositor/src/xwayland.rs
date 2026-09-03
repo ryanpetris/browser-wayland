@@ -155,13 +155,13 @@ impl XwmHandler for State {
     }
 
     fn maximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
-        self.fill_x11(window, |w| w.set_maximized(true));
+        self.fill_x11(window, false, |w| w.set_maximized(true));
     }
     fn unmaximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
         self.unfill_x11(window, |w| w.set_maximized(false));
     }
     fn fullscreen_request(&mut self, _xwm: XwmId, window: X11Surface) {
-        self.fill_x11(window, |w| w.set_fullscreen(true));
+        self.fill_x11(window, true, |w| w.set_fullscreen(true));
     }
     fn unfullscreen_request(&mut self, _xwm: XwmId, window: X11Surface) {
         self.unfill_x11(window, |w| w.set_fullscreen(false));
@@ -247,8 +247,9 @@ impl State {
         (start.button == 0x110 && start.focus.as_ref().map(|(s, _)| s.clone()) == window.wl_surface()).then_some(start)
     }
 
-    fn fill_x11(&mut self, window: X11Surface, set: impl Fn(&X11Surface) -> Result<(), smithay::reexports::x11rb::rust_connection::ConnectionError>) {
-        let (Some(win), Some(geo)) = (self.window_for_x11(&window), self.space.output_geometry(&self.output)) else { return };
+    fn fill_x11(&mut self, window: X11Surface, fullscreen: bool, set: impl Fn(&X11Surface) -> Result<(), smithay::reexports::x11rb::rust_connection::ConnectionError>) {
+        let Some(win) = self.window_for_x11(&window) else { return };
+        let geo = self.fill_rect(fullscreen);
         win.user_data().insert_if_missing(Restore::default);
         let restore = win.user_data().get::<Restore>().unwrap();
         if restore.borrow().is_none() {
@@ -264,7 +265,8 @@ impl State {
         let _ = set(&window);
         let Some(win) = self.window_for_x11(&window) else { return };
         if window.is_maximized() || window.is_fullscreen() {
-            return; // still filled the other way
+            let geo = self.fill_rect(window.is_fullscreen());
+            return self.place_x11(&win, &window, geo); // still filled the other way: re-fit to that rect
         }
         let saved = win.user_data().get::<Restore>().and_then(|r| r.borrow_mut().take());
         if let Some(mut rect) = saved {

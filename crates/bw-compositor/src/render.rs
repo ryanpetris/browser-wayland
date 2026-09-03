@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use bw_core::DmabufFrame;
 use smithay::{
     backend::renderer::{Bind, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer},
-    desktop::{space::render_output, utils::send_frames_surface_tree},
+    desktop::{layer_map_for_output, space::render_output, utils::send_frames_surface_tree},
     input::pointer::CursorImageStatus,
 };
 
@@ -45,6 +45,10 @@ impl State {
         for window in self.space.elements() {
             window.send_frame(&self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
             window.send_dmabuf_feedback(&self.output, |_, _| Some(self.output.clone()), |_, _| &self.dmabuf_feedback);
+        }
+        for layer in layer_map_for_output(&self.output).layers() {
+            layer.send_frame(&self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
+            layer.send_dmabuf_feedback(&self.output, |_, _| Some(self.output.clone()), |_, _| &self.dmabuf_feedback);
         }
         if let CursorImageStatus::Surface(s) = &self.cursor_status {
             send_frames_surface_tree(s, &self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
