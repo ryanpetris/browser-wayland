@@ -137,9 +137,8 @@ impl State {
                 self.space.raise_element(&window, true);
                 let start_data = GrabStartData { focus: None, button, location: self.pointer_location };
                 let grab = crate::grabs::MoveGrab { start_data, window, initial_location: loc };
-                self.pressed_buttons.insert(button);
                 pointer.set_grab(self, grab, serial, Focus::Clear);
-                return;
+                // fall through: the press goes to the grab (which sends nothing) and keeps the pressed set right
             }
         }
         if pressed && !pointer.is_grabbed() {
@@ -150,7 +149,7 @@ impl State {
             }
             if let Some(window) = &clicked {
                 self.space.raise_element(window, true);
-                if let Some(x11) = window.x11_surface() {
+                if let Some(x11) = window.x11_surface().filter(|x| !x.is_override_redirect()) {
                     if let Some(xwm) = self.xwm.as_mut() {
                         let _ = xwm.raise_window(x11);
                     }

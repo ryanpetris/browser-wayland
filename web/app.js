@@ -234,32 +234,36 @@ document.onpointerlockchange = () => {
 // gesture, so it's resumed from the first click or key.
 let audioCtx, audioDecoder, nextPlay = 0, analyser, audioPackets = 0, audioDecoded = 0;
 const AUDIO_LEAD = 0.06;
+function onAudioData(data) {
+  audioDecoded++;
+  const now = audioCtx.currentTime;
+  // Not running (no user gesture yet) or too far ahead (capture clock faster than ours): drop 20 ms.
+  if (audioCtx.state !== 'running' || nextPlay > now + 3 * AUDIO_LEAD) { data.close(); return; }
+  const ab = audioCtx.createBuffer(data.numberOfChannels, data.numberOfFrames, data.sampleRate);
+  for (let ch = 0; ch < data.numberOfChannels; ch++) {
+    const plane = new Float32Array(data.numberOfFrames);
+    data.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
+    ab.copyToChannel(plane, ch);
+  }
+  data.close();
+  const src = audioCtx.createBufferSource();
+  src.buffer = ab;
+  src.connect(analyser);
+  if (nextPlay < now + 0.01) nextPlay = now + AUDIO_LEAD; // (re)start after a gap or underrun
+  src.start(nextPlay);
+  nextPlay += ab.duration;
+}
+// A decode error closes the decoder, so recovery is a fresh one (same as video).
+function newAudioDecoder() {
+  audioDecoder = new AudioDecoder({ output: onAudioData, error: e => { console.error(e); newAudioDecoder(); } });
+  audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
+}
 function onAudio(buf) {
   if (!audioCtx) {
     audioCtx = new AudioContext({ sampleRate: 48000 });
     analyser = audioCtx.createAnalyser(); // debug: lets window.bw() report what is playing
     analyser.connect(audioCtx.destination);
-    audioDecoder = new AudioDecoder({
-      output: data => {
-        audioDecoded++;
-        const ab = audioCtx.createBuffer(data.numberOfChannels, data.numberOfFrames, data.sampleRate);
-        for (let ch = 0; ch < data.numberOfChannels; ch++) {
-          const plane = new Float32Array(data.numberOfFrames);
-          data.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
-          ab.copyToChannel(plane, ch);
-        }
-        data.close();
-        const src = audioCtx.createBufferSource();
-        src.buffer = ab;
-        src.connect(analyser);
-        const now = audioCtx.currentTime;
-        if (nextPlay < now + 0.01) nextPlay = now + AUDIO_LEAD; // (re)start after a gap or underrun
-        src.start(nextPlay);
-        nextPlay += ab.duration;
-      },
-      error: e => { console.error(e); audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 }); },
-    });
-    audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
+    newAudioDecoder();
   }
   audioPackets++;
   const dv = new DataView(buf);

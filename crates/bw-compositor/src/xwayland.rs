@@ -43,23 +43,23 @@ impl State {
             }
         };
         let handle = self.handle.clone();
-        let res = self.handle.insert_source(xwayland, move |event, _, state| match event {
-            XWaylandEvent::Ready { x11_socket, display_number } => match X11Wm::start_wm(handle.clone(), x11_socket, client.clone()) {
-                Ok(wm) => {
-                    tracing::info!(display = display_number, "xwayland ready");
-                    state.xwm = Some(wm);
-                    state.x11_display = Some(display_number);
-                }
-                Err(e) => tracing::warn!("xwayland window manager failed: {e}"),
-            },
-            XWaylandEvent::Error => {
-                tracing::warn!("xwayland exited");
-                state.xwm = None;
-                state.x11_display = None;
+        let res = self.handle.insert_source(xwayland, move |event, _, state| {
+            state.xwayland_pending = false;
+            match event {
+                XWaylandEvent::Ready { x11_socket, display_number } => match X11Wm::start_wm(handle.clone(), x11_socket, client.clone()) {
+                    Ok(wm) => {
+                        tracing::info!(display = display_number, "xwayland ready");
+                        state.xwm = Some(wm);
+                        state.x11_display = Some(display_number);
+                    }
+                    Err(e) => tracing::warn!("xwayland window manager failed: {e}"),
+                },
+                XWaylandEvent::Error => tracing::warn!("xwayland failed to start"),
             }
         });
-        if let Err(e) = res {
-            tracing::warn!("xwayland event source: {e}");
+        match res {
+            Ok(_) => self.xwayland_pending = true,
+            Err(e) => tracing::warn!("xwayland event source: {e}"),
         }
     }
 
@@ -94,16 +94,13 @@ impl XwmHandler for State {
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, window: X11Surface) {
         // menus, tooltips: they know where they want to be
         let loc = window.geometry().loc;
-        self.space.map_element(Window::new_x11_window(window), loc, true);
+        self.space.map_element(Window::new_x11_window(window), loc, false);
         self.dirty = true;
     }
 
     fn unmapped_window(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Some(win) = self.window_for_x11(&window) {
             self.space.unmap_elem(&win);
-        }
-        if !window.is_override_redirect() {
-            let _ = window.set_mapped(false);
         }
         self.dirty = true;
     }
@@ -126,9 +123,23 @@ impl XwmHandler for State {
 
     fn configure_notify(&mut self, _xwm: XwmId, window: X11Surface, geometry: Rectangle<i32, Logical>, _above: Option<u32>) {
         if let Some(win) = self.window_for_x11(&window) {
-            self.space.map_element(win, geometry.loc, false);
+            // map_element puts the window on top, so only remap when it actually moved
+            if self.space.element_location(&win) != Some(geometry.loc) {
+                self.space.map_element(win, geometry.loc, false);
+            }
             self.dirty = true;
         }
+    }
+
+    /// Xwayland died after startup: its windows are gone, drop them from the space.
+    /// `xwm` stays set: Smithay's shell hooks and in-flight selection transfers still call `xwm_state`.
+    fn disconnected(&mut self, _xwm: XwmId) {
+        tracing::warn!("xwayland exited");
+        for w in self.space.elements().filter(|w| w.x11_surface().is_some()).cloned().collect::<Vec<_>>() {
+            self.space.unmap_elem(&w);
+        }
+        self.x11_display = None;
+        self.dirty = true;
     }
 
     fn maximize_request(&mut self, _xwm: XwmId, window: X11Surface) {

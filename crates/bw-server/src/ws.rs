@@ -17,7 +17,7 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
                 v.need_key = true;
             }
             StreamMsg::Audio { pts_us, data } => {
-                if let Some(tx) = &v.tx {
+                if let Some(tx) = &v.audio_tx {
                     let _ = tx.try_send(protocol::audio(pts_us, &data)); // a dropped packet is a 20 ms glitch
                 }
             }
@@ -85,6 +85,7 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
 
 pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     let (tx, mut rx) = mpsc::channel::<Bytes>(8);
+    let (atx, mut arx) = mpsc::channel::<Bytes>(4);
     // Taking over drops the previous viewer's only sender, which ends its session below.
     let (my_gen, cursor, locked) = {
         let mut v = app.viewer.lock().unwrap();
@@ -93,6 +94,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         }
         v.generation += 1;
         v.tx = Some(tx);
+        v.audio_tx = Some(atx);
         v.announced = None;
         v.need_key = true;
         (v.generation, v.cursor.clone(), v.locked)
@@ -113,6 +115,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                 Some(b) => if socket.send(Message::Binary(b)).await.is_err() { break },
                 None => break, // replaced by a newer viewer
             },
+            Some(b) = arx.recv() => if socket.send(Message::Binary(b)).await.is_err() { break },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) => {
                     // Hold the viewer lock from the generation check through the send, so a takeover
@@ -146,6 +149,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     let mut v = app.viewer.lock().unwrap();
     if v.generation == my_gen {
         v.tx = None;
+        v.audio_tx = None;
         drop(v);
         let _ = app.commands.send(Command::ReleaseAllInput);
         let _ = app.commands.send(Command::ViewerDisconnected);

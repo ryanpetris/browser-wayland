@@ -76,7 +76,7 @@ pub fn spawn(cfg: Config, sink: Box<dyn FrameSink>, events: tokio::sync::mpsc::U
             // Give Xwayland a moment to come up so --exec children can get DISPLAY.
             state.start_xwayland();
             let deadline = Instant::now() + Duration::from_secs(5);
-            while state.x11_display.is_none() && Instant::now() < deadline {
+            while state.xwayland_pending && Instant::now() < deadline {
                 let _ = event_loop.dispatch(Some(Duration::from_millis(50)), &mut state);
                 let _ = state.dh.flush_clients();
             }
@@ -143,6 +143,7 @@ pub struct State {
     pub xwayland_shell_state: XWaylandShellState,
     pub xwm: Option<X11Wm>,
     pub x11_display: Option<u32>,
+    pub xwayland_pending: bool,
 }
 
 #[derive(Default)]
@@ -248,6 +249,7 @@ impl State {
             xwayland_shell_state: XWaylandShellState::new::<State>(&dh),
             xwm: None,
             x11_display: None,
+            xwayland_pending: false,
             dh,
         };
         state.export_cursor(); // the default arrow, before any client sets one

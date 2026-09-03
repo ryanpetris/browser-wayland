@@ -246,7 +246,7 @@ pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<AudioSt
     gst::init()?;
     let desc = format!(
         "pulsesrc device={device} buffer-time=40000 latency-time=10000 ! audio/x-raw,rate=48000,channels=2 \
-         ! audioconvert ! audioresample ! opusenc bitrate=96000 frame-size=20 audio-type=generic \
+         ! audioconvert ! audioresample ! opusenc bitrate=96000 frame-size=20 audio-type=generic dtx=true \
          ! appsink name=sink sync=false max-buffers=0"
     );
     let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");

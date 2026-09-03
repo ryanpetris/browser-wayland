@@ -118,12 +118,19 @@ fn main() -> Result<()> {
             std::process::exit(1);
         });
         if let Some(cmd) = &cli.exec {
-            let mut child = std::process::Command::new("sh")
+            let mut command = std::process::Command::new("sh");
+            match x11_display {
+                Some(d) => command.env("DISPLAY", format!(":{d}")),
+                None => command.env_remove("DISPLAY"),
+            };
+            match audio {
+                Some(_) => command.env("PULSE_SINK", AUDIO_SINK),
+                None => command.env_remove("PULSE_SINK"),
+            };
+            let mut child = command
                 .arg("-c")
                 .arg(cmd)
                 .env("WAYLAND_DISPLAY", &socket_name)
-                .env("DISPLAY", x11_display.map(|d| format!(":{d}")).unwrap_or_default())
-                .env("PULSE_SINK", if audio.is_some() { AUDIO_SINK } else { "" })
                 .env_remove("WAYLAND_SOCKET")
                 .env("GDK_BACKEND", "wayland")
                 .env("QT_QPA_PLATFORM", "wayland")

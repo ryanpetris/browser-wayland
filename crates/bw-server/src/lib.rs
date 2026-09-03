@@ -59,6 +59,8 @@ pub(crate) struct Viewer {
     /// Bumped per connection so a replaced session can't act for the current one.
     generation: u64,
     tx: Option<mpsc::Sender<Bytes>>,
+    /// Audio has its own small queue so it can't push video into the keyframe path.
+    audio_tx: Option<mpsc::Sender<Bytes>>,
     info: Option<StreamInfo>,
     /// Stream id whose Config the current viewer has been sent.
     announced: Option<u32>,

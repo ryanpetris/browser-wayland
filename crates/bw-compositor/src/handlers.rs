@@ -102,8 +102,9 @@ impl CompositorHandler for State {
     fn new_surface(&mut self, surface: &WlSurface) {
         add_pre_commit_hook::<Self, _>(surface, |state, _dh, surface| {
             // ponytail: drop client opaque regions. Smithay 0.7's renderer draws them with blending off
-            // and, with fractional scale, occasionally with a bad rectangle, which paints transparent
-            // shadow texels as black wedges. Blending everything costs a little fill rate, nothing else.
+            // and occasionally with a bad rectangle, which paints transparent shadow texels as black
+            // wedges. Cost: no occlusion culling, so a window animating behind another one still
+            // causes renders and encoded frames. Remove once the renderer bug is fixed upstream.
             with_states(surface, |data| data.cached_state.get::<SurfaceAttributes>().pending().opaque_region = None);
             // Don't sample a client's dmabuf before its GPU work has finished.
             let dmabuf = with_states(surface, |data| {
@@ -146,9 +147,11 @@ impl CompositorHandler for State {
             }
             if let Some(window) = self.window_for(&root) {
                 window.on_commit();
-                // wl_surface.offset: the client moved its buffer origin, so move the window with it
+                // wl_surface.offset: the client moved its buffer origin, so move the window with it.
+                // map_element always puts the window on top, so only do it for a real move: some
+                // clients attach with a zero offset on every frame.
                 let delta = with_states(&root, |s| s.cached_state.get::<SurfaceAttributes>().current().buffer_delta.take());
-                if let (Some(delta), Some(loc)) = (delta, self.space.element_location(&window)) {
+                if let (Some(delta), Some(loc)) = (delta.filter(|d| d.x != 0 || d.y != 0), self.space.element_location(&window)) {
                     self.space.map_element(window, loc + delta, false);
                 }
             }
