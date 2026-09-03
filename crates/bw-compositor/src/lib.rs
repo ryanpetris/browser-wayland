@@ -34,7 +34,7 @@ use smithay::{
             backend::{ClientData, ClientId, DisconnectReason},
         },
     },
-    utils::{Clock, Logical, Monotonic, Point, Rectangle, Transform},
+    utils::{Clock, IsAlive, Logical, Monotonic, Point, Rectangle, SERIAL_COUNTER, Transform},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufState},
@@ -131,6 +131,8 @@ pub struct State {
 
     pub space: Space<Window>,
     pub popups: PopupManager,
+    /// Minimized windows (unmapped from the space) with where to put them back.
+    pub minimized: Vec<(Window, Point<i32, Logical>)>,
 
     pub seat_state: SeatState<State>,
     pub seat: Seat<State>,
@@ -249,6 +251,7 @@ impl State {
             viewer_connected: false,
             space,
             popups: PopupManager::default(),
+            minimized: Vec::new(),
             seat_state,
             seat,
             pointer_location: (0.0, 0.0).into(),
@@ -329,6 +332,7 @@ impl State {
         event_loop
             .run(None, &mut self, |state| {
                 state.space.refresh();
+                state.minimized.retain(|(w, _)| w.alive());
                 state.popups.cleanup();
                 if state.pointer_locked {
                     // constraints can go away without any input (client destroyed it, focus left)
@@ -345,6 +349,25 @@ impl State {
                 }
             })
             .unwrap();
+    }
+
+    /// Hide a window until a taskbar (or its own client) asks for it back; focus moves to the top-most window left.
+    pub fn minimize(&mut self, window: &Window) {
+        let Some(loc) = self.space.element_location(window) else { return };
+        self.space.unmap_elem(window);
+        self.minimized.push((window.clone(), loc));
+        let next = self.space.elements().last().cloned();
+        self.focus_window(next.as_ref(), SERIAL_COUNTER.next_serial());
+        self.dirty = true;
+    }
+
+    pub fn unminimize(&mut self, window: &Window) {
+        if let Some(i) = self.minimized.iter().position(|(w, _)| w == window) {
+            let (window, loc) = self.minimized.remove(i);
+            let loc = self.clamp_to_output(loc);
+            self.space.map_element(window, loc, false);
+            self.dirty = true;
+        }
     }
 
     /// The output minus the panels' exclusive zones: where windows go.

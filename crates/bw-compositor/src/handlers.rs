@@ -228,8 +228,10 @@ impl XdgShellHandler for State {
         surface.with_pending_state(|s| {
             s.bounds = Some(work.size);
             s.decoration_mode = Some(DecorationMode::ClientSide);
-            // no minimize: there is nowhere to minimize to
             s.capabilities.replace([xdg_toplevel::WmCapabilities::Maximize, xdg_toplevel::WmCapabilities::Fullscreen]);
+            if !self.kiosk {
+                s.capabilities.set(xdg_toplevel::WmCapabilities::Minimize); // a nested desktop has nowhere to come back from
+            }
         });
         if self.kiosk {
             let size = self.space.output_geometry(&self.output).map(|g| g.size).unwrap_or_default();
@@ -310,6 +312,11 @@ impl XdgShellHandler for State {
         self.dirty = true;
     }
 
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.window_for(surface.wl_surface()) {
+            self.minimize(&window);
+        }
+    }
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         self.fill_output(&surface, xdg_toplevel::State::Maximized);
     }

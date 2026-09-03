@@ -114,6 +114,7 @@ impl XwmHandler for State {
         if let Some(win) = self.window_for_x11(&window) {
             self.space.unmap_elem(&win);
         }
+        self.minimized.retain(|(w, _)| w.x11_surface() != Some(&window));
         self.dirty = true;
     }
 
