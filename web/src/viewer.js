@@ -415,7 +415,7 @@ export function createViewer() {
   });
 
   // Keys go to the desktop from anywhere in the page except its own text fields.
-  const isFormField = t => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || t?.isContentEditable;
+  const isFormField = t => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
   function onKey(e) {
     if (isFormField(e.target)) return;
     const code = KEYCODES[e.code];
@@ -443,9 +443,10 @@ export function createViewer() {
   if (WINDOW) window.addEventListener('focus', () => sendControl({ id: +WINDOW, op: 'activate' })); // keyboard focus follows the tab
 
   // --- fullscreen ------------------------------------------------------------------------------
-  // Fullscreen + Keyboard Lock: Ctrl+W, Ctrl+T, Alt+Tab… reach the Wayland clients instead of the browser.
-  async function fullscreen(el) {
-    await el.requestFullscreen();
+  // Fullscreen (of the stage, the canvas's parent, so the chrome goes away and the output takes the
+  // screen) + Keyboard Lock: Ctrl+W, Ctrl+T, Alt+Tab… reach the Wayland clients instead of the browser.
+  async function fullscreen() {
+    await canvas.parentElement.requestFullscreen();
     navigator.keyboard?.lock?.();
   }
   document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) navigator.keyboard?.unlock?.(); });

@@ -5,7 +5,7 @@ import { Loader2, MonitorX, RefreshCw } from 'lucide-react';
 import { useStore } from '../store.js';
 import { hue, windowColor } from './ui.jsx';
 
-export function Stage({ ref, viewer, windowMode, borders, elements }) {
+export function Stage({ viewer, windowMode, borders, elements }) {
   const el = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   useEffect(() => {
@@ -18,10 +18,7 @@ export function Stage({ ref, viewer, windowMode, borders, elements }) {
     return () => ro.disconnect();
   }, [viewer]);
   return (
-    <div
-      ref={node => { el.current = node; if (typeof ref === 'function') ref(node); else if (ref) ref.current = node; }}
-      className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-black"
-    >
+    <div ref={el} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-black">
       <canvas ref={viewer.attach} tabIndex={-1} className={`stage block outline-none ${windowMode ? '' : 'h-full w-full'}`} />
       {(borders || elements) && <Overlay viewer={viewer} size={size} borders={borders} elements={elements} />}
       <Banner viewer={viewer} />

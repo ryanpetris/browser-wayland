@@ -30,9 +30,8 @@ cargo run --release -- --exec 'foot'          # any Wayland client; WAYLAND_DISP
 
 The server prints the certificate fingerprint and a URL like `https://<lan-ip>:8443/#token=…`.
 Open it in a browser on the LAN, compare the fingerprint before accepting the self-signed
-certificate, and the desktop appears. The browser viewport size becomes the output size.
-The desktop takes the size of the viewer's display area; the fullscreen button hands it the whole screen,
-with keyboard lock so shortcuts like Ctrl+W reach the desktop.
+certificate, and the desktop appears. The desktop takes the size of the viewer's display area; the
+fullscreen button hands it the whole screen, with keyboard lock so shortcuts like Ctrl+W reach the desktop.
 Frames are painted on a 2D canvas. `?renderer=webgpu` in the URL uses a WebGPU external-texture path
 instead; it is opt-in because Chromium on Linux occasionally presents a blank frame that way, which looks like flicker.
 
@@ -156,8 +155,9 @@ the app id over every window and an outline of the focused window's elements. In
 
 The viewer lives in `web/` (React, Tailwind CSS, Vite). Its build output `web/dist` is committed and
 embedded in the binary, so `cargo build` needs no Node; after changing anything under `web/src`, run
-`npm ci && npm run build` in `web/` and commit `dist` with the change (`npm run dev` serves the page with
-hot reload, proxying `/ws` and `/api` to a server on port 8080).
+`npm ci && npm run build` in `web/` and commit `dist` with the change; a workflow checks that `dist`
+matches `src`. `npm run dev` serves the page with hot reload, proxying `/ws` and `/api` to a server
+started with `--no-tls --listen 127.0.0.1:8080`.
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,

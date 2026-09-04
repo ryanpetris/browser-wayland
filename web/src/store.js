@@ -7,7 +7,7 @@ export function createStore(initial) {
   return {
     get: () => state,
     set(patch) {
-      state = { ...state, ...(typeof patch === 'function' ? patch(state) : patch) };
+      state = { ...state, ...patch };
       for (const f of subs) f();
     },
     subscribe(f) {

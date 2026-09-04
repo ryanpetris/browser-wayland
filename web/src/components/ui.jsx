@@ -18,6 +18,10 @@ export function IconButton({ icon: Icon, label, active = false, onClick, classNa
   );
 }
 
+const CODEC = { avc1: 'H.264', hev1: 'HEVC', hvc1: 'HEVC', vp09: 'VP9' };
+/// The family of a WebCodecs codec string.
+export const codecName = c => CODEC[c?.split('.')[0]] ?? c;
+
 // One hue per app id, so every window of an app gets the same colour (also used for the border overlay).
 export function hue(s) {
   let h = 0;

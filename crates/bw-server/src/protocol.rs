@@ -1,4 +1,4 @@
-//! Binary WebSocket messages, little-endian, byte 0 = type. Mirrored in web/app.js.
+//! Binary WebSocket messages, little-endian, byte 0 = type. Mirrored in web/src/viewer.js.
 
 use bw_core::{Bytes, ControlMsg, CursorImage, EncodedFrame, StreamInfo, WindowInfo};
 
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn decode_matches_js_layout() {
-        // These byte strings are also what web/app.js produces.
+        // These byte strings are also what web/src/viewer.js produces.
         assert_eq!(
             decode(&[0x82, 0x80, 0x07, 0x38, 0x04, 0x00, 0x00, 0x00, 0x40]),
             Some(ClientMsg::Resize { css_w: 1920, css_h: 1080, dpr: 2.0 })

@@ -3,11 +3,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Camera, ChevronDown, ChevronUp, ExternalLink, Maximize2, Minimize2, Play, X } from 'lucide-react';
 import { useStore } from '../store.js';
 import { queuedSnapshot, snapshot } from '../api.js';
-import { windowColor } from './ui.jsx';
+import { codecName, windowColor } from './ui.jsx';
 
-export function Sidebar({ viewer, tab, onTab }) {
+// The two panels stay mounted (hidden) so the window list keeps its thumbnails across toggles.
+export function Sidebar({ viewer, tab, onTab, hidden }) {
   return (
-    <aside className="flex w-80 shrink-0 flex-col border-l border-zinc-800 bg-zinc-900">
+    <aside hidden={hidden} className="flex w-80 shrink-0 flex-col border-l border-zinc-800 bg-zinc-900">
       <nav className="flex shrink-0 border-b border-zinc-800 text-sm">
         {[['windows', 'Windows'], ['stats', 'Statistics']].map(([t, label]) => (
           <button
@@ -20,7 +21,8 @@ export function Sidebar({ viewer, tab, onTab }) {
           </button>
         ))}
       </nav>
-      <div className="min-h-0 flex-1 overflow-y-auto">{tab === 'windows' ? <WindowList viewer={viewer} /> : <StatsPanel viewer={viewer} />}</div>
+      <div hidden={tab !== 'windows'} className="min-h-0 flex-1 overflow-y-auto"><WindowList viewer={viewer} /></div>
+      <div hidden={tab !== 'stats'} className="min-h-0 flex-1 overflow-y-auto"><StatsPanel viewer={viewer} /></div>
     </aside>
   );
 }
@@ -62,7 +64,7 @@ function Spawn({ viewer }) {
 
 function WindowRow({ viewer, w }) {
   const badges = [w.fullscreen && 'fullscreen', w.maximized && 'maximized', w.minimized && 'minimized'].filter(Boolean);
-  const act = (op, e) => { e.stopPropagation(); e.currentTarget.blur?.(); viewer.control({ id: w.id, op }); };
+  const act = (op, e) => { e.stopPropagation(); e.currentTarget.blur(); viewer.control({ id: w.id, op }); };
   return (
     <div
       onClick={() => viewer.activate(w.id)}
@@ -82,7 +84,11 @@ function WindowRow({ viewer, w }) {
       </div>
       {/* the actions float over the row's end on hover, so titles keep the width */}
       <div className="absolute inset-y-1.5 right-2 flex items-center gap-px rounded-md border border-zinc-700 bg-zinc-800 px-0.5 opacity-0 shadow-md transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-        <Action icon={ExternalLink} label="Open in its own window" onClick={e => { e.stopPropagation(); e.currentTarget.blur(); window.open(`/?window=${w.id}`, `bw-window-${w.id}`, `popup,width=${w.w},height=${w.h}`); }} />
+        <Action icon={ExternalLink} label="Open in its own window" onClick={e => {
+          e.stopPropagation(); e.currentTarget.blur();
+          // the window's size plus the popup's own bars (TopBar h-11 + StatusBar h-7), so it shows 1:1
+          window.open(`/?window=${w.id}`, `bw-window-${w.id}`, `popup,width=${w.w},height=${w.h + 72}`);
+        }} />
         <Action icon={Camera} label="Snapshot (PNG)" onClick={e => {
           e.stopPropagation(); e.currentTarget.blur();
           const tab = window.open('', '_blank'); // opened now, inside the click, so popup blockers allow it
@@ -128,7 +134,6 @@ function Thumb({ id, updated }) {
   );
 }
 
-const CODEC = { avc1: 'H.264', hev1: 'HEVC', hvc1: 'HEVC', vp09: 'VP9' };
 const ms = v => (v == null ? '–' : v.toFixed(1));
 
 function StatsPanel({ viewer }) {
@@ -140,7 +145,7 @@ function StatsPanel({ viewer }) {
   return (
     <div className="flex flex-col gap-4 p-3 text-xs">
       <Section title="Stream">
-        <Row label="Codec" value={stream ? `${CODEC[stream.codec.split('.')[0]] ?? ''} ${stream.codec}` : '–'} />
+        <Row label="Codec" value={stream ? `${codecName(stream.codec)} ${stream.codec}` : '–'} />
         <Row label="Size" value={stream ? `${stream.width}×${stream.height} @${stream.scale.toFixed(2)}` : '–'} />
         <Row label="Renderer" value={renderer} />
         <Row label="Frame rate" value={`${s.fps} fps`} />
