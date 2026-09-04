@@ -169,8 +169,8 @@ impl CompositorHandler for State {
                 // goes to it without a click, unless a launcher holds an exclusive grab. Once per window.
                 if self.active.as_ref() == Some(&window)
                     && with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false)
-                    && window.user_data().insert_if_missing(|| InitialFocus)
                     && !self.exclusive_layer_focused()
+                    && window.user_data().insert_if_missing(|| InitialFocus)
                 {
                     self.focus_window(Some(&window), SERIAL_COUNTER.next_serial());
                 }

@@ -161,7 +161,5 @@ moving it out (sessionStorage, a paste box, rotation) is future work.
 - Per-window video streams (a browser tab per application): one encoder per window and per-stream
   negotiation.
 - Clipboard read/write from the browser and the API.
-- New windows are activated but don't take the keyboard until clicked; the API exposes this
-  pre-existing behaviour as `focused: true` on a window without keyboard focus.
 - Elements: acting on an element through AT-SPI (activate, set text) instead of clicking its rectangle;
   element states (checked, focused, disabled); Flatpak applications, whose pid on the bus is the sandbox's.
