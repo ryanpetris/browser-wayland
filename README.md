@@ -75,8 +75,10 @@ icons with Font Awesome (`otf-font-awesome`); GTK only shows icons in the Xfce m
 `gtk-menu-images=1` in `~/.config/gtk-3.0/settings.ini`, which xfsettingsd normally sets.
 
 The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps,
-Firefox and Chromium, with PipeWire for audio; the desktop starts with the panel, whose menu launches
-the rest. `make docker-run` builds the image and runs it; the details are in the Dockerfile's header.
+Firefox and Chromium, with PipeWire for audio and Mesa's OpenGL and Vulkan drivers for Intel and AMD
+(`glxgears`, `vkcube` and the info tools are included to check them); the desktop starts with the
+panel, whose menu launches the rest. `make docker-run` builds the image and runs it; the details are
+in the Dockerfile's header.
 
 The page tells you when the server closed its socket: "wrong token" (the token changes with the data
 directory, e.g. a fresh container without a volume) or "replaced by another viewer" (one at a time, the

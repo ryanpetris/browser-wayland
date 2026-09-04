@@ -173,7 +173,7 @@ as JSON.
 ## Running and deployment
 
 See the README for flags and the `Dockerfile` for a complete Arch Linux image with the Xfce panel,
-Xfce applications, Firefox, Chromium and PipeWire (`make docker-run`). Practical notes: `--exec` runs at startup, with `BW_WIDTH`/`BW_HEIGHT`
+Xfce applications, Firefox, Chromium, PipeWire and Mesa's GL and Vulkan drivers (`make docker-run`). Practical notes: `--exec` runs at startup, with `BW_WIDTH`/`BW_HEIGHT`
 set to the output size (1920×1080 until the first viewer resizes it); nested desktops need `--kiosk`; the data
 directory should be persisted in containers or every start prints a new token.
 

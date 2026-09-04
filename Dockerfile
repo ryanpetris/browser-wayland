@@ -12,7 +12,10 @@
 # old URLs get "wrong token". The token stays in the page URL (no cookies). One viewer at a time.
 # Arguments after the image name go to browser-wayland, e.g. `... browser-wayland --codec h264`.
 # If /dev/dri/renderD128 isn't world-accessible on the host, add `--group-add $(stat -c %g /dev/dri/renderD128)`.
-# Hardware encoding uses the host GPU through VA-API: Intel (iHD) and AMD (Mesa) drivers are included.
+# Hardware encoding uses the host GPU through VA-API: Intel (iHD) and AMD (Mesa) drivers are included,
+# as are Mesa's OpenGL and Vulkan drivers for both. To check them from the desktop: `glxinfo -B`,
+# `vulkaninfo --summary`, and `glxgears` / `vkcube --wsi wayland` as spinning windows (spawn them
+# from the panel's terminal or the API).
 
 # The viewer (React, built by Vite into web/dist); the binary embeds it.
 FROM node:24-alpine AS web
@@ -35,7 +38,8 @@ FROM archlinux:latest
 RUN pacman -Sy --noconfirm archlinux-keyring \
     && pacman -Syu --noconfirm --needed \
         gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugin-va \
-        mesa libva intel-media-driver libva-mesa-driver xorg-xwayland \
+        mesa vulkan-intel vulkan-radeon libva intel-media-driver libva-mesa-driver xorg-xwayland \
+        mesa-utils mesa-demos vulkan-tools \
         dbus pipewire pipewire-pulse wireplumber libpulse \
         xfce4 firefox chromium ttf-dejavu \
     && rm -rf /var/cache/pacman/pkg/*
