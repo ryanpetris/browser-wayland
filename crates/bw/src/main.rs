@@ -129,7 +129,7 @@ fn main() -> Result<()> {
             bw_compositor::Config {
                 render_node: cli.render_node,
                 socket_name: cli.socket_name,
-                initial: OutputGeometry { width_px: 1920, height_px: 1080, scale: 1.0, refresh_mhz: 60_000 },
+                initial: bw_core::INITIAL_OUTPUT,
                 exec: cli.exec.clone(),
                 exec_env,
                 kiosk: cli.kiosk,

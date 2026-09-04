@@ -7,6 +7,9 @@ pub use bytes::Bytes;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// The output until the first viewer resizes it.
+pub const INITIAL_OUTPUT: OutputGeometry = OutputGeometry { width_px: 1920, height_px: 1080, scale: 1.0, refresh_mhz: 60_000 };
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OutputGeometry {
     pub width_px: u32,

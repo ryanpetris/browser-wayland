@@ -118,7 +118,8 @@ impl App {
     pub fn fit_scale(&self, id: Option<u64>, px: f64) -> f64 {
         let long_side = match id {
             Some(id) => self.window(id).map(|(w, scale)| w.w.max(w.h) as f64 * scale).ok(),
-            None => self.viewer.lock().unwrap().info.as_ref().map(|i| i.width.max(i.height) as f64),
+            // no stream yet (no viewer has connected): the output is still the initial one
+            None => Some(self.viewer.lock().unwrap().info.as_ref().map_or(bw_core::INITIAL_OUTPUT.width_px.max(bw_core::INITIAL_OUTPUT.height_px), |i| i.width.max(i.height)) as f64),
         };
         long_side.map_or(1.0, |side| (px / side.max(1.0)).min(1.0))
     }
