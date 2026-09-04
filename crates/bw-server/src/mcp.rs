@@ -1,0 +1,282 @@
+//! MCP server (Streamable HTTP at `/mcp`, bearer token like the rest of the API). Every tool is a thin
+//! wrapper over the `App` operations in `api.rs`; the skill documents are served as instructions and
+//! resources so a client gets the manual with the connection.
+
+use std::sync::Arc;
+
+use base64::Engine;
+use bw_core::{Button, ControlMsg, ControlOp, InputMsg};
+use rmcp::{
+    ErrorData as McpError, RoleServer, ServerHandler,
+    handler::server::wrapper::Parameters,
+    model::*,
+    service::RequestContext,
+    tool, tool_handler, tool_router,
+};
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+use crate::{App, api::ApiError};
+
+pub const SKILL: &str = include_str!("../../../skills/browser-wayland/SKILL.md");
+pub const REFERENCE: &str = include_str!("../../../skills/browser-wayland/reference.md");
+
+#[derive(Clone)]
+pub struct Mcp {
+    app: Arc<App>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct WindowArg {
+    /// Window id from `windows`.
+    pub window: u64,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct SnapshotArgs {
+    /// Window id from `windows`.
+    pub window: u64,
+    /// 0.05..=2 relative to the output scale; default fits the long side in about 1600 px.
+    #[serde(default)]
+    pub scale: Option<f64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowOp {
+    Activate,
+    Close,
+    Minimize,
+    Unminimize,
+    Maximize,
+    Unmaximize,
+    Fullscreen,
+    Unfullscreen,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct WindowControlArgs {
+    /// Window id from `windows`.
+    pub window: u64,
+    pub op: WindowOp,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct MoveWindowArgs {
+    pub window: u64,
+    /// New position of the window's geometry in output logical pixels.
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ResizeWindowArgs {
+    pub window: u64,
+    /// New size of the window's geometry in logical pixels.
+    pub w: i32,
+    pub h: i32,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct SpawnArgs {
+    /// Shell command, run with `sh -c` as a client of this desktop.
+    pub cmd: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct PointArgs {
+    pub x: f64,
+    pub y: f64,
+    /// With a window id, `x`/`y` are relative to that window (as element rectangles are); else output pixels.
+    #[serde(default)]
+    pub window: Option<u64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ClickArgs {
+    pub x: f64,
+    pub y: f64,
+    /// With a window id, `x`/`y` are relative to that window (as element rectangles are); else output pixels.
+    #[serde(default)]
+    pub window: Option<u64>,
+    /// left (default), right or middle
+    #[serde(default)]
+    pub button: Button,
+    /// 1 (default) to 3 clicks
+    #[serde(default)]
+    pub count: Option<u32>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ButtonArgs {
+    pub button: Button,
+    pub pressed: bool,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ScrollArgs {
+    /// Wheel lines; positive scrolls right.
+    #[serde(default)]
+    pub dx: f64,
+    /// Wheel lines; positive scrolls down.
+    #[serde(default)]
+    pub dy: f64,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct KeyArgs {
+    /// A chord, `+`-separated: `ctrl+shift+t`, `alt+F4`, `Return`, `Escape`, `Down`, `Prior`, `F5`.
+    pub keys: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct TextArgs {
+    /// Typed through the keyboard layout into the focused field; `\n` is Return.
+    pub text: String,
+}
+
+type ToolResult = Result<CallToolResult, McpError>;
+
+fn json(value: impl serde::Serialize) -> ToolResult {
+    Ok(CallToolResult::success(vec![ContentBlock::text(serde_json::to_string(&value).map_err(|e| McpError::internal_error(e.to_string(), None))?)]))
+}
+
+fn done(result: Result<(), ApiError>) -> ToolResult {
+    match result {
+        Ok(()) => Ok(CallToolResult::success(vec![ContentBlock::text("ok")])),
+        Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())])),
+    }
+}
+
+impl Mcp {
+    pub fn new(app: Arc<App>) -> Self {
+        Mcp { app }
+    }
+
+    fn control(&self, id: u64, op: ControlOp) -> ToolResult {
+        done(self.app.control(ControlMsg { id, op }))
+    }
+
+    fn input(&self, msg: InputMsg) -> ToolResult {
+        done(self.app.input(msg))
+    }
+
+    async fn png(&self, id: Option<u64>, scale: f64) -> ToolResult {
+        match self.app.snapshot(id, scale).await {
+            Ok(png) => Ok(CallToolResult::success(vec![ContentBlock::image(base64::engine::general_purpose::STANDARD.encode(png), "image/png")])),
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())])),
+        }
+    }
+}
+
+#[tool_router(vis = "pub(crate)")]
+impl Mcp {
+    #[tool(description = "The windows on the desktop: id, title, app_id, pid, geometry x y w h (logical px), stacking z, maximized/fullscreen/minimized/focused, updated_ms (last redraw), popups (open menus, relative to x y).")]
+    fn windows(&self) -> ToolResult {
+        json(self.app.windows())
+    }
+
+    #[tool(description = "The UI elements of a window (buttons, links, text fields, menu items, tabs, ...): role, name, and x y w h relative to the window's own x y. `level` full means the list is complete; none/app/frame mean the application exposes nothing (use a snapshot).")]
+    async fn elements(&self, Parameters(WindowArg { window }): Parameters<WindowArg>) -> ToolResult {
+        match self.app.elements(window).await {
+            Ok(page) => json(page),
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())])),
+        }
+    }
+
+    #[tool(description = "PNG of the whole output at its size.")]
+    async fn screenshot(&self) -> ToolResult {
+        self.png(None, 1.0).await
+    }
+
+    #[tool(description = "PNG of one window's own buffers (works for covered and minimized windows), popups included.")]
+    async fn snapshot(&self, Parameters(SnapshotArgs { window, scale }): Parameters<SnapshotArgs>) -> ToolResult {
+        let scale = scale.unwrap_or_else(|| self.app.fit_scale(window, 1600.0));
+        self.png(Some(window), scale).await
+    }
+
+    #[tool(description = "Change a window's state: activate (raise, focus, restore), close, minimize, unminimize, maximize, unmaximize, fullscreen, unfullscreen. Fire-and-forget; check `windows` afterwards.")]
+    fn window_control(&self, Parameters(WindowControlArgs { window, op }): Parameters<WindowControlArgs>) -> ToolResult {
+        let op = match op {
+            WindowOp::Activate => ControlOp::Activate,
+            WindowOp::Close => ControlOp::Close,
+            WindowOp::Minimize => ControlOp::Minimize,
+            WindowOp::Unminimize => ControlOp::Unminimize,
+            WindowOp::Maximize => ControlOp::Maximize,
+            WindowOp::Unmaximize => ControlOp::Unmaximize,
+            WindowOp::Fullscreen => ControlOp::Fullscreen,
+            WindowOp::Unfullscreen => ControlOp::Unfullscreen,
+        };
+        self.control(window, op)
+    }
+
+    #[tool(description = "Move a floating window's geometry to x y (output logical px).")]
+    fn move_window(&self, Parameters(MoveWindowArgs { window, x, y }): Parameters<MoveWindowArgs>) -> ToolResult {
+        self.control(window, ControlOp::Move { x, y })
+    }
+
+    #[tool(description = "Resize a floating window's geometry to w h (logical px).")]
+    fn resize_window(&self, Parameters(ResizeWindowArgs { window, w, h }): Parameters<ResizeWindowArgs>) -> ToolResult {
+        self.control(window, ControlOp::Resize { w, h })
+    }
+
+    #[tool(description = "Start a program as a client of this desktop (`sh -c cmd`). Its window appears in `windows` after a moment.")]
+    fn spawn(&self, Parameters(SpawnArgs { cmd }): Parameters<SpawnArgs>) -> ToolResult {
+        self.control(0, ControlOp::Spawn { cmd })
+    }
+
+    #[tool(description = "Move the pointer there and click. With `window`, x y are relative to that window, e.g. the centre of an element's rectangle.")]
+    fn click(&self, Parameters(ClickArgs { x, y, window, button, count }): Parameters<ClickArgs>) -> ToolResult {
+        self.input(InputMsg::Click { x, y, window, button, count })
+    }
+
+    #[tool(description = "Move the pointer without clicking (hover, or the middle of a drag).")]
+    fn move_pointer(&self, Parameters(PointArgs { x, y, window }): Parameters<PointArgs>) -> ToolResult {
+        self.input(InputMsg::Move { x, y, window })
+    }
+
+    #[tool(description = "Press or release a pointer button where the pointer is (for drags: press, move_pointer, release).")]
+    fn button(&self, Parameters(ButtonArgs { button, pressed }): Parameters<ButtonArgs>) -> ToolResult {
+        self.input(InputMsg::Button { button, pressed })
+    }
+
+    #[tool(description = "Scroll the wheel under the pointer by lines; positive dy scrolls down.")]
+    fn scroll(&self, Parameters(ScrollArgs { dx, dy }): Parameters<ScrollArgs>) -> ToolResult {
+        self.input(InputMsg::Scroll { dx, dy })
+    }
+
+    #[tool(description = "Press a key chord and release it: `ctrl+s`, `ctrl+shift+t`, `alt+F4`, `Return`, `Escape`, `Tab`, `Down`, `Prior`, `F5`. Goes to the focused window.")]
+    fn key(&self, Parameters(KeyArgs { keys }): Parameters<KeyArgs>) -> ToolResult {
+        self.input(InputMsg::Key { keys })
+    }
+
+    #[tool(name = "type", description = "Type text into the focused field through the keyboard layout (click it first). `\\n` is Return.")]
+    fn type_text(&self, Parameters(TextArgs { text }): Parameters<TextArgs>) -> ToolResult {
+        self.input(InputMsg::Text { text })
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for Mcp {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
+            .with_server_info(Implementation::new("browser-wayland", option_env!("BW_VERSION").unwrap_or("dev")))
+            .with_instructions(SKILL)
+    }
+
+    async fn list_resources(&self, _: Option<PaginatedRequestParams>, _: RequestContext<RoleServer>) -> Result<ListResourcesResult, McpError> {
+        Ok(ListResourcesResult::with_all_items(vec![
+            Resource::new("skill://browser-wayland/SKILL.md", "SKILL.md"),
+            Resource::new("skill://browser-wayland/reference.md", "reference.md"),
+        ]))
+    }
+
+    async fn read_resource(&self, request: ReadResourceRequestParams, _: RequestContext<RoleServer>) -> Result<ReadResourceResponse, McpError> {
+        let text = match request.uri.as_str() {
+            "skill://browser-wayland/SKILL.md" => SKILL,
+            "skill://browser-wayland/reference.md" => REFERENCE,
+            _ => return Err(McpError::resource_not_found(request.uri.clone(), None)),
+        };
+        Ok(ReadResourceResponse::Complete(ReadResourceResult::new(vec![ResourceContents::text(text, request.uri)])))
+    }
+}

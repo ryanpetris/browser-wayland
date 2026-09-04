@@ -4,7 +4,9 @@
 
 mod api;
 mod elements;
+mod mcp;
 mod protocol;
+mod reference;
 mod ws;
 
 use std::{
@@ -27,6 +29,7 @@ use axum::{
     routing::{get, post},
 };
 use bw_core::{Bytes, Codec, Command, ControlMsg, Event, InputMsg, StreamControl, StreamInfo, StreamMsg, WindowInfo};
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager};
 use tokio::sync::mpsc;
 
 /// `None` = automatic: HEVC, then VP9, then H.264, first one the browser decodes in hardware.
@@ -117,8 +120,11 @@ pub async fn run(
                 .route("/api/windows/{id}/snapshot.png", get(api_window_snapshot))
                 .route("/api/screenshot.png", get(api_screenshot))
                 .route("/api/windows/{id}/elements", get(api_window_elements))
+                .nest_service("/mcp", mcp_service(app.clone()))
                 .layer(middleware::from_fn_with_state(app.clone(), bearer)),
         )
+        .route("/skill/SKILL.md", get(|| async { markdown(mcp::SKILL) }))
+        .route("/skill/reference.md", get(|| async { markdown(mcp::REFERENCE) }))
         .with_state(app.clone());
 
     let tls_pem = if cfg.tls { Some(load_or_create_cert(&cfg.data_dir)?) } else { None };
@@ -151,6 +157,15 @@ async fn index() -> Html<&'static str> {
 
 fn js(src: &'static str) -> Response {
     ([(header::CONTENT_TYPE, "text/javascript")], src).into_response()
+}
+
+fn markdown(src: &'static str) -> Response {
+    ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], src).into_response()
+}
+
+/// MCP over Streamable HTTP; the bearer middleware in front of it replaces rmcp's host allow-list.
+fn mcp_service(app: Arc<App>) -> StreamableHttpService<mcp::Mcp, LocalSessionManager> {
+    StreamableHttpService::new(move || Ok(mcp::Mcp::new(app.clone())), Arc::new(LocalSessionManager::default()), StreamableHttpServerConfig::default().disable_allowed_hosts())
 }
 
 /// Unauthenticated until the first message (see `ws::session`).

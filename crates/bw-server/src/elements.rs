@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 use bw_core::WindowInfo;
+use schemars::JsonSchema;
 use serde::Serialize;
 use zbus::{Connection, names::BusName, proxy, proxy::CacheProperties, zvariant::OwnedObjectPath};
 
@@ -43,7 +44,7 @@ trait Application {
     fn toolkit_name(&self) -> zbus::Result<String>;
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct Element {
     pub role: &'static str,
     pub name: String,
@@ -55,7 +56,7 @@ pub struct Element {
 
 /// `level`: `none` (the app isn't on the bus), `app` (on the bus, but no toplevel matches this window),
 /// `frame` (the toplevel is there but empty; Chromium without --force-renderer-accessibility), `full`.
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct Page {
     pub level: &'static str,
     pub toolkit: Option<String>,

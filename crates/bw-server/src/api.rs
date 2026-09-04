@@ -110,6 +110,14 @@ impl App {
         }
     }
 
+    /// The snapshot scale that fits a window's long side in `px` device pixels (at most 1).
+    pub fn fit_scale(&self, id: u64, px: f64) -> f64 {
+        match self.window(id) {
+            Ok((w, scale)) => (px / (w.w.max(w.h).max(1) as f64 * scale)).min(1.0),
+            Err(_) => 1.0,
+        }
+    }
+
     /// A window action or spawn. Fire-and-forget: the compositor ignores unknown ids and impossible requests.
     pub fn control(&self, msg: ControlMsg) -> Result<(), ApiError> {
         self.send(Command::Control(msg))
