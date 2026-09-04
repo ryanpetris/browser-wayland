@@ -54,36 +54,30 @@ impl State {
         let s = Scale::from(scale);
         let output_loc = self.space.output_geometry(&self.output).map(|g| g.loc).unwrap_or_default();
         let fullscreen = self.fullscreen_window_mapped();
-        let layers = layer_map_for_output(&self.output);
-        let layer_elements = |renderer: &mut GlesRenderer, pick: fn(Layer) -> bool| -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
-            layers
-                .layers()
-                .rev()
-                .filter(|l| pick(l.layer()))
-                .filter_map(|l| layers.layer_geometry(l).map(|g| (g.loc, l)))
-                .flat_map(|(loc, l)| l.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(renderer, loc.to_physical_precise_round(scale), s, 1.0))
-                .collect()
+        // the layers first (their map borrows the output), the windows and their bars between them after
+        let (mut out, bottom) = {
+            let layers = layer_map_for_output(&self.output);
+            let mut layer_elements = |pick: fn(Layer) -> bool| -> Vec<OutputElement<GlesRenderer>> {
+                layers
+                    .layers()
+                    .rev()
+                    .filter(|l| pick(l.layer()))
+                    .filter_map(|l| layers.layer_geometry(l).map(|g| (g.loc, l)))
+                    .flat_map(|(loc, l)| l.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(&mut self.gpu.renderer, loc.to_physical_precise_round(scale), s, 1.0))
+                    .map(Into::into)
+                    .collect()
+            };
+            let top = layer_elements(if fullscreen { |l| l == Layer::Overlay } else { |l| matches!(l, Layer::Top | Layer::Overlay) });
+            (top, layer_elements(|l| matches!(l, Layer::Bottom | Layer::Background)))
         };
-        let mut out: Vec<OutputElement<GlesRenderer>> = layer_elements(&mut self.gpu.renderer, if fullscreen { |l| l == Layer::Overlay } else { |l| matches!(l, Layer::Top | Layer::Overlay) }).into_iter().map(Into::into).collect();
-        drop(layers);
         let windows: Vec<(Window, Point<i32, Logical>)> = self.space.elements().rev().filter_map(|w| Some((w.clone(), self.space.element_location(w)?))).collect();
         for (w, loc) in windows {
-            out.extend(self.bar_element(&w, scale).map(Into::into));
             // the space places the geometry; render_elements wants the surface origin
             let origin = loc - w.geometry().loc - output_loc;
             out.extend(w.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(&mut self.gpu.renderer, origin.to_physical_precise_round(scale), s, 1.0).into_iter().map(Into::into));
+            out.extend(self.bar_element(&w, scale).map(Into::into)); // under the window's popups, which may open upward
         }
-        let layers = layer_map_for_output(&self.output);
-        let layer_elements = |renderer: &mut GlesRenderer, pick: fn(Layer) -> bool| -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
-            layers
-                .layers()
-                .rev()
-                .filter(|l| pick(l.layer()))
-                .filter_map(|l| layers.layer_geometry(l).map(|g| (g.loc, l)))
-                .flat_map(|(loc, l)| l.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(renderer, loc.to_physical_precise_round(scale), s, 1.0))
-                .collect()
-        };
-        out.extend(layer_elements(&mut self.gpu.renderer, |l| matches!(l, Layer::Bottom | Layer::Background)).into_iter().map(Into::into));
+        out.extend(bottom);
         out
     }
 

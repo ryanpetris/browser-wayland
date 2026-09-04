@@ -24,7 +24,7 @@ use smithay::{
 
 use crate::{
     State,
-    decor::{Hit, maximized, resize_cursor},
+    decor::{Hit, Under, maximized, resize_cursor},
     desktop::window_id,
 };
 
@@ -332,7 +332,7 @@ impl State {
         if pressed {
             self.lock_suppressed = false; // a click is the user gesture the browser needs to lock again
         }
-        if !pressed && let Some((window, b)) = self.decor_press.take() {
+        if !pressed && button == BTN_LEFT && let Some((window, b)) = self.decor_press.take() {
             // a decoration button acts on release, if the pointer is still on it
             if self.decoration_under(self.pointer_location).is_some_and(|(w, h)| w == window && h == Hit::Button(b)) {
                 let op = match b {
@@ -352,10 +352,11 @@ impl State {
                     keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);
                 }
             } else if let Some((window, hit)) = self.decoration_under(self.pointer_location) {
-                // our title bar: focus, then a button, a drag (or a double-click), or a resize from the band
+                // our title bar (a higher window's surfaces, resize handles and popups included, would have won):
+                // focus, then a button, a drag (or a double-click), or a resize from the band
                 self.focus_window(Some(&window), serial);
                 match hit {
-                    Hit::Button(b) => self.decor_press = Some((window, b)),
+                    Hit::Button(b) if button == BTN_LEFT => self.decor_press = Some((window, b)),
                     Hit::Bar if button == BTN_LEFT => {
                         let now = Instant::now();
                         let again = self.bar_click.take().is_some_and(|(w, at)| w == window && now.duration_since(at) < Duration::from_millis(400));
@@ -492,14 +493,11 @@ impl State {
         if let Some((_, surface, loc)) = self.layer_under(pos, true) {
             return Some((surface, loc));
         }
-        self.space
-            .element_under(pos)
-            .and_then(|(window, location)| {
-                window
-                    .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
-                    .map(|(s, p)| (s, (p + location).to_f64()))
-            })
-            .or_else(|| self.layer_under(pos, false).map(|(_, s, p)| (s, p)))
+        match self.window_under(pos) {
+            Some(Under::Surface(surface, p)) => Some((surface, p)),
+            Some(Under::Decoration(..)) => None, // our chrome: nothing of the clients' is under the pointer
+            None => self.layer_under(pos, false).map(|(_, s, p)| (s, p)),
+        }
     }
 
     pub fn output_geometry(&self) -> OutputGeometry {

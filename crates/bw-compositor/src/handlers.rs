@@ -476,7 +476,7 @@ impl XdgDecorationHandler for State {
         if toplevel.is_initial_configure_sent() {
             toplevel.send_pending_configure();
         }
-        self.dirty = true;
+        self.decorations_changed();
     }
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
         self.request_mode(toplevel, DecorationMode::ServerSide);

@@ -37,7 +37,7 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
       "type": "string"
     },
     "decoration": {
-      "description": "height of the compositor's title bar above the geometry (see [`decoration`]); 0 when the client draws its own",
+      "description": "height of the compositor's title bar above the geometry (the `decoration` module has its layout); 0 when the client draws its own",
       "type": "integer",
       "format": "int32"
     },

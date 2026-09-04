@@ -30,7 +30,7 @@ use smithay::{
             gles::GlesRenderer,
         },
     },
-    desktop::{Window, WindowSurface},
+    desktop::{Window, WindowSurface, WindowSurfaceType},
     input::pointer::CursorIcon,
     reexports::wayland_protocols::xdg::{
         decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
@@ -52,9 +52,15 @@ pub enum Hit {
     Edge(ResizeEdge),
 }
 
-/// The bar's bitmap and what it was drawn for: title, focused, maximized, width in pixels.
+/// What a window walk found under the pointer.
+pub enum Under {
+    Surface(WlSurface, Point<f64, Logical>),
+    Decoration(Window, Hit),
+}
+
+/// The bar's bitmap and what it was drawn for: title, focused, maximized, size in pixels.
 #[derive(Default)]
-struct Cache(RefCell<Option<(String, bool, bool, i32, MemoryRenderBuffer)>>);
+struct Cache(RefCell<Option<(String, bool, bool, Size<i32, Buffer>, MemoryRenderBuffer)>>);
 
 /// What a surface asked for through KDE's server-decoration protocol, the one GTK (3 and 4) and
 /// Firefox use to say they draw their own; xdg-decoration is the other way to say it.
@@ -62,7 +68,7 @@ struct Cache(RefCell<Option<(String, bool, bool, i32, MemoryRenderBuffer)>>);
 struct KdeRequest(RefCell<Option<KdeMode>>);
 
 fn kde_client_side(surface: &WlSurface) -> bool {
-    with_states(surface, |s| s.data_map.get::<KdeRequest>().is_some_and(|r| *r.0.borrow() == Some(KdeMode::Client)))
+    with_states(surface, |s| s.data_map.get::<KdeRequest>().is_some_and(|r| matches!(*r.0.borrow(), Some(KdeMode::Client | KdeMode::None))))
 }
 
 impl KdeDecorationHandler for State {
@@ -76,7 +82,7 @@ impl KdeDecorationHandler for State {
                 *s.data_map.get::<KdeRequest>().unwrap().0.borrow_mut() = Some(mode);
             });
             decoration.mode(mode);
-            self.dirty = true;
+            self.decorations_changed();
         }
     }
     fn release(&mut self, _decoration: &OrgKdeKwinServerDecoration, surface: &WlSurface) {
@@ -124,15 +130,23 @@ pub fn resize_cursor(edge: ResizeEdge) -> CursorIcon {
 
 impl State {
     /// Windows we draw a bar for: X11 ones that don't refuse decorations, Wayland ones that didn't say
-    /// they draw their own (through xdg-decoration or KDE's protocol); never fullscreen ones.
+    /// they draw their own (through xdg-decoration or KDE's protocol); never fullscreen ones. Read from
+    /// the pending xdg state: what was asked for, before the client acks it, so the room a maximized
+    /// window gets is right on the way out of fullscreen.
     pub fn decorated(&self, window: &Window) -> bool {
         match window.underlying_surface() {
             WindowSurface::X11(x) => !x.is_override_redirect() && !x.is_decorated() && !x.is_fullscreen(),
             WindowSurface::Wayland(t) => {
-                let st = t.current_state();
-                st.decoration_mode != Some(Mode::ClientSide) && !kde_client_side(t.wl_surface()) && !st.states.contains(XdgState::Fullscreen)
+                t.with_pending_state(|s| s.decoration_mode != Some(Mode::ClientSide) && !s.states.contains(XdgState::Fullscreen)) && !kde_client_side(t.wl_surface())
             }
         }
+    }
+
+    /// A window's decorations came or went: a maximized one gains or loses the bar's room, and the
+    /// pointer may now rest on a bar (or a client) without having moved.
+    pub fn decorations_changed(&mut self) {
+        self.relayout();
+        self.pointer_motion(self.pointer_location);
     }
 
     /// The bar's height above `window`'s geometry: `BAR`, or 0 when the client decorates itself.
@@ -149,42 +163,59 @@ impl State {
         Some(Rectangle::new((geo.loc.x, geo.loc.y - BAR).into(), (geo.size.w, BAR).into()))
     }
 
-    /// The decoration under `pos`, top-most window first; a window's own area hides whatever is below it.
-    pub fn decoration_under(&self, pos: Point<f64, Logical>) -> Option<(Window, Hit)> {
-        let p = pos.to_i32_round::<i32>();
+    /// What is under `pos` among the windows, top-most first: a client surface (a window's own, its
+    /// popups and its resize handles included) or one of our decorations; either hides everything below.
+    pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<Under> {
         for window in self.space.elements().rev() {
-            let Some(geo) = self.space.element_geometry(window) else { continue };
-            if geo.contains(p) {
-                return None;
+            let Some(loc) = self.space.element_location(window) else { continue };
+            if let Some((surface, p)) = window.surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL) {
+                return Some(Under::Surface(surface, (p + loc).to_f64()));
             }
-            let Some(bar) = self.bar(window) else { continue };
-            if bar.contains(p) {
-                let x = p.x - bar.loc.x;
-                let button = buttons(bar.size.w).into_iter().find(|(_, bx)| (*bx..bx + BUTTON).contains(&x)).map(|(b, _)| b);
-                return Some((window.clone(), button.map_or(Hit::Bar, Hit::Button)));
-            }
-            if maximized(window) {
-                continue;
-            }
-            let frame = Rectangle::new(bar.loc, (geo.size.w, geo.size.h + BAR).into());
-            let band = Rectangle::new(frame.loc - Point::from((EDGE, EDGE)), frame.size + Size::from((2 * EDGE, 2 * EDGE)));
-            if band.contains(p) {
-                let (left, right) = (p.x < frame.loc.x, p.x >= frame.loc.x + frame.size.w);
-                let (top, bottom) = (p.y < frame.loc.y, p.y >= frame.loc.y + frame.size.h);
-                let edge = match (left, right, top, bottom) {
-                    (true, _, true, _) => ResizeEdge::TopLeft,
-                    (_, true, true, _) => ResizeEdge::TopRight,
-                    (true, _, _, true) => ResizeEdge::BottomLeft,
-                    (_, true, _, true) => ResizeEdge::BottomRight,
-                    (true, ..) => ResizeEdge::Left,
-                    (_, true, ..) => ResizeEdge::Right,
-                    (_, _, true, _) => ResizeEdge::Top,
-                    _ => ResizeEdge::Bottom,
-                };
-                return Some((window.clone(), Hit::Edge(edge)));
+            if let Some(hit) = self.decoration_hit(window, pos) {
+                return Some(Under::Decoration(window.clone(), hit));
             }
         }
         None
+    }
+
+    /// The decoration under `pos`, unless a client surface is.
+    pub fn decoration_under(&self, pos: Point<f64, Logical>) -> Option<(Window, Hit)> {
+        match self.window_under(pos)? {
+            Under::Decoration(window, hit) => Some((window, hit)),
+            Under::Surface(..) => None,
+        }
+    }
+
+    /// The bar or the resize band of `window` at `pos`.
+    fn decoration_hit(&self, window: &Window, pos: Point<f64, Logical>) -> Option<Hit> {
+        let p = pos.to_i32_round::<i32>();
+        let bar = self.bar(window)?;
+        if bar.contains(p) {
+            let x = p.x - bar.loc.x;
+            let button = buttons(bar.size.w).into_iter().find(|(_, bx)| (*bx..bx + BUTTON).contains(&x)).map(|(b, _)| b);
+            return Some(button.map_or(Hit::Bar, Hit::Button));
+        }
+        if maximized(window) {
+            return None;
+        }
+        let geo = self.space.element_geometry(window)?;
+        let frame = Rectangle::new(bar.loc, (geo.size.w, geo.size.h + BAR).into());
+        let band = Rectangle::new(frame.loc - Point::from((EDGE, EDGE)), frame.size + Size::from((2 * EDGE, 2 * EDGE)));
+        if !band.contains(p) || frame.contains(p) {
+            return None;
+        }
+        let (left, right) = (p.x < frame.loc.x, p.x >= frame.loc.x + frame.size.w);
+        let (top, bottom) = (p.y < frame.loc.y, p.y >= frame.loc.y + frame.size.h);
+        Some(Hit::Edge(match (left, right, top, bottom) {
+            (true, _, true, _) => ResizeEdge::TopLeft,
+            (_, true, true, _) => ResizeEdge::TopRight,
+            (true, _, _, true) => ResizeEdge::BottomLeft,
+            (_, true, _, true) => ResizeEdge::BottomRight,
+            (true, ..) => ResizeEdge::Left,
+            (_, true, ..) => ResizeEdge::Right,
+            (_, _, true, _) => ResizeEdge::Top,
+            _ => ResizeEdge::Bottom,
+        }))
     }
 
     /// The bar's render element for a decorated window, drawn at `scale` physical px per logical px.
@@ -198,10 +229,10 @@ impl State {
         window.user_data().insert_if_missing(Cache::default);
         let cache = window.user_data().get::<Cache>().unwrap();
         let mut slot = cache.0.borrow_mut();
-        if !slot.as_ref().is_some_and(|(t, f, m, w, _)| *t == title && *f == focused && *m == maximized && *w == size.w) {
-            let rgba = paint(self.font.as_ref(), &title, focused, maximized, size.w, size.h, scale as f32);
+        if !slot.as_ref().is_some_and(|(t, f, m, s, _)| *t == title && *f == focused && *m == maximized && *s == size) {
+            let rgba = paint(self.font.as_ref(), &title, focused, maximized, bar.size.w, size, scale as f32);
             let buffer = MemoryRenderBuffer::from_slice(&rgba, Fourcc::Abgr8888, size, 1, Transform::Normal, Some(vec![Rectangle::from_size(size)]));
-            *slot = Some((title, focused, maximized, size.w, buffer));
+            *slot = Some((title, focused, maximized, size, buffer));
         }
         let buffer = &slot.as_ref().unwrap().4;
         // the whole bitmap (buffer scale 1: its pixels are its logical size) shown at the bar's logical size,
@@ -211,9 +242,11 @@ impl State {
     }
 }
 
-/// The bar as straight RGBA: background, the buttons' line art, the title.
-fn paint(font: Option<&FontVec>, title: &str, focused: bool, maximized: bool, w: i32, h: i32, scale: f32) -> Vec<u8> {
+/// The bar as straight RGBA: background, the buttons' line art, the title. `logical_w` is the bar's
+/// width as hit-testing knows it; `size` its pixels.
+fn paint(font: Option<&FontVec>, title: &str, focused: bool, maximized: bool, logical_w: i32, size: Size<i32, Buffer>, scale: f32) -> Vec<u8> {
     let (bg, fg) = if focused { ([0x2b, 0x2b, 0x30], [0xe4, 0xe4, 0xe7]) } else { ([0x1e, 0x1e, 0x22], [0x8b, 0x8b, 0x93]) };
+    let (w, h) = (size.w, size.h);
     let (wu, hu) = (w as usize, h as usize);
     let mut px = vec![0u8; wu * hu * 4];
     for p in px.chunks_exact_mut(4) {
@@ -243,7 +276,7 @@ fn paint(font: Option<&FontVec>, title: &str, focused: bool, maximized: bool, w:
         }
     };
     let r = 5.0 * scale;
-    for (button, bx) in buttons((w as f32 / scale) as i32) {
+    for (button, bx) in buttons(logical_w) {
         let (cx, cy) = ((bx as f32 + BUTTON as f32 / 2.0) * scale - thick as f32 / 2.0, h as f32 / 2.0 - thick as f32 / 2.0);
         match button {
             Button::Close => {

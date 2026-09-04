@@ -67,7 +67,15 @@ pub struct Page {
 /// decorations (title bar and buttons, above the geometry at negative `y`) when it draws them.
 /// `scale` is the output scale: Chromium reports its web content in device pixels (its own UI in logical ones).
 pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
-    let mut page = app_elements(win, scale).await?;
+    let mut page = match app_elements(win, scale).await {
+        Ok(page) => page,
+        // no bus at all: a decorated window still has its bar to offer
+        Err(e) if win.decoration > 0 => {
+            tracing::debug!("elements of window {}: {e:#}", win.id);
+            Page { level: "none", toolkit: None, elements: vec![] }
+        }
+        Err(e) => return Err(e),
+    };
     if win.decoration > 0 {
         use bw_core::decoration::{BAR, BUTTON, buttons};
         page.elements.push(Element { role: "title bar", name: win.title.clone(), x: 0, y: -BAR, w: win.w, h: BAR });

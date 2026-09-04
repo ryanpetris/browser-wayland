@@ -431,6 +431,8 @@ impl State {
 
     /// A window is going away (closed, unmapped, Xwayland gone): minimized windows above it move down one.
     pub fn forget_window(&mut self, window: &Window) {
+        self.decor_press.take_if(|(w, _)| w == window);
+        self.bar_click.take_if(|(w, _)| w == window);
         if let Some(i) = self.full_stack().iter().position(|w| w == window) {
             for (_, _, z) in &mut self.minimized {
                 if *z > i {

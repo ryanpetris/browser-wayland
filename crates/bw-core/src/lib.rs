@@ -136,7 +136,7 @@ pub struct WindowInfo {
     pub geo_y: i32,
     /// open popups (menus, combo lists) as `(x, y, w, h)` relative to the geometry; Wayland only
     pub popups: Vec<(i32, i32, i32, i32)>,
-    /// height of the compositor's title bar above the geometry (see [`decoration`]); 0 when the client draws its own
+    /// height of the compositor's title bar above the geometry (the `decoration` module has its layout); 0 when the client draws its own
     pub decoration: i32,
     /// stacking index, 0 = bottom; `None` while minimized
     pub z: Option<u32>,
