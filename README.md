@@ -74,8 +74,9 @@ xfce4-panel needs a D-Bus session bus for xfconfd; the wrapper is only needed wh
 icons with Font Awesome (`otf-font-awesome`); GTK only shows icons in the Xfce menus with
 `gtk-menu-images=1` in `~/.config/gtk-3.0/settings.ini`, which xfsettingsd normally sets.
 
-The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps, and
-Firefox, with PipeWire for audio. Build and run instructions are in its header.
+The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps,
+Firefox and Chromium, with PipeWire for audio; the desktop starts with the panel, whose menu launches
+the rest. `make docker-run` builds the image and runs it; the details are in the Dockerfile's header.
 
 The page tells you when the server closed its socket: "wrong token" (the token changes with the data
 directory, e.g. a fresh container without a volume) or "replaced by another viewer" (one at a time, the

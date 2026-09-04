@@ -4,13 +4,14 @@
 #   make test       cargo test, with the viewer built
 #   make run ARGS='--no-tls --listen 127.0.0.1:8080 --exec foot'
 #   make docker     the container image
+#   make docker-run the image, built if needed, on port 8443 (ARGS go to browser-wayland)
 #   make clean
 
 # directories included: a deleted source changes its directory's time
 WEB_SRC := $(shell find web/src web/index.html web/vite.config.js web/package.json)
 DIST := web/dist/index.html web/dist/app.js web/dist/app.css
 
-.PHONY: all build web test run docker clean
+.PHONY: all build web test run docker docker-run clean
 
 all: build
 
@@ -34,6 +35,11 @@ run: web
 
 docker:
 	docker build -t browser-wayland .
+
+# the render node's group, for hosts where it isn't world-accessible
+docker-run: docker
+	docker run --rm --device /dev/dri --group-add $$(stat -c %g /dev/dri/renderD128) --shm-size 1g \
+		-p 8443:8443 -v bw-data:/home/bw/.config/browser-wayland browser-wayland $(ARGS)
 
 clean:
 	rm -rf web/dist target

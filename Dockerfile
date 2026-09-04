@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1
-# browser-wayland with the Xfce panel, the default Xfce apps and Firefox, on Arch Linux.
+# browser-wayland with the Xfce panel, the default Xfce apps, Firefox and Chromium, on Arch Linux.
 #
+#   make docker-run          builds the image and runs it (the two commands below)
 #   docker build -t browser-wayland .
 #   docker run --rm --device /dev/dri --shm-size 1g -p 8443:8443 -v bw-data:/home/bw/.config/browser-wayland browser-wayland
 #
+# The desktop starts with the Xfce panel; its menu launches the applications.
 # Open the https://<host>:8443/?token=... URL that `docker logs` prints, with <host> being the Docker
 # host's address (the log shows the container's own), and accept the self-signed certificate. The
 # volume keeps the token and certificate across runs; without it every run prints a new token and
@@ -35,16 +37,19 @@ RUN pacman -Sy --noconfirm archlinux-keyring \
         gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugin-va \
         mesa libva intel-media-driver libva-mesa-driver xorg-xwayland \
         dbus pipewire pipewire-pulse wireplumber libpulse \
-        xfce4 firefox ttf-dejavu \
+        xfce4 firefox chromium ttf-dejavu \
     && rm -rf /var/cache/pacman/pkg/*
 COPY --from=build /src/target/release/browser-wayland /usr/local/bin/
 # GTK hides menu icons unless told otherwise; on a real Xfce session xfsettingsd does this.
 RUN printf '[Settings]\ngtk-menu-images=1\n' > /etc/gtk-3.0/settings.ini
 # Seed the default panel layout so the first run doesn't stop at the "first start" dialog.
 # The data dir exists (bw-owned) so a `-v` named volume mounted there is writable from the first run.
+# Chromium (its launcher reads ~/.config/chromium-flags.conf): Wayland when it can, its accessibility
+# tree for --elements, and no sandbox, since containers usually lack the user namespaces it needs.
 RUN useradd -m bw \
     && install -D /etc/xdg/xfce4/panel/default.xml /home/bw/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml \
     && install -d /home/bw/.config/browser-wayland \
+    && printf -- '--ozone-platform-hint=auto\n--force-renderer-accessibility\n--no-sandbox\n' > /home/bw/.config/chromium-flags.conf \
     && chown -R bw:bw /home/bw
 # One session bus for xfconfd, PipeWire and the clients. PipeWire provides the null sink the
 # compositor captures for browser audio.
@@ -54,7 +59,7 @@ mkdir -p -m 700 "$XDG_RUNTIME_DIR"
 exec dbus-run-session -- sh -c '
     pipewire & pipewire-pulse & wireplumber &
     until pactl info >/dev/null 2>&1; do sleep 0.2; done
-    exec browser-wayland --elements --exec "xfce4-panel & exec firefox" "$@"' sh "$@"
+    exec browser-wayland --elements --exec xfce4-panel "$@"' sh "$@"
 EOF
 USER bw
 ENV XDG_RUNTIME_DIR=/tmp/runtime-bw HOME=/home/bw

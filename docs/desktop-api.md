@@ -122,7 +122,8 @@ the mechanism.
   Both variables are added to the `--exec` environment when the flag is on, and they propagate to
   everything a panel launches. Chromium registers only an empty toplevel unless started with
   `--force-renderer-accessibility` (the bus's screen-reader flag does nothing for it), so that stays a
-  documented requirement rather than something browser-wayland tries to inject.
+  documented requirement rather than something browser-wayland tries to inject (the Docker image sets
+  it in Chromium's flags file).
 
 ## Clipboard
 
