@@ -32,8 +32,10 @@ COPY --from=build /src/target/release/browser-wayland /usr/local/bin/
 # GTK hides menu icons unless told otherwise; on a real Xfce session xfsettingsd does this.
 RUN printf '[Settings]\ngtk-menu-images=1\n' > /etc/gtk-3.0/settings.ini
 # Seed the default panel layout so the first run doesn't stop at the "first start" dialog.
+# The data dir exists (bw-owned) so a `-v` named volume mounted there is writable from the first run.
 RUN useradd -m bw \
     && install -D /etc/xdg/xfce4/panel/default.xml /home/bw/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml \
+    && install -d /home/bw/.config/browser-wayland \
     && chown -R bw:bw /home/bw
 # One session bus for xfconfd, PipeWire and the clients. PipeWire provides the null sink the
 # compositor captures for browser audio.
