@@ -94,6 +94,7 @@ async function initRenderer() {
 }
 
 let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, fps = 0, mbps = 0, windowFrames = 0, windowBytes = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [], keyframes = 0, decodeErrors = 0, dropped = 0;
+let videoSeq = -1, audioSeq = -1, lost = 0, dropNext = false; // seq: last message seen per stream; lost: gaps in either
 
 function connect() {
   connects++;
@@ -172,6 +173,7 @@ function onMessage(buf) {
   switch (dv.getUint8(0)) {
     case CONFIG:
       stream = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
+      videoSeq = -1; // a new stream counts from 0
       if (pendingFrame) { pendingFrame.close(); pendingFrame = null; } // don't paint the old stream into the new canvas
       canvas.width = stream.width;
       canvas.height = stream.height;
@@ -212,11 +214,16 @@ function onMessage(buf) {
       onWindows(JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1))));
       break;
     case VIDEO: {
+      if (dropNext) { dropNext = false; return; } // debug: bw.dropNext() simulates a lost message
       received++;
       if (!decoder) return;
-      const key = (dv.getUint8(1) & 1) !== 0;
+      const key = (dv.getUint8(1) & 1) !== 0, seq = dv.getUint16(2, true);
       if (key) keyframes++;
-      if (!key && (awaitingKey || decoder.decodeQueueSize > 4)) {
+      // A gap in seq means the server dropped frames for us; a delta after a gap can't be decoded.
+      const gap = videoSeq >= 0 && seq !== ((videoSeq + 1) & 0xffff);
+      videoSeq = seq;
+      if (gap) lost++;
+      if (!key && (gap || awaitingKey || decoder.decodeQueueSize > 4)) {
         dropped++;
         if (!awaitingKey) { awaitingKey = true; send(REQUEST_KEYFRAME, 0); }
         return;
@@ -224,8 +231,8 @@ function onMessage(buf) {
       try {
         decoder.decode(new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
-          timestamp: Number(dv.getBigUint64(2, true)),
-          data: new Uint8Array(buf, 10),
+          timestamp: Number(dv.getBigUint64(4, true)),
+          data: new Uint8Array(buf, 12),
           transfer: [buf],
         }));
         awaitingKey = false;
@@ -239,7 +246,7 @@ function onMessage(buf) {
 
 function updateStatus() {
   if (!stream) return;
-  status.textContent = `${stream.codec} ${stream.width}×${stream.height} ${renderer} · ${fps} fps · ${mbps.toFixed(1)} Mbit/s · ${latencyMs.toFixed(0)} ms · ${dropped} dropped, ${decodeErrors} errors`;
+  status.textContent = `${stream.codec} ${stream.width}×${stream.height} ${renderer} · ${fps} fps · ${mbps.toFixed(1)} Mbit/s · ${latencyMs.toFixed(0)} ms · ${lost} lost, ${dropped} dropped, ${decodeErrors} errors`;
 }
 // frame rate and bandwidth (video + audio) over the last second
 setInterval(() => {
@@ -301,7 +308,10 @@ function onAudio(buf) {
   }
   audioPackets++;
   const dv = new DataView(buf);
-  audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: Number(dv.getBigUint64(2, true)), data: new Uint8Array(buf, 10) }));
+  const seq = dv.getUint16(2, true);
+  if (audioSeq >= 0 && seq !== ((audioSeq + 1) & 0xffff)) { lost++; nextPlay = 0; } // a gap: restart the lead from now
+  audioSeq = seq;
+  audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: Number(dv.getBigUint64(4, true)), data: new Uint8Array(buf, 12) }));
 }
 const resumeAudio = () => { if (audioCtx?.state === 'suspended') audioCtx.resume(); };
 
@@ -358,7 +368,7 @@ function audioStats() {
   for (let i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
   return { packets: audioPackets, decoded: audioDecoded, state: audioCtx.state, peakHz: Math.round(peak * audioCtx.sampleRate / 2 / bins.length), level: bins[peak] };
 }
-window.bw = () => ({ frames, received, fps, mbps, audio: audioStats(), keyframes, decodeErrors, dropped, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
-Object.assign(window.bw, { windows: getWindows, control, snapshot, elements: elementsOf, activate: id => control({ id, op: 'activate' }), spawn: cmd => control({ op: 'spawn', cmd }) });
+window.bw = () => ({ frames, received, fps, mbps, audio: audioStats(), keyframes, decodeErrors, dropped, lost, videoSeq, audioSeq, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
+Object.assign(window.bw, { dropNext: () => { dropNext = true; }, windows: getWindows, control, snapshot, elements: elementsOf, activate: id => control({ id, op: 'activate' }), spawn: cmd => control({ op: 'spawn', cmd }) });
 initDesktop(sendControl, () => stream && { w: stream.width / stream.scale, h: stream.height / stream.scale, scale: stream.scale }, () => send(BLUR, 0));
 initRenderer().then(connect);

@@ -38,11 +38,13 @@ pub fn config(info: &StreamInfo) -> Bytes {
     b.into()
 }
 
-/// `[VIDEO][flags: bit0 keyframe][pts_us: u64][annex-b access unit]`
-pub fn video(f: &EncodedFrame) -> Bytes {
-    let mut b = Vec::with_capacity(10 + f.data.len());
+/// `[VIDEO][flags: bit0 keyframe][seq: u16][pts_us: u64][annex-b access unit]`; `seq` counts every frame
+/// the encoder produced for this stream, sent or not, so the page sees a drop as a gap.
+pub fn video(f: &EncodedFrame, seq: u16) -> Bytes {
+    let mut b = Vec::with_capacity(12 + f.data.len());
     b.push(VIDEO);
     b.push(f.keyframe as u8);
+    b.extend_from_slice(&seq.to_le_bytes());
     b.extend_from_slice(&f.pts_us.to_le_bytes());
     b.extend_from_slice(&f.data);
     b.into()
@@ -69,11 +71,12 @@ pub fn windows(list: &[WindowInfo]) -> Bytes {
     b.into()
 }
 
-/// `[AUDIO][0][pts_us: u64][opus packet]`, same header shape as video.
-pub fn audio(pts_us: u64, data: &[u8]) -> Bytes {
-    let mut b = Vec::with_capacity(10 + data.len());
+/// `[AUDIO][0][seq: u16][pts_us: u64][opus packet]`, same header shape as video.
+pub fn audio(pts_us: u64, data: &[u8], seq: u16) -> Bytes {
+    let mut b = Vec::with_capacity(12 + data.len());
     b.push(AUDIO);
     b.push(0);
+    b.extend_from_slice(&seq.to_le_bytes());
     b.extend_from_slice(&pts_us.to_le_bytes());
     b.extend_from_slice(data);
     b.into()

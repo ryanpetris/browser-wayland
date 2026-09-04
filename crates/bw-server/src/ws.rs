@@ -15,10 +15,13 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
                 v.info = Some(info);
                 v.announced = None;
                 v.need_key = true;
+                v.video_seq = 0; // a new stream starts its count over (the page resets on Config)
             }
             StreamMsg::Audio { pts_us, data } => {
+                let seq = v.audio_seq;
+                v.audio_seq = seq.wrapping_add(1);
                 if let Some(tx) = &v.audio_tx {
-                    let _ = tx.try_send(protocol::audio(pts_us, &data)); // a dropped packet is a 20 ms glitch
+                    let _ = tx.try_send(protocol::audio(pts_us, &data, seq)); // a dropped packet is a 20 ms glitch
                 }
             }
             StreamMsg::Failed => {
@@ -31,8 +34,10 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
                 if f.stream_id != info.stream_id {
                     continue; // output of a pipeline that has since been rebuilt
                 }
+                let seq = v.video_seq;
+                v.video_seq = seq.wrapping_add(1);
                 if v.need_key && !f.keyframe {
-                    continue; // a keyframe request is outstanding
+                    continue; // a keyframe request is outstanding; the page sees the gap in seq
                 }
                 // Config must reach the viewer before the first frame of its stream.
                 if v.announced != Some(f.stream_id) {
@@ -43,7 +48,7 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
                     }
                     v.announced = Some(f.stream_id);
                 }
-                match tx.try_send(protocol::video(&f)) {
+                match tx.try_send(protocol::video(&f, seq)) {
                     Ok(()) => v.need_key = false,
                     Err(_) => {
                         // Viewer is slow: never send a delta after a gap. Ask for a keyframe once per gap,

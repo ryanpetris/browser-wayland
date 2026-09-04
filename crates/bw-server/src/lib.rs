@@ -87,6 +87,9 @@ pub(crate) struct Viewer {
     /// Last WINDOWS message, replayed to a new viewer, and the list it encodes (the API's view).
     windows: Option<Bytes>,
     window_list: Vec<WindowInfo>,
+    /// Per-stream message counters (every produced frame or packet, sent or dropped); wrap at u16.
+    video_seq: u16,
+    audio_seq: u16,
 }
 
 pub async fn run(
