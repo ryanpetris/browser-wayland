@@ -133,7 +133,6 @@ impl State {
                     }
                     entry.info = info;
                 }
-                Some(_) => {}
             }
         }
     }
