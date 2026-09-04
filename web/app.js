@@ -18,7 +18,7 @@ let pendingFrame = null, rafId = 0;
 // makes Chromium present a cleared texture now and then (visible as black flicker). One frame per
 // display refresh; if two arrive in between, the older one is dropped.
 function schedule(frame) {
-  if (pendingFrame) pendingFrame.close();
+  if (pendingFrame) { inflight.delete(pendingFrame.timestamp); pendingFrame.close(); }
   pendingFrame = frame;
   if (!rafId) rafId = requestAnimationFrame(paint);
 }
@@ -32,23 +32,27 @@ function paint() {
 function paintNow(frame) {
   try { draw(frame); frames++; windowFrames++; } catch (e) { console.error(e); frame.close(); }
   if (lastInput) { latencyMs = performance.now() - lastInput; lastInput = 0; } // input -> next painted frame
-  const t = performance.now();
-  if (frame.timestamp === lastReceived.pts) { stage.decode.push(lastReceived.output - lastReceived.at); stage.paint.push(t - lastReceived.output); }
+  if (stats.hidden) { inflight.clear(); return; }
+  const t = performance.now(), rec = inflight.get(frame.timestamp);
+  inflight.delete(frame.timestamp);
+  if (rec?.output) { stage.decode.push(rec.output - rec.at); stage.paint.push(t - rec.output); }
   if (lastPaint) stage.interval.push(t - lastPaint);
   lastPaint = t;
 }
 
 // --- stats overlay -----------------------------------------------------------
 // Per-stage timings of the last second (ms): receive→decoder output, output→paint, paint→paint.
+// Frames in flight are keyed by pts (several can be queued in the decoder or waiting for rAF).
 const stage = { decode: [], paint: [], interval: [] };
-let lastReceived = { pts: -1, at: 0, output: 0 }, lastPaint = 0, sinceKey = 0, audioUnderruns = 0;
+const inflight = new Map(); // pts -> {at, output}
+let lastPaint = 0, sinceKey = 0, audioUnderruns = 0;
 const stats = document.getElementById('stats');
-const pct = (a, p) => a.length ? a.slice().sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))].toFixed(1) : '-';
+const pct = (a, p) => a.length ? a.slice().sort((x, y) => x - y)[Math.max(0, Math.ceil(a.length * p) - 1)].toFixed(1) : '-';
 function renderStats() {
   if (stats.hidden) return;
   const s = window.bw(), au = s.audio;
   stats.textContent = [
-    `${stream?.codec ?? '-'} ${stream?.width ?? 0}×${stream?.height ?? 0} @${stream?.scale?.toFixed(2)} ${renderer}`,
+    stream ? `${stream.codec} ${stream.width}×${stream.height} @${stream.scale.toFixed(2)} ${renderer ?? '-'}` : 'no stream yet',
     `fps ${fps}  ${mbps.toFixed(1)} Mbit/s  input→paint ${latencyMs.toFixed(0)} ms`,
     `recv→decoded p50/p95 ${pct(stage.decode, .5)}/${pct(stage.decode, .95)} ms   decoded→paint ${pct(stage.paint, .5)}/${pct(stage.paint, .95)} ms`,
     `paint interval p50/p95 ${pct(stage.interval, .5)}/${pct(stage.interval, .95)} ms   decode queue ${s.queue ?? '-'}`,
@@ -58,7 +62,12 @@ function renderStats() {
   ].join('\n');
   stage.decode.length = stage.paint.length = stage.interval.length = 0;
 }
-document.getElementById('stats-btn').onclick = () => { stats.hidden = !stats.hidden; try { localStorage.setItem('bw.stats', stats.hidden ? '0' : '1'); } catch {} renderStats(); };
+document.getElementById('stats-btn').onclick = () => {
+  stats.hidden = !stats.hidden;
+  try { localStorage.setItem('bw.stats', stats.hidden ? '0' : '1'); } catch {}
+  inflight.clear(); stage.decode.length = stage.paint.length = stage.interval.length = 0; lastPaint = 0;
+  renderStats();
+};
 try { stats.hidden = localStorage.getItem('bw.stats') !== '1'; } catch {}
 
 // --- rendering -------------------------------------------------------------
@@ -182,7 +191,7 @@ function sendResize() {
 function newDecoder() {
   if (decoder && decoder.state !== 'closed') decoder.close(); // a decode error closes it already
   const d = new VideoDecoder({
-    output: f => { if (f.timestamp === lastReceived.pts) lastReceived.output = performance.now(); (renderer === 'webgpu' ? schedule : paintNow)(f); },
+    output: f => { const rec = inflight.get(f.timestamp); if (rec) rec.output = performance.now(); (renderer === 'webgpu' ? schedule : paintNow)(f); },
     error: e => { console.error(e); decodeErrors++; if (d === decoder) resync(); },
   });
   d.configure({ codec: stream.codec, optimizeForLatency: true });
@@ -258,7 +267,7 @@ function onMessage(buf) {
       }
       try {
         const pts = Number(dv.getBigUint64(4, true));
-        lastReceived = { pts, at: performance.now(), output: 0 };
+        if (!stats.hidden) inflight.set(pts, { at: performance.now(), output: 0 });
         decoder.decode(new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
           timestamp: pts,

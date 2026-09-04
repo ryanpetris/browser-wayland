@@ -136,8 +136,8 @@ point the agent at the fingerprint the server prints, or run `--no-tls` behind a
 
 The viewer page uses the same data over its WebSocket: the ☰ button opens a window list with thumbnails
 and maximize/minimize/close buttons (click a row to bring the window forward, type in the box to start a
-program), ▢ draws colour-coded borders with the app id over every window, and ⌖ outlines the focused
-window's elements. In the browser console, `bw.windows()`, `bw.activate(id)`, `bw.control({...})`,
+program), ▢ draws colour-coded borders with the app id over every window, ⌖ outlines the focused
+window's elements, and ▤ shows stream statistics (per-stage timings, drops, audio lead) once a second. In the browser console, `bw.windows()`, `bw.activate(id)`, `bw.control({...})`,
 `bw.spawn(cmd)`, `bw.snapshot(id)` and `bw.elements(id)` do the same.
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
