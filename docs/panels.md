@@ -16,7 +16,7 @@ browser-wayland --exec 'dbus-run-session -- sh -c "xfce4-panel & exec foot"'
 | wlr-layer-shell: the bar itself, exclusive zones, menus as popups, on-demand keyboard | Smithay ships the protocol; the compositor policy is ours (below). |
 | wlr-foreign-toplevel-management: waybar's `wlr/taskbar`, xfce's tasklist, windowmenu, show-desktop | Hand-written server side, protocol version 2 (v3 only adds `parent`, which we don't track). Smithay 0.7 only has the list-only ext protocol. |
 | Minimize: tasklists click the active task to minimize, show-desktop minimizes everything | Unmap from the space into a list, restore on activate. Also wired to xdg `set_minimized` and X11 `WM_CHANGE_STATE`. |
-| ext-workspace (xfce pager, waybar `ext/workspaces`) | Skipped: one workspace. The pager plugin stays empty. |
+| ext-workspace (xfce pager, waybar `ext/workspaces`) | One group with one always-active workspace (`workspace.rs`, hand-written like the foreign-toplevel global); the requests are accepted and ignored since nothing can be created or switched. |
 | idle-inhibit (waybar `idle_inhibitor`) | Accepted and ignored: Smithay `IdleInhibitManagerState` with a no-op handler; there is no screen to blank. |
 | Xfce's private protocols | Skipped; labwc runs Xfce without them. |
 
@@ -87,6 +87,5 @@ desktop has nowhere to come back from.
 
 ## Deferred
 
-- ext-workspace with a single workspace, if someone wants the pager.
 - Restoring several minimized windows (show-desktop) maps them in list order, not the original
   stacking order.

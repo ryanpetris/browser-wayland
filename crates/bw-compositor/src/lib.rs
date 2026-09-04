@@ -8,6 +8,7 @@ mod gpu;
 mod grabs;
 mod handlers;
 mod input;
+mod workspace;
 pub(crate) mod render;
 mod xwayland;
 
@@ -33,6 +34,7 @@ use smithay::{
             generic::Generic,
             timer::{TimeoutAction, Timer},
         },
+        wayland_protocols::ext::workspace::v1::server::ext_workspace_manager_v1::ExtWorkspaceManagerV1,
         wayland_protocols_wlr::foreign_toplevel::v1::server::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1,
         wayland_server::{
             Display, DisplayHandle,
@@ -243,6 +245,7 @@ impl State {
         // Explicit sync: Vulkan clients (GTK4 by default) put no implicit fences on their dmabufs.
         let syncobj_state = supports_syncobj_eventfd(&gpu.drm).then(|| DrmSyncobjState::new::<State>(&dh, gpu.drm.clone()));
         dh.create_global::<State, ZwlrForeignToplevelManagerV1, ()>(foreign_toplevel::VERSION, ());
+        dh.create_global::<State, ExtWorkspaceManagerV1, ()>(workspace::VERSION, ());
 
         let mut state = State {
             handle,
