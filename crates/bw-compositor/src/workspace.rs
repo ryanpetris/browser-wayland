@@ -48,7 +48,6 @@ impl GlobalDispatch<ExtWorkspaceManagerV1, ()> for State {
         manager.workspace(&ws);
         ws.id("1".into());
         ws.name("1".into());
-        ws.coordinates(vec![0, 0, 0, 0]); // one u32 coordinate: position 0 in the group
         ws.state(handle::State::Active);
         ws.capabilities(handle::WorkspaceCapabilities::empty());
         group.workspace_enter(&ws);
