@@ -173,6 +173,7 @@ impl State {
             ControlOp::Move { .. } | ControlOp::Resize { .. } | ControlOp::Spawn { .. } => {}
         }
         self.dirty = true;
+        self.reconstrain_popups(); // a move or resize takes the window's open menus with it
     }
 
     /// One window (its xdg geometry, popups included, transparent where it doesn't paint) or the whole

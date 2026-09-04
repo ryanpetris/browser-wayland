@@ -496,7 +496,10 @@ impl State {
             .chain(layer_map_for_output(&self.output).layers().map(|l| l.wl_surface().clone()))
             .collect();
         for root in roots {
-            for (popup, _) in PopupManager::popups_for_surface(&root) {
+            // parents first (popups_for_surface lists nested popups before their parent), since a nested
+            // popup is placed relative to its parent's position
+            let popups: Vec<_> = PopupManager::popups_for_surface(&root).collect();
+            for (popup, _) in popups.into_iter().rev() {
                 if let PopupKind::Xdg(p) = popup {
                     let before = p.with_pending_state(|s| s.geometry);
                     self.unconstrain_popup(&p);
