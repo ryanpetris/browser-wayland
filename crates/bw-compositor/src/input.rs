@@ -406,8 +406,9 @@ impl State {
     fn layer_under(&self, pos: Point<f64, Logical>, above: bool) -> Option<(LayerSurface, WlSurface, Point<f64, Logical>)> {
         let layers = layer_map_for_output(&self.output);
         let (a, b) = if above { (Layer::Overlay, Layer::Top) } else { (Layer::Bottom, Layer::Background) };
+        let hidden_top = above && self.fullscreen_window_mapped(); // panels are under a fullscreen window
         // top-most first; a surface with an empty input region (OSDs) lets the point fall through to the next
-        layers.layers_on(a).rev().chain(layers.layers_on(b).rev()).find_map(|layer| {
+        layers.layers_on(a).rev().chain(layers.layers_on(b).rev()).filter(|l| !(hidden_top && l.layer() == Layer::Top)).find_map(|layer| {
             let loc = layers.layer_geometry(layer)?.loc;
             let (surface, p) = layer.surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)?;
             Some((layer.clone(), surface, (p + loc).to_f64()))

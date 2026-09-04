@@ -3,11 +3,12 @@ use std::{os::fd::AsFd, time::{Duration, Instant}};
 use anyhow::{Context, Result};
 use bw_core::DmabufFrame;
 use smithay::{
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     desktop::Window,
     utils::{Logical, Point},
     backend::allocator::Buffer as _,
     backend::renderer::{Bind, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
-    desktop::{layer_map_for_output, space::render_output, utils::send_frames_surface_tree},
+    desktop::{WindowSurface, layer_map_for_output, utils::send_frames_surface_tree},
     utils::Scale,
     wayland::shell::wlr_layer::Layer,
     input::pointer::CursorImageStatus,
@@ -21,11 +22,21 @@ pub const CLEAR: [f32; 4] = [0.12, 0.12, 0.14, 1.0];
 struct SlotId(u32);
 
 impl State {
-    /// Everything on the output, front to back, at `scale` physical pixels per logical pixel: the top
-    /// and overlay layers, the windows (with their popups), then the bottom and background layers.
+    /// A mapped window is fullscreen: it covers the panels (Top layer), only the Overlay layer stays above.
+    pub fn fullscreen_window_mapped(&self) -> bool {
+        self.space.elements().any(|w| match w.underlying_surface() {
+            WindowSurface::Wayland(t) => t.current_state().states.contains(xdg_toplevel::State::Fullscreen),
+            WindowSurface::X11(x) => x.is_fullscreen(),
+        })
+    }
+
+    /// Everything on the output, front to back, at `scale` physical pixels per logical pixel: the overlay
+    /// (and, unless a window is fullscreen, top) layers, the windows with their popups, then the bottom
+    /// and background layers.
     pub fn output_elements(&mut self, scale: f64) -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
         let s = Scale::from(scale);
         let output_loc = self.space.output_geometry(&self.output).map(|g| g.loc).unwrap_or_default();
+        let fullscreen = self.fullscreen_window_mapped();
         let layers = layer_map_for_output(&self.output);
         let layer_elements = |renderer: &mut GlesRenderer, pick: fn(Layer) -> bool| -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
             layers
@@ -36,7 +47,7 @@ impl State {
                 .flat_map(|(loc, l)| l.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(renderer, loc.to_physical_precise_round(scale), s, 1.0))
                 .collect()
         };
-        let mut out = layer_elements(&mut self.gpu.renderer, |l| matches!(l, Layer::Top | Layer::Overlay));
+        let mut out = layer_elements(&mut self.gpu.renderer, if fullscreen { |l| l == Layer::Overlay } else { |l| matches!(l, Layer::Top | Layer::Overlay) });
         let windows: Vec<(Window, Point<i32, Logical>)> = self.space.elements().rev().filter_map(|w| Some((w.clone(), self.space.element_location(w)?))).collect();
         for (w, loc) in windows {
             // the space places the geometry; render_elements wants the surface origin
@@ -77,12 +88,11 @@ impl State {
                 self.sink.output_changed(self.geometry, self.gpu.fourcc as u32, u64::from(got));
             }
         }
+        // The pointer is drawn by the browser, so there are no custom elements.
+        let elements = self.output_elements(self.geometry.scale);
         let (sync, damaged) = {
             let mut fb = self.gpu.renderer.bind(&mut dmabuf)?;
-            // The pointer is drawn by the browser, so there are no custom elements.
-            let res = render_output::<_, WaylandSurfaceRenderElement<GlesRenderer>, _, _>(
-                &self.output, &mut self.gpu.renderer, &mut fb, 1.0, age, [&self.space], &[], &mut self.damage_tracker, CLEAR,
-            )?;
+            let res = self.damage_tracker.render_output(&mut self.gpu.renderer, &mut fb, age, &elements, CLEAR)?;
             (res.sync, res.damage.is_some())
         };
         self.last_render = Instant::now();
