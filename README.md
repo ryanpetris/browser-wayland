@@ -4,6 +4,9 @@ A headless Wayland compositor whose screen is a browser tab. Clients render on t
 composited frame is hardware-encoded to H.264 (VA-API) and streamed over a WebSocket, and the
 browser decodes it with WebCodecs. Mouse and keyboard input flow back the same way.
 
+Design notes: [docs/architecture.md](docs/architecture.md), [docs/protocol.md](docs/protocol.md),
+[docs/panels.md](docs/panels.md), [docs/desktop-api.md](docs/desktop-api.md).
+
 ## Requirements
 
 - Linux with a GPU render node (`/dev/dri/renderD128`) and Mesa.
