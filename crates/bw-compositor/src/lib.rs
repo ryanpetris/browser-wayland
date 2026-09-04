@@ -21,8 +21,10 @@ use std::{
 use anyhow::{Context, Result};
 use bw_core::{Command, Event, FrameSink, OutputGeometry, WindowInfo};
 use smithay::{
+    wayland::seat::WaylandFocus,
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     backend::renderer::{ImportDma, damage::OutputDamageTracker},
-    desktop::{PopupManager, Space, Window, WindowSurface, layer_map_for_output},
+    desktop::{PopupKind, PopupManager, Space, Window, WindowSurface, layer_map_for_output},
     input::{Seat, SeatState, pointer::CursorImageStatus},
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
@@ -483,6 +485,29 @@ impl State {
     }
 
     /// Re-fit every window after the output or the panels' exclusive zones changed.
+    /// Open menus and tooltips were placed against the output and their parent as they were; after the
+    /// output or a parent moved, fit them again and tell the client. Only popups the client marked
+    /// reactive may be moved by the compositor (xdg-shell); the rest stay where they are (`NotReactive`).
+    pub fn reconstrain_popups(&self) {
+        let roots: Vec<WlSurface> = self
+            .space
+            .elements()
+            .filter_map(|w| w.wl_surface().map(|s| s.into_owned()))
+            .chain(layer_map_for_output(&self.output).layers().map(|l| l.wl_surface().clone()))
+            .collect();
+        for root in roots {
+            for (popup, _) in PopupManager::popups_for_surface(&root) {
+                if let PopupKind::Xdg(p) = popup {
+                    let before = p.with_pending_state(|s| s.geometry);
+                    self.unconstrain_popup(&p);
+                    let after = p.with_pending_state(|s| s.geometry);
+                    let sent = p.send_pending_configure();
+                    tracing::debug!(?before, ?after, ?sent, "popup re-fit");
+                }
+            }
+        }
+    }
+
     pub fn relayout(&mut self) {
         let output = self.space.output_geometry(&self.output).unwrap_or_default();
         let work = self.work_area();
@@ -541,5 +566,6 @@ impl State {
             });
         }
         self.dirty = true;
+        self.reconstrain_popups(); // parents may have moved
     }
 }

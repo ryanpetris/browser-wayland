@@ -84,7 +84,7 @@ impl State {
         focus.id().same_client_as(&surface.id()).then_some(start)
     }
 
-    fn unconstrain_popup(&self, popup: &PopupSurface) {
+    pub(crate) fn unconstrain_popup(&self, popup: &PopupSurface) {
         let kind = PopupKind::Xdg(popup.clone());
         let Ok(root) = find_popup_root_surface(&kind) else { return };
         // the popup's parent is a window or a layer surface (panel menus)
