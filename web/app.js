@@ -341,5 +341,5 @@ function audioStats() {
 }
 window.bw = () => ({ frames, received, fps, mbps, audio: audioStats(), keyframes, decodeErrors, dropped, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
 Object.assign(window.bw, { windows: getWindows, control, snapshot, activate: id => control({ id, op: 'activate' }), spawn: cmd => control({ op: 'spawn', cmd }) });
-initDesktop(sendControl, () => stream && { w: stream.width / stream.scale, h: stream.height / stream.scale });
+initDesktop(sendControl, () => stream && { w: stream.width / stream.scale, h: stream.height / stream.scale }, () => send(BLUR, 0));
 initRenderer().then(connect);

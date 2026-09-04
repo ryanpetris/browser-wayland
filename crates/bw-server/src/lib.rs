@@ -53,6 +53,7 @@ pub struct App {
     control: Box<dyn StreamControl>,
     policy: CodecPolicy,
     viewer: Mutex<Viewer>,
+    snapshot_lock: tokio::sync::Semaphore,
 }
 
 #[derive(Default)]
@@ -90,6 +91,7 @@ pub async fn run(
         control,
         policy: cfg.codec,
         viewer: Mutex::default(),
+        snapshot_lock: tokio::sync::Semaphore::new(1),
     });
     tokio::spawn(ws::distribute(app.clone(), stream_rx));
     tokio::spawn(ws::forward_events(app.clone(), events_rx));
@@ -163,15 +165,21 @@ async fn websocket(
     ws.max_message_size(64 << 10).on_upgrade(move |socket| ws::session(socket, app))
 }
 
-/// Same-site cookies still travel cross-origin from another port on this host: require a matching Origin.
+/// Same-site cookies still travel cross-origin from another port on this host: require a matching Origin
+/// when the browser sends one, and Sec-Fetch-Site same-origin/none (plain <img> loads carry no Origin).
+/// curl sends neither header and passes; it needs the token anyway.
 fn same_origin(headers: &HeaderMap) -> bool {
     let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
     let origin_host = headers.get(header::ORIGIN).and_then(|o| o.to_str().ok()).map(|o| o.trim_start_matches("https://").trim_start_matches("http://"));
-    origin_host.is_none_or(|o| Some(o) == host)
+    let fetch_site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    origin_host.is_none_or(|o| Some(o) == host) && fetch_site.is_none_or(|s| s == "same-origin" || s == "none")
 }
 
 /// The current window list as JSON (what the viewer was last sent).
 async fn api_windows(Query(q): Query<HashMap<String, String>>, headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
+    if !same_origin(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if !app.authorized(&headers, &q) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -189,9 +197,14 @@ async fn api_screenshot(Query(q): Query<HashMap<String, String>>, headers: Heade
 
 /// `?scale=` (windows only, 0.05..=2, default 1) → PNG. 404 for an unknown window, 503 if the compositor doesn't answer.
 async fn snapshot(app: &App, headers: &HeaderMap, q: &HashMap<String, String>, id: Option<u64>) -> Response {
+    if !same_origin(headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if !app.authorized(headers, q) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    // One at a time: the compositor renders these on its own thread and a queued request can't be cancelled.
+    let Ok(_busy) = app.snapshot_lock.try_acquire() else { return StatusCode::TOO_MANY_REQUESTS.into_response() };
     let scale = q.get("scale").and_then(|s| s.parse::<f64>().ok()).unwrap_or(1.0).clamp(0.05, 2.0);
     let (tx, rx) = tokio::sync::oneshot::channel::<Option<Snapshot>>();
     let reply = SnapshotReply(Box::new(move |s| {

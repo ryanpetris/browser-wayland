@@ -353,6 +353,9 @@ impl State {
             .run(None, &mut self, |state| {
                 state.space.refresh();
                 state.minimized.retain(|(w, _)| w.alive());
+                if state.active.as_ref().is_some_and(|w| !w.alive()) {
+                    state.active = None;
+                }
                 state.popups.cleanup();
                 state.refresh_foreign_toplevels();
                 state.refresh_windows();

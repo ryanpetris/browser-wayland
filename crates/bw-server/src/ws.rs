@@ -64,7 +64,14 @@ pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
 
 /// Compositor events (cursor changes) to the current viewer.
 pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event>) {
-    while let Some(ev) = rx.recv().await {
+    while let Some(mut ev) = rx.recv().await {
+        // Window lists supersede each other: a slow viewer gets the newest one, not the whole history.
+        while let Event::Windows(_) = ev {
+            match rx.try_recv() {
+                Ok(next @ Event::Windows(_)) => ev = next,
+                _ => break,
+            }
+        }
         let (msg, tx) = {
             let mut v = app.viewer.lock().unwrap();
             let msg = match ev {

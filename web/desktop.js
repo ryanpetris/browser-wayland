@@ -2,7 +2,8 @@
 // Fed by the WINDOWS message; talks back with CONTROL (see crates/bw-server/src/protocol.rs).
 
 let windows = [];
-let sendControl = () => {}, streamSize = () => null; // streamSize(): logical {w, h} of the video, or null before Config
+let sendControl = () => {}, streamSize = () => null, releaseInput = () => {}; // streamSize(): logical {w, h} of the video, or null before Config
+const rows = new Map(); // window id -> its panel row, kept across list updates so thumbnails only reload when their URL changes
 const panel = document.getElementById('panel'), wins = document.getElementById('wins'), spawn = document.getElementById('spawn');
 const overlay = document.getElementById('overlay'), canvas = document.getElementById('c');
 
@@ -11,9 +12,11 @@ export const control = obj => sendControl(obj);
 export const snapshotUrl = (id, scale = 1) => id == null ? `/api/screenshot.png?scale=${scale}` : `/api/windows/${id}/snapshot.png?scale=${scale}`;
 export const snapshot = async (id, scale = 1) => (await fetch(snapshotUrl(id, scale))).blob();
 
-export function initDesktop(send, size) {
+export function initDesktop(send, size, release) {
   sendControl = send;
   streamSize = size;
+  releaseInput = release;
+  spawn.onfocus = () => releaseInput(); // a key held on the canvas must not stay held in the compositor
   document.getElementById('panelbtn').onclick = () => { panel.classList.toggle('open'); renderList(); };
   const borders = document.getElementById('borders');
   try { overlay.hidden = localStorage.getItem('bw.borders') !== '1'; } catch {}
@@ -66,14 +69,21 @@ export const color = w => `hsl(${hue(w.app_id || w.title)} 70% 55%)`;
 function renderList() {
   if (!panel.classList.contains('open')) return; // a hidden <img> still fetches its thumbnail
   const order = windows.slice().sort((a, b) => (a.minimized - b.minimized) || (b.z - a.z)); // top-most first, minimized last
+  for (const id of rows.keys()) if (!windows.some(w => w.id === id)) rows.delete(id);
   wins.replaceChildren(...order.map(w => {
-    const row = document.createElement('div');
+    let row = rows.get(w.id);
+    if (!row) {
+      row = document.createElement('div');
+      row.innerHTML = '<img class="thumb"><span class="dot"></span><span class="title"></span><span class="badge"></span>'
+        + '<button title="Snapshot (PNG)">📷</button><button title="Maximize / restore">⤢</button><button title="Minimize / restore">⌄</button><button title="Close">✕</button>';
+      row.querySelector('.dot').style.background = color(w);
+      rows.set(w.id, row);
+    }
     row.className = 'win' + (w.focused ? ' focused' : '');
-    row.innerHTML = '<img class="thumb"><span class="dot"></span><span class="title"></span><span class="badge"></span>'
-      + '<button title="Snapshot (PNG)">📷</button><button title="Maximize / restore">⤢</button><button title="Minimize / restore">⌄</button><button title="Close">✕</button>';
-    row.querySelector('.dot').style.background = color(w);
     // updated_ms has whole-second resolution, so a busy window costs at most one render per second
-    row.querySelector('.thumb').src = snapshotUrl(w.id, 0.12) + `&t=${w.updated_ms}`;
+    const src = snapshotUrl(w.id, 0.12) + `&t=${w.updated_ms}`;
+    const thumb = row.querySelector('.thumb');
+    if (thumb.getAttribute('src') !== src) thumb.src = src;
     const title = row.querySelector('.title');
     title.textContent = w.title || w.app_id || `#${w.id}`;
     title.title = `${w.app_id}${w.pid ? ' · pid ' + w.pid : ''} · ${w.w}×${w.h} at ${w.x},${w.y}`;
@@ -82,7 +92,8 @@ function renderList() {
     row.onclick = () => sendControl({ id: w.id, op: 'activate' });
     shot.onclick = e => { e.stopPropagation(); window.open(snapshotUrl(w.id, 1)); };
     max.onclick = e => { e.stopPropagation(); sendControl({ id: w.id, op: w.maximized ? 'unmaximize' : 'maximize' }); };
-    min.onclick = e => { e.stopPropagation(); sendControl({ id: w.id, op: w.minimized ? 'unminimize' : 'minimize' }); };
+    // restoring should also give the window the keyboard, which is what activate does
+    min.onclick = e => { e.stopPropagation(); sendControl({ id: w.id, op: w.minimized ? 'activate' : 'minimize' }); };
     close.onclick = e => { e.stopPropagation(); sendControl({ id: w.id, op: 'close' }); };
     return row;
   }));

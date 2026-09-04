@@ -188,7 +188,8 @@ impl State {
 }
 
 fn readback<E: RenderElement<GlesRenderer>>(renderer: &mut GlesRenderer, elements: &[E], size: Size<i32, Physical>, scale: f64, clear: [f32; 4]) -> Option<Snapshot> {
-    if size.w <= 0 || size.h <= 0 {
+    // 64 Mpx is 256 MiB of RGBA before the PNG; anything bigger is a mistake or an attack
+    if size.w <= 0 || size.h <= 0 || (size.w as u64) * (size.h as u64) > 64 << 20 {
         return None;
     }
     let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, Size::<i32, Buffer>::from((size.w, size.h))).ok()?;

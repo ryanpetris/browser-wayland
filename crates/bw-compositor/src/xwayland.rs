@@ -75,7 +75,7 @@ impl State {
 
     /// Move/resize an X11 window and tell X about it (so its own coordinates stay right).
     fn place_x11(&mut self, window: &Window, surface: &X11Surface, rect: Rectangle<i32, Logical>) {
-        self.space.map_element(window.clone(), rect.loc, true);
+        self.space.map_element(window.clone(), rect.loc, false);
         let _ = surface.configure(rect);
         self.dirty = true;
     }
@@ -101,6 +101,7 @@ impl XwmHandler for State {
             rect.loc = self.work_area().loc + smithay::utils::Point::from((40 + 30 * n, 40 + 30 * n));
             self.place_x11(&win, &window, rect);
         }
+        win.set_activated(true);
         self.active = Some(win); // mapped activated: that is what the desktop API reports as focused
     }
 

@@ -159,7 +159,8 @@ impl CompositorHandler for State {
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
-            if let Some(window) = self.window_for(&root) {
+            let minimized = || self.minimized.iter().map(|(w, _)| w).find(|w| w.wl_surface().is_some_and(|s| *s == root)).cloned();
+            if let Some(window) = self.window_for(&root).or_else(minimized) {
                 window.on_commit();
                 self.touch_window(&window);
                 // wl_surface.offset: the client moved its buffer origin, so move the window with it.
@@ -172,6 +173,10 @@ impl CompositorHandler for State {
             }
         }
         self.popups.commit(surface);
+        // a menu redrawing counts as its window updating (thumbnails)
+        if let Some(window) = self.popups.find_popup(surface).and_then(|p| find_popup_root_surface(&p).ok()).and_then(|root| self.window_for(&root)) {
+            self.touch_window(&window);
+        }
         if matches!(&self.cursor_status, CursorImageStatus::Surface(s) if s == surface) {
             self.export_cursor(); // client redrew its cursor
             return;
@@ -359,7 +364,7 @@ impl State {
             s.states.set(what);
             s.size = Some(geo.size);
         });
-        self.space.map_element(window, geo.loc, true);
+        self.space.map_element(window, geo.loc, false); // raise, but focus is focus_window's job
         surface.send_pending_configure();
     }
     pub(crate) fn unfill_output(&mut self, surface: &ToplevelSurface, what: xdg_toplevel::State) {
@@ -379,7 +384,7 @@ impl State {
             let saved = window.user_data().get::<RestoreLocation>().and_then(|r| r.borrow_mut().take());
             if let Some(loc) = saved {
                 let loc = self.clamp_to_output(loc);
-                self.space.map_element(window, loc, true);
+                self.space.map_element(window, loc, false);
             }
         }
         surface.send_pending_configure();
