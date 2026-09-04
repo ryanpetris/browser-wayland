@@ -9,7 +9,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use bw_core::{Command, ControlMsg, InputMsg, Snapshot, SnapshotReply, WindowInfo};
+use bw_core::{Command, ControlMsg, InputMsg, Snapshot, SnapshotError, SnapshotReply, WindowInfo};
 
 use crate::{App, elements::Page};
 
@@ -23,7 +23,7 @@ pub enum ApiError {
     Busy,
     /// The compositor or the accessibility bus didn't answer.
     Unavailable(String),
-    /// Something on our side broke (PNG encoding).
+    /// Something on our side broke (a GL step of a snapshot, PNG encoding).
     Internal(String),
 }
 
@@ -87,14 +87,15 @@ impl App {
         // One at a time: the compositor renders these on its own thread and a queued request can't be cancelled.
         let Ok(_busy) = self.snapshot_lock.try_acquire() else { return Err(ApiError::Busy) };
         let scale = scale.clamp(0.05, 2.0);
-        let (tx, rx) = tokio::sync::oneshot::channel::<Option<Snapshot>>();
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<Snapshot, SnapshotError>>();
         let reply = SnapshotReply(Box::new(move |s| {
             let _ = tx.send(s);
         }));
         self.send(Command::Snapshot { id, scale, reply })?;
         let snap = match tokio::time::timeout(Duration::from_secs(2), rx).await {
-            Ok(Ok(Some(s))) => s,
-            Ok(Ok(None)) => return Err(ApiError::NotFound),
+            Ok(Ok(Ok(s))) => s,
+            Ok(Ok(Err(SnapshotError::NoSuchWindow))) => return Err(ApiError::NotFound),
+            Ok(Ok(Err(SnapshotError::Render(e)))) => return Err(ApiError::Internal(e)),
             _ => return Err(ApiError::Unavailable("the compositor didn't answer".into())),
         };
         let png = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {

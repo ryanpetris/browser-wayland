@@ -5,7 +5,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use bw_core::{ControlMsg, ControlOp, Event, Snapshot, WindowInfo};
+use anyhow::{Context, Result};
+use bw_core::{SnapshotError, ControlMsg, ControlOp, Event, Snapshot, WindowInfo};
 use smithay::{
     backend::{
         allocator::Fourcc,
@@ -176,10 +177,10 @@ impl State {
 
     /// One window at `scale` × the output scale (its xdg geometry, popups included, transparent where it
     /// doesn't paint), or the whole output at its own scale. Renders offscreen; the stream is untouched.
-    pub fn snapshot(&mut self, id: Option<u64>, scale: f64) -> Option<Snapshot> {
-        match id {
+    pub fn snapshot(&mut self, id: Option<u64>, scale: f64) -> Result<Snapshot, SnapshotError> {
+        let result = match id {
             Some(id) => {
-                let window = self.window_by_id(id)?;
+                let window = self.window_by_id(id).ok_or(SnapshotError::NoSuchWindow)?;
                 let scale = scale * self.geometry.scale;
                 let geo = window.geometry();
                 let size = geo.size.to_f64().to_physical(scale).to_i32_round();
@@ -187,25 +188,27 @@ impl State {
                 let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = window.render_elements(&mut self.gpu.renderer, loc, Scale::from(scale), 1.0);
                 readback(&mut self.gpu.renderer, &elements, size, scale, [0.0; 4])
             }
-            None => {
-                let elements = space_render_elements::<_, Window, _>(&mut self.gpu.renderer, [&self.space], &self.output, 1.0).ok()?;
-                let size = self.output.current_mode()?.size;
+            None => (|| {
+                let elements = space_render_elements::<_, Window, _>(&mut self.gpu.renderer, [&self.space], &self.output, 1.0)?;
+                let size = self.output.current_mode().context("output has no mode")?.size;
                 readback(&mut self.gpu.renderer, &elements, size, self.geometry.scale, crate::render::CLEAR)
-            }
-        }
+            })(),
+        };
+        result.map_err(|e| {
+            tracing::warn!(?id, "snapshot failed: {e:#}");
+            SnapshotError::Render(format!("{e:#}"))
+        })
     }
 }
 
-fn readback<E: RenderElement<GlesRenderer>>(renderer: &mut GlesRenderer, elements: &[E], size: Size<i32, Physical>, scale: f64, clear: [f32; 4]) -> Option<Snapshot> {
+fn readback<E: RenderElement<GlesRenderer>>(renderer: &mut GlesRenderer, elements: &[E], size: Size<i32, Physical>, scale: f64, clear: [f32; 4]) -> Result<Snapshot> {
     // 64 Mpx is 256 MiB of RGBA before the PNG; anything bigger is a mistake or an attack
-    if size.w <= 0 || size.h <= 0 || (size.w as u64) * (size.h as u64) > 64 << 20 {
-        return None;
-    }
-    let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, Size::<i32, Buffer>::from((size.w, size.h))).ok()?;
-    let mut fb = renderer.bind(&mut texture).ok()?;
-    OutputDamageTracker::new(size, scale, Transform::Normal).render_output(renderer, &mut fb, 0, elements, clear).ok()?;
-    let mapping = renderer.copy_framebuffer(&fb, Rectangle::from_size(Size::from((size.w, size.h))), Fourcc::Abgr8888).ok()?;
-    let data = renderer.map_texture(&mapping).ok()?;
+    anyhow::ensure!(size.w > 0 && size.h > 0 && (size.w as u64) * (size.h as u64) <= 64 << 20, "size {}x{} out of range", size.w, size.h);
+    let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, Size::<i32, Buffer>::from((size.w, size.h))).context("create texture")?;
+    let mut fb = renderer.bind(&mut texture).context("bind texture")?;
+    OutputDamageTracker::new(size, scale, Transform::Normal).render_output(renderer, &mut fb, 0, elements, clear).context("render")?;
+    let mapping = renderer.copy_framebuffer(&fb, Rectangle::from_size(Size::from((size.w, size.h))), Fourcc::Abgr8888).context("copy framebuffer")?;
+    let data = renderer.map_texture(&mapping).context("map texture")?;
     let (w, h) = (size.w as usize, size.h as usize);
     let stride = w * 4;
     let mut rgba = vec![0u8; stride * h];
@@ -223,5 +226,5 @@ fn readback<E: RenderElement<GlesRenderer>>(renderer: &mut GlesRenderer, element
             }
         }
     }
-    Some(Snapshot { width: size.w as u32, height: size.h as u32, rgba })
+    Ok(Snapshot { width: size.w as u32, height: size.h as u32, rgba })
 }

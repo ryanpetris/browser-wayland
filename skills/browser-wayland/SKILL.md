@@ -75,6 +75,7 @@ curl -s -H "$H" https://host:8443/api/windows | jq
 | 401 | missing or wrong bearer token | check `Authorization: Bearer` |
 | 404 | no such window | the window closed; list again |
 | 429 | another snapshot is in flight | one at a time; retry after it returns |
+| 500 | the snapshot render failed on the server | retry once; the server log has the GL error |
 | 501 | the server runs without `--elements` | use snapshots instead |
 | 503 | the compositor or the accessibility bus didn't answer | retry once; if the body says there is no D-Bus session, elements are not available on this server |
 | 400, 415, 422 | the body wasn't JSON, lacked `Content-Type: application/json`, or had the wrong shape (plain-text message) | see `reference.md` for the shape |

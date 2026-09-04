@@ -12,7 +12,7 @@ const ROUTES: &str = "\
 |---|---|---|
 | `GET /api/windows` | | JSON array of **Window** |
 | `GET /api/windows/{id}/elements` | | **Elements**; `501` without `--elements`, `503` tree unreadable, `404` unknown window |
-| `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `503` |
+| `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
 | `GET /api/screenshot.png` | | PNG of the whole output at its size |
 | `POST /api/control` | **Control** | `202`; fire-and-forget; `503` compositor gone |
 | `POST /api/input` | **Input** | `202`; `404` unknown window; `503` compositor gone |

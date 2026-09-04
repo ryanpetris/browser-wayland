@@ -58,7 +58,14 @@ pub struct Snapshot {
     pub rgba: Vec<u8>,
 }
 
-pub struct SnapshotReply(pub Box<dyn FnOnce(Option<Snapshot>) + Send>);
+#[derive(Debug)]
+pub enum SnapshotError {
+    NoSuchWindow,
+    /// A GL step failed or the size is out of range; the compositor logged it.
+    Render(String),
+}
+
+pub struct SnapshotReply(pub Box<dyn FnOnce(Result<Snapshot, SnapshotError>) + Send>);
 impl std::fmt::Debug for SnapshotReply {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("SnapshotReply")

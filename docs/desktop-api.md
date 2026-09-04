@@ -163,7 +163,6 @@ moving it out (sessionStorage, a paste box, rotation) is future work.
 - Clipboard read/write from the browser and the API.
 - New windows are activated but don't take the keyboard until clicked; the API exposes this
   pre-existing behaviour as `focused: true` on a window without keyboard focus.
-- GL failures in a snapshot answer `404` rather than `500`.
 - Screenshots at a smaller scale (the whole-output render path uses the output's own scale).
 - Elements: acting on an element through AT-SPI (activate, set text) instead of clicking its rectangle;
   element states (checked, focused, disabled); Flatpak applications, whose pid on the bus is the sandbox's.
