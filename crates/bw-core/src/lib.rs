@@ -62,7 +62,7 @@ impl std::fmt::Debug for SnapshotReply {
 }
 
 /// One window as the desktop API reports it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WindowInfo {
     pub id: u64,
     pub title: String,
@@ -75,6 +75,9 @@ pub struct WindowInfo {
     pub y: i32,
     pub w: i32,
     pub h: i32,
+    /// where the geometry sits inside the client's surface (its shadow margin); 0 for X11
+    pub geo_x: i32,
+    pub geo_y: i32,
     /// stacking index, 0 = bottom; `None` while minimized
     pub z: Option<u32>,
     pub maximized: bool,

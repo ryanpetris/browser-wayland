@@ -45,7 +45,7 @@ mkdir -p -m 700 "$XDG_RUNTIME_DIR"
 exec dbus-run-session -- sh -c '
     pipewire & pipewire-pulse & wireplumber &
     until pactl info >/dev/null 2>&1; do sleep 0.2; done
-    exec browser-wayland --exec "xfce4-panel & exec firefox" "$@"' sh "$@"
+    exec browser-wayland --elements --exec "xfce4-panel & exec firefox" "$@"' sh "$@"
 EOF
 USER bw
 ENV XDG_RUNTIME_DIR=/tmp/runtime-bw HOME=/home/bw

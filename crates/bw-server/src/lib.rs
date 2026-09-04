@@ -2,6 +2,7 @@
 //! HTTP API with a bearer token (never a cookie), streams encoded video out and turns browser input
 //! into `Command`s.
 
+mod elements;
 mod protocol;
 mod ws;
 
@@ -35,6 +36,8 @@ pub struct Config {
     pub codec: CodecPolicy,
     /// Where `cert.pem`, `key.pem` and `token` live.
     pub data_dir: PathBuf,
+    /// Serve /api/windows/{id}/elements (see `elements.rs`).
+    pub elements: bool,
 }
 
 impl Config {
@@ -54,6 +57,7 @@ pub struct App {
     policy: CodecPolicy,
     viewer: Mutex<Viewer>,
     snapshot_lock: tokio::sync::Semaphore,
+    elements: bool,
 }
 
 #[derive(Default)]
@@ -91,6 +95,7 @@ pub async fn run(
         policy: cfg.codec,
         viewer: Mutex::default(),
         snapshot_lock: tokio::sync::Semaphore::new(1),
+        elements: cfg.elements,
     });
     tokio::spawn(ws::distribute(app.clone(), stream_rx));
     tokio::spawn(ws::forward_events(app.clone(), events_rx));
@@ -105,6 +110,7 @@ pub async fn run(
         .route("/api/control", post(api_control))
         .route("/api/windows/{id}/snapshot.png", get(api_window_snapshot))
         .route("/api/screenshot.png", get(api_screenshot))
+        .route("/api/windows/{id}/elements", get(api_window_elements))
         .with_state(app.clone());
 
     let tls_pem = if cfg.tls { Some(load_or_create_cert(&cfg.data_dir)?) } else { None };
@@ -193,6 +199,24 @@ async fn snapshot(app: &App, headers: &HeaderMap, q: &HashMap<String, String>, i
     match png {
         Ok(Ok(bytes)) => ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "no-store")], bytes).into_response(),
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// 501 without `--elements`, 503 when the accessibility bus can't be reached, 404 for an unknown window,
+/// else `{level, toolkit, elements}` (see `elements.rs`).
+async fn api_window_elements(UrlPath(id): UrlPath<u64>, headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
+    if !app.authorized(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !app.elements {
+        return (StatusCode::NOT_IMPLEMENTED, Json(serde_json::json!({ "error": "started without --elements" }))).into_response();
+    }
+    let list = app.viewer.lock().unwrap().windows.as_ref().and_then(|b| serde_json::from_slice::<Vec<bw_core::WindowInfo>>(&b[1..]).ok()).unwrap_or_default();
+    let Some(win) = list.into_iter().find(|w| w.id == id) else { return StatusCode::NOT_FOUND.into_response() };
+    match tokio::time::timeout(std::time::Duration::from_secs(2), elements::elements(&win)).await {
+        Ok(Ok(page)) => Json(page).into_response(),
+        Ok(Err(e)) => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": format!("{e:#}") }))).into_response(),
+        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": "timed out reading the tree" }))).into_response(),
     }
 }
 

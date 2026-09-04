@@ -77,6 +77,8 @@ impl State {
             y: geo.loc.y,
             w: geo.size.w,
             h: geo.size.h,
+            geo_x: window.geometry().loc.x,
+            geo_y: window.geometry().loc.y,
             z,
             maximized,
             fullscreen,

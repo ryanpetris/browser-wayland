@@ -38,6 +38,10 @@ struct Cli {
     /// Don't capture the clients' audio for the browser.
     #[arg(long)]
     no_audio: bool,
+    /// Serve each window's UI elements (roles, names, rectangles) on /api/windows/{id}/elements, read from
+    /// the toolkits' accessibility trees over the D-Bus session this process was started in.
+    #[arg(long)]
+    elements: bool,
 }
 
 /// A private PulseAudio/PipeWire sink for this instance's clients; its monitor is what we stream.
@@ -116,13 +120,18 @@ fn main() -> Result<()> {
         (commands, Box::new(bw_stream::fake_source(cli.bitrate, codec.unwrap_or(Codec::H264), stream_tx)?))
     } else {
         let sink = bw_stream::GstSink::new(cli.bitrate, stream_tx)?;
+        let mut exec_env: Vec<(String, String)> = audio.as_ref().map(|(sink, _)| ("PULSE_SINK".to_string(), sink.name.clone())).into_iter().collect();
+        if cli.elements {
+            // GTK always publishes its tree; Firefox and Qt only when asked. (Chromium needs --force-renderer-accessibility.)
+            exec_env.extend([("GNOME_ACCESSIBILITY", "1"), ("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1")].map(|(k, v)| (k.to_string(), v.to_string())));
+        }
         let bw_compositor::CompositorHandle { commands, socket_name, x11_display, join } = bw_compositor::spawn(
             bw_compositor::Config {
                 render_node: cli.render_node,
                 socket_name: cli.socket_name,
                 initial: OutputGeometry { width_px: 1920, height_px: 1080, scale: 1.0, refresh_mhz: 60_000 },
                 exec: cli.exec.clone(),
-                exec_env: audio.as_ref().map(|(sink, _)| ("PULSE_SINK".to_string(), sink.name.clone())).into_iter().collect(),
+                exec_env,
                 kiosk: cli.kiosk,
             },
             Box::new(sink.clone()),
@@ -139,7 +148,7 @@ fn main() -> Result<()> {
 
     // the fake source can't switch codecs, so its policy is whatever it was built with
     let codec = if cli.fake_source { Some(codec.unwrap_or(Codec::H264)) } else { codec };
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()? };
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements };
     // Ctrl+C returns here so the audio sink gets unloaded and the pipelines stopped.
     let result = tokio::runtime::Runtime::new()?.block_on(async {
         tokio::select! {
