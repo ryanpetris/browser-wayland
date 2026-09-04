@@ -17,6 +17,8 @@ use crate::{App, elements::Page};
 pub enum ApiError {
     /// The feature is switched off (`--elements`).
     Disabled(&'static str),
+    /// The presented token isn't the current one (rotation).
+    Unauthorized,
     /// No such window.
     NotFound,
     /// Another snapshot is in flight.
@@ -31,6 +33,7 @@ impl ApiError {
     pub fn status(&self) -> StatusCode {
         match self {
             ApiError::Disabled(_) => StatusCode::NOT_IMPLEMENTED,
+            ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
             ApiError::NotFound => StatusCode::NOT_FOUND,
             ApiError::Busy => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
@@ -43,6 +46,7 @@ impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ApiError::Disabled(what) => f.write_str(what),
+            ApiError::Unauthorized => f.write_str("not the current token"),
             ApiError::NotFound => f.write_str("no such window"),
             ApiError::Busy => f.write_str("another snapshot is in flight"),
             ApiError::Unavailable(why) | ApiError::Internal(why) => f.write_str(why),

@@ -93,8 +93,8 @@ pub(crate) struct Viewer {
     /// Per-stream message counters (every produced frame or packet, sent or dropped); wrap at u16.
     video_seq: u16,
     audio_seq: u16,
-    /// The token was rotated under the current viewer: its session ends as "wrong token", not "replaced".
-    revoked: bool,
+    /// Generation whose token was rotated away: that session ends as "token rotated", not "replaced".
+    revoked: u64,
 }
 
 pub async fn run(
@@ -149,7 +149,7 @@ pub async fn run(
         // Compare this with the browser's certificate viewer before accepting the warning.
         println!("certificate SHA-256: {}", fingerprint(cert)?);
     }
-    app.print_urls(cfg.tls, cfg.listen.port());
+    app.print_urls();
 
     if let Some((cert, key)) = tls_pem {
         let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert, key).await?;
@@ -164,7 +164,7 @@ pub async fn run(
     Ok(())
 }
 
-/// The page is public; it authenticates its WebSocket with the token it finds in its own URL.
+/// The page is public; it authenticates its WebSocket with the token from its URL fragment (or sessionStorage).
 async fn index() -> Html<&'static str> {
     Html(include_str!("../../../web/index.html"))
 }
@@ -233,8 +233,9 @@ async fn api_control(State(app): State<Arc<App>>, Json(msg): Json<ControlMsg>) -
 
 /// A new token: written to the data directory, printed like at startup, returned to the caller; the
 /// current viewer is closed with "wrong token" so a leaked link stops working at once.
-async fn api_token_rotate(State(app): State<Arc<App>>) -> Response {
-    match app.rotate_token() {
+async fn api_token_rotate(headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
+    let presented = headers.get(header::AUTHORIZATION).and_then(|a| a.to_str().ok()).and_then(|a| a.strip_prefix("Bearer ")).unwrap_or_default();
+    match app.rotate_token(presented) {
         Ok(token) => (NO_STORE, Json(serde_json::json!({ "token": token }))).into_response(),
         Err(e) => ApiError::Internal(format!("{e:#}")).into_response(),
     }
@@ -254,37 +255,54 @@ impl App {
     }
 
     pub(crate) fn token_ok(&self, t: &str) -> bool {
-        // constant-time compare, no dependency needed
-        let token = self.token.read().unwrap();
-        t.len() == token.len() && t.bytes().zip(token.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+        same(t, &self.token.read().unwrap())
     }
 
-    fn print_urls(&self, tls: bool, port: u16) {
-        let scheme = if tls { "https" } else { "http" };
+    /// The token rides in the URL fragment, which browsers never send, so no server or proxy logs it.
+    fn print_urls(&self) {
+        let scheme = if self.tls { "https" } else { "http" };
         let token = self.token.read().unwrap();
         for ip in lan_ips() {
-            println!("{scheme}://{ip}:{port}/?token={token}");
+            println!("{scheme}://{ip}:{}/#token={token}", self.port);
         }
     }
 
-    fn rotate_token(&self) -> Result<String> {
+    /// Only the holder of the current token may rotate, checked again under the write lock so two
+    /// rotations with the same old token can't both go through.
+    fn rotate_token(&self, presented: &str) -> Result<String, ApiError> {
+        let mut current = self.token.write().unwrap();
+        if !same(presented, &current) {
+            return Err(ApiError::Unauthorized);
+        }
         let token = random_hex(32);
+        // written next to the old file and renamed over it, so a crash leaves one whole token or the other
         let path = self.data_dir.join("token");
-        let _ = fs::remove_file(&path);
-        write_private(&path, token.as_bytes())?;
-        *self.token.write().unwrap() = token.clone();
+        let tmp = self.data_dir.join("token.new");
+        let _ = fs::remove_file(&tmp);
+        write_private(&tmp, token.as_bytes()).and_then(|()| fs::rename(&tmp, &path)).map_err(|e| ApiError::Internal(format!("token file: {e}")))?;
+        *current = token.clone();
+        drop(current);
         {
-            // the connected viewer authenticated with the old token: close it as "wrong token"
+            // The connected viewer authenticated with the old token: its session ends as "token rotated",
+            // and the compositor hears what it would have on a disconnect.
             let mut v = self.viewer.lock().unwrap();
-            v.revoked = true;
+            v.revoked = v.generation;
             v.generation += 1;
-            v.tx = None;
+            if v.tx.take().is_some() {
+                let _ = self.commands.send(Command::ReleaseAllInput);
+                let _ = self.commands.send(Command::ViewerDisconnected);
+            }
             v.audio_tx = None;
         }
         println!("token rotated; new viewer URLs:");
-        self.print_urls(self.tls, self.port);
+        self.print_urls();
         Ok(token)
     }
+}
+
+/// Constant-time string compare, no dependency needed.
+fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn load_or_create(path: &Path, make: impl FnOnce() -> Result<String>) -> Result<String> {

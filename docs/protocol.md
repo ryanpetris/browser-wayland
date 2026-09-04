@@ -5,16 +5,15 @@ for scripts. Both are guarded by the one shared token from the data directory (`
 
 ## Authentication
 
-- **Viewer page** (`/`, `/app.js`, `/desktop.js`, `/keycodes.js`): public. The page reads the token from
-  its own URL (`/?token=…`, the URL the server prints) and uses it below.
+- **Viewer page** (`/`, `/app.js`, `/desktop.js`, `/keycodes.js`): public. The token arrives once in the
+  URL fragment (`/#token=…`, the URL the server prints; `?token=` is accepted too), is moved into
+  `sessionStorage` and stripped from the address bar; a page with no token shows a paste box.
 - **WebSocket** (`/ws`): the first message must be `AUTH` with the token. Until then the socket is
   nobody: nothing is processed, and it cannot take the stream over. A wrong token, or five seconds of
   silence, closes it with code **4001** `unauthorized`.
 - **HTTP API** (`/api/...`): `Authorization: Bearer <token>`. Nothing else is accepted, so the token
   never appears in a URL the server or a proxy logs.
-- **Viewer page**: the token arrives once as `?token=` and is moved into `sessionStorage`, the address
-  bar rewritten without it; a page with no token shows a paste box. `POST /api/token/rotate` (bearer)
-  replaces it.
+- `POST /api/token/rotate` (bearer) replaces the token everywhere at once.
 
 No cookies are used anywhere.
 
@@ -55,7 +54,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 
 | Code | Meaning |
 |---|---|
-| 4001 | unauthorized: no or wrong token within five seconds |
+| 4001 | unauthorized: no or wrong token within five seconds, or the token was rotated |
 | 4002 | replaced by another viewer (one at a time; the newest wins) |
 
 The page shows both as plain text and stops retrying; on any other close it reconnects after a second.

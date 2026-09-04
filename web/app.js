@@ -395,7 +395,7 @@ canvas.addEventListener('wheel', e => {
 }, { passive: false });
 
 const onKey = e => {
-  if (e.target instanceof HTMLInputElement) return; // typing in the page's own inputs
+  if (e.target instanceof HTMLInputElement || e.target.form) return; // typing in the page's own inputs or its paste form
   const code = KEYCODES[e.code];
   if (!code || e.repeat) return; // clients repeat keys themselves (wl_keyboard.repeat_info)
   e.preventDefault();

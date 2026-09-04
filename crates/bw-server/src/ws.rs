@@ -112,27 +112,37 @@ const REPLACED: u16 = 4002;
 pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     // The first message must be AUTH with the token; until then this socket is nobody and can't
     // take the stream over. A wrong token, or five seconds of silence, ends it.
-    let authed = tokio::time::timeout(Duration::from_secs(5), async {
+    let token = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match socket.recv().await {
-                Some(Ok(Message::Binary(b))) => return b.first() == Some(&protocol::AUTH) && app.token_ok(std::str::from_utf8(&b[1..]).unwrap_or("")),
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return false,
+                Some(Ok(Message::Binary(b))) => {
+                    let t = std::str::from_utf8(&b[1..]).unwrap_or("");
+                    return (b.first() == Some(&protocol::AUTH) && app.token_ok(t)).then(|| t.to_string());
+                }
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return None,
                 _ => {}
             }
         }
     })
     .await
-    .unwrap_or(false);
-    if !authed {
+    .ok()
+    .flatten();
+    let Some(token) = token else {
         let _ = socket.send(Message::Close(Some(CloseFrame { code: UNAUTHORIZED, reason: "unauthorized".into() }))).await;
         return;
-    }
+    };
 
     let (tx, mut rx) = mpsc::channel::<Bytes>(8);
     let (atx, mut arx) = mpsc::channel::<Bytes>(4);
     // Taking over drops the previous viewer's only sender, which ends its session below.
     let (my_gen, cursor, locked, windows) = {
         let mut v = app.viewer.lock().unwrap();
+        if !app.token_ok(&token) {
+            // rotated between the check above and now: this socket authenticated with a dead token
+            drop(v);
+            let _ = socket.send(Message::Close(Some(CloseFrame { code: UNAUTHORIZED, reason: "token rotated".into() }))).await;
+            return;
+        }
         if v.tx.is_some() {
             let _ = app.commands.send(Command::ReleaseAllInput); // whatever the old viewer still held
         }
@@ -141,7 +151,6 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         v.audio_tx = Some(atx);
         v.announced = None;
         v.need_key = true;
-        v.revoked = false;
         (v.generation, v.cursor.clone(), v.locked, v.windows.clone())
     };
     if let Some(c) = cursor {
@@ -163,7 +172,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                 Some(b) => if socket.send(Message::Binary(b)).await.is_err() { break },
                 None => {
                     // replaced by a newer viewer (or the token was rotated): tell the page so it stops retrying
-                    let (code, reason) = if app.viewer.lock().unwrap().revoked { (UNAUTHORIZED, "token rotated") } else { (REPLACED, "replaced by another viewer") };
+                    let (code, reason) = if app.viewer.lock().unwrap().revoked == my_gen { (UNAUTHORIZED, "token rotated") } else { (REPLACED, "replaced by another viewer") };
                     let _ = socket.send(Message::Close(Some(CloseFrame { code, reason: reason.into() }))).await;
                     break;
                 }

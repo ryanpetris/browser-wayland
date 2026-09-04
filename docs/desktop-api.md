@@ -157,8 +157,8 @@ There are no cookies, so there is no ambient credential to ride on: every HTTP r
 bearer token and the WebSocket authenticates with its first message. `spawn` is remote code execution
 for whoever holds the token, which the viewer already implied (it can type into a terminal). Snapshot
 rendering is bounded by the one-in-flight rule and the pixel cap. The viewer receives the token once in
-its URL, moves it into `sessionStorage` (this tab only) and strips it from the address bar, so the URL can
-be shared or bookmarked without it; a tab with no token shows a paste box. `POST /api/token/rotate`
+its URL fragment (so it never reaches the server's or a proxy's log), moves it into `sessionStorage` (this
+tab only) and strips it from the address bar, so the URL can be shared or bookmarked without it; a tab with no token shows a paste box. `POST /api/token/rotate`
 replaces the token everywhere at once and closes the connected viewer with `4001 token rotated`; the
 server prints the new URLs. Per-viewer tokens with individual revocation are not implemented.
 

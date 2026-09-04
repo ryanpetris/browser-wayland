@@ -28,7 +28,7 @@ which reports `0.0.0-dev` unless `BW_VERSION` is set. The Arch `PKGBUILD` is in 
 cargo run --release -- --exec 'foot'          # any Wayland client; WAYLAND_DISPLAY is set for it
 ```
 
-The server prints the certificate fingerprint and a URL like `https://<lan-ip>:8443/?token=…`.
+The server prints the certificate fingerprint and a URL like `https://<lan-ip>:8443/#token=…`.
 Open it in a browser on the LAN, compare the fingerprint before accepting the self-signed
 certificate, and the desktop appears. The browser viewport size becomes the output size.
 The ⛶ button enters fullscreen with keyboard lock so shortcuts like Ctrl+W reach the desktop.
@@ -81,9 +81,9 @@ newest wins).
 ## Desktop API
 
 The compositor is the window manager, so the viewer and outside scripts can see and drive the desktop.
-HTTP calls send the token as `Authorization: Bearer <token>`; the viewer page takes it from its URL once,
-keeps it in `sessionStorage` and drops it from the address bar, and sends it as the first message on its
-WebSocket. A tab without a token shows a paste box. There are no cookies and the token is never in a URL
+HTTP calls send the token as `Authorization: Bearer <token>`; the viewer page takes it from its URL
+fragment once (`#token=`, never sent to the server), keeps it in `sessionStorage` and drops it from the
+address bar, and sends it as the first message on its WebSocket. A tab without a token shows a paste box. There are no cookies and the token is never in a URL
 the server sees. `POST /api/token/rotate` (with the current token) issues a new one: the file, the API and
 the viewer switch at once and the server prints the new URLs.
 

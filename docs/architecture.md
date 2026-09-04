@@ -20,7 +20,7 @@ snapshots, browser UI).
 | Viewers | One at a time; a new connection takes over and the old one is told so. |
 | Cursor | Drawn by the browser (CSS cursor from the compositor's image), never composited: pointer motion costs no frames. |
 | Rendering cadence | Damage-driven. No commit, no frame, no bandwidth. |
-| Auth | One shared token, kept in the viewer page's URL. WebSocket authenticates with its first message; HTTP API uses `Authorization: Bearer`. No cookies. |
+| Auth | One shared token, handed to the viewer once in the URL fragment and kept in `sessionStorage`; rotatable through the API. WebSocket authenticates with its first message; HTTP API uses `Authorization: Bearer`. No cookies. |
 
 ## Process layout
 

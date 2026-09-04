@@ -13,22 +13,20 @@ const overlay = document.getElementById('overlay'), canvas = document.getElement
 
 export const getWindows = () => windows;
 export const control = obj => sendControl(obj);
-// The token arrives once in the URL, then lives in sessionStorage (this tab only) and leaves the address
-// bar, so the URL can be shared or bookmarked without it. Reloading the tab reconnects.
+// The token arrives once in the URL fragment (`#token=`, which never reaches the server or a proxy log;
+// `?token=` is still accepted), then lives in sessionStorage (this tab only) and leaves the address bar,
+// so the URL can be shared or bookmarked without it. Reloading the tab reconnects.
 export const TOKEN = (() => {
-  try {
-    const url = new URL(location);
-    const t = url.searchParams.get('token');
-    if (t) {
-      sessionStorage.setItem('bw.token', t);
-      url.searchParams.delete('token');
-      history.replaceState(null, '', url);
-      return t;
-    }
-    return sessionStorage.getItem('bw.token') ?? '';
-  } catch {
-    return new URLSearchParams(location.search).get('token') ?? '';
+  const url = new URL(location);
+  const t = new URLSearchParams(url.hash.slice(1)).get('token') || url.searchParams.get('token');
+  if (!t) {
+    try { return sessionStorage.getItem('bw.token') ?? ''; } catch { return ''; }
   }
+  try { sessionStorage.setItem('bw.token', t); } catch {}
+  url.hash = '';
+  url.searchParams.delete('token');
+  try { history.replaceState(null, '', url); } catch {}
+  return t;
 })();
 /// fetch() with the bearer token, for the HTTP API.
 export const api = (path, init = {}) => fetch(path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${TOKEN}` } });
