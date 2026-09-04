@@ -4,7 +4,7 @@ use std::{
 };
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
-use bw_core::{AxisSource, Bytes, Codec, Command, ControlMsg, ControlOp, Event, OutputGeometry, StreamMsg};
+use bw_core::{AxisSource, Bytes, Codec, Command, ControlMsg, ControlOp, Event, InputMsg, OutputGeometry, StreamMsg};
 use tokio::sync::mpsc;
 
 use crate::{App, Viewer, protocol::{self, ClientMsg}};
@@ -242,13 +242,13 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
 /// output, and there is no audio. Any number of these can run beside the viewer; each has its own
 /// encoder, which the compositor stops when the session ends or the window goes away.
 pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
-    let Some(_token) = authenticate(&mut socket, &app).await else { return };
-    let close = async |socket: &mut WebSocket, reason: &str| {
-        let _ = socket.send(Message::Close(Some(CloseFrame { code: GONE, reason: reason.into() }))).await;
+    let Some(token) = authenticate(&mut socket, &app).await else { return };
+    let close = async |socket: &mut WebSocket, code: u16, reason: &str| {
+        let _ = socket.send(Message::Close(Some(CloseFrame { code, reason: reason.into() }))).await;
     };
-    let Some(factory) = &app.window_sinks else { return close(&mut socket, "no window streams").await };
-    if app.window_origin(id).is_none() {
-        return close(&mut socket, "no such window").await;
+    let Some(factory) = &app.window_sinks else { return close(&mut socket, GONE, "no window streams").await };
+    if !app.viewer.lock().unwrap().window_list.iter().any(|w| w.id == id) {
+        return close(&mut socket, GONE, "no such window").await;
     }
     // Hello picks the codec, before the pipeline exists
     let (hw, sw) = loop {
@@ -267,14 +267,23 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
         Ok(x) => x,
         Err(e) => {
             tracing::warn!("window stream: {e:#}");
-            return close(&mut socket, "no encoder").await;
+            return close(&mut socket, GONE, "no encoder").await;
         }
     };
     control.set_codec(app.choose_codec(hw, sw));
     static KEY: AtomicU64 = AtomicU64::new(1);
     let key = KEY.fetch_add(1, Ordering::Relaxed);
     let (etx, mut erx) = mpsc::channel::<Bytes>(8);
-    app.window_viewers.lock().unwrap().insert(key, etx);
+    {
+        // registered under the lock a rotation clears, so a session that came in with the old token
+        // is either cleared by it or refused here
+        let mut viewers = app.window_viewers.lock().unwrap();
+        if !app.token_ok(&token) {
+            drop(viewers);
+            return close(&mut socket, UNAUTHORIZED, "token rotated").await;
+        }
+        viewers.insert(key, etx);
+    }
     let (cursor, locked, windows) = {
         let v = app.viewer.lock().unwrap();
         (v.cursor.clone(), v.locked, v.windows.clone())
@@ -287,31 +296,35 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     let (mut info, mut seq) = (None::<bw_core::StreamInfo>, 0u16);
     let mut ping = tokio::time::interval(Duration::from_secs(5));
     let mut unanswered = 0;
-    let gone = loop {
+    let ended = loop {
         tokio::select! {
             msg = rx.recv() => match msg {
                 Some(StreamMsg::Info(i)) => {
                     seq = 0;
-                    if socket.send(Message::Binary(protocol::config(&i))).await.is_err() { break false }
+                    if !send(&mut socket, protocol::config(&i)).await { break None }
                     info = Some(i);
                 }
                 Some(StreamMsg::Frame(f)) => {
                     if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
                         // sent in order, waiting for the socket: the pipeline drops raw frames upstream of the encoder
                         // while we do, so nothing goes missing between encoder and page (no keyframe dance)
-                        if socket.send(Message::Binary(protocol::video(&f, seq))).await.is_err() { break false }
+                        if !send(&mut socket, protocol::video(&f, seq)).await { break None }
                         seq = seq.wrapping_add(1);
                     }
                 }
-                Some(StreamMsg::Failed) => break false, // the page reconnects and gets a fresh pipeline
+                Some(StreamMsg::Failed) => break None, // the page reconnects and gets a fresh pipeline
                 Some(StreamMsg::Audio { .. }) => {}
-                None => break true, // the compositor dropped the stream: the window is gone
+                None => break Some((GONE, "window closed")), // the compositor dropped the stream: the window is gone
             },
-            Some(b) = erx.recv() => if socket.send(Message::Binary(b)).await.is_err() { break false },
+            ev = erx.recv() => match ev {
+                Some(b) => if !send(&mut socket, b).await { break None },
+                None => break Some((UNAUTHORIZED, "token rotated")), // rotate_token dropped every window session's sender
+            },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) => {
                     let cmd = match protocol::decode(&b) {
-                        Some(ClientMsg::MotionAbs { x, y }) => app.window_origin(id).map(|(wx, wy)| Command::PointerMotionAbsolute { x: wx as f64 + x as f64, y: wy as f64 + y as f64 }),
+                        // window-relative, resolved against the live geometry on the compositor thread
+                        Some(ClientMsg::MotionAbs { x, y }) => Some(Command::Input(InputMsg::Move { x: x as f64, y: y as f64, window: Some(id) })),
                         Some(ClientMsg::Resize { css_w, css_h, .. }) => Some(Command::Control(ControlMsg { id, op: ControlOp::Resize { w: css_w as i32, h: css_h as i32 } })),
                         Some(ClientMsg::RequestKeyframe) => {
                             control.request_keyframe();
@@ -325,12 +338,12 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                     }
                 }
                 Some(Ok(Message::Pong(_))) => unanswered = 0,
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break false,
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break None,
                 _ => {}
             },
             _ = ping.tick() => {
                 if unanswered >= 3 || socket.send(Message::Ping(Bytes::new())).await.is_err() {
-                    break false;
+                    break None;
                 }
                 unanswered += 1;
             }
@@ -339,17 +352,18 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     app.window_viewers.lock().unwrap().remove(&key);
     let _ = app.commands.send(Command::WindowStream { key, window: id, sink: None });
     let _ = app.commands.send(Command::ReleaseAllInput);
-    if gone {
-        close(&mut socket, "window closed").await;
+    if let Some((code, reason)) = ended {
+        close(&mut socket, code, reason).await;
     }
 }
 
-impl App {
-    /// Where a window's geometry starts on the output, from the last window list.
-    fn window_origin(&self, id: u64) -> Option<(i32, i32)> {
-        self.viewer.lock().unwrap().window_list.iter().find(|w| w.id == id).map(|w| (w.x, w.y))
-    }
+/// A send that gives up on a peer that stopped reading, so its session ends (and with it the encoder
+/// waiting on it) instead of sitting on a full socket for good.
+async fn send(socket: &mut WebSocket, msg: Bytes) -> bool {
+    tokio::time::timeout(Duration::from_secs(10), socket.send(Message::Binary(msg))).await.is_ok_and(|r| r.is_ok())
+}
 
+impl App {
     /// Ask for a keyframe. The compositor only renders on damage, so also force a frame.
     pub fn rekey(&self) {
         self.control.request_keyframe();

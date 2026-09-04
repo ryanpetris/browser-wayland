@@ -69,7 +69,7 @@ impl State {
     }
 
     pub fn tick(&mut self) {
-        if !(self.dirty || self.force_full_frame) {
+        if !(self.dirty || self.force_full_frame || self.window_streams.iter().any(|s| s.pending)) {
             return;
         }
         let force = self.force_full_frame; // render_frame clears it

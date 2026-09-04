@@ -153,16 +153,17 @@ encoder sink the server made for it (`SinkFactory` in `bw-server`, a `GstSink` p
 output frame, `render_window_streams` renders each streamed window's elements (popups included) with
 the geometry's corner at the origin, at the output's scale, into its swapchain, and submits the frame
 only if its damage tracker saw a change, so an idle window costs nothing; a size change resizes the
-swapchain and tells the sink, which rebuilds its pipeline with a new stream id. Streams of dead windows
-are dropped, which drops their sinks and so their pipelines; the server session sees its channel close
-and ends with `4003`.
+swapchain and tells the sink, which rebuilds its pipeline with a new stream id. A frame that found no
+free buffer or that the sink refused marks the stream `pending`, which keeps the loop ticking and
+redraws it whole. Streams of windows no longer on the desktop are dropped, which drops their sinks and
+so their pipelines; the server session sees its channel close and ends with `4003`.
 
 Server: `ws::window_session` authenticates, takes `Hello` for the codec, builds the sink, and forwards
 frames straight from its own channel to the socket, in order (the pipeline drops raw frames upstream
 of the encoder while the socket is busy, so nothing is lost between encoder and page and there is no
 keyframe dance). Events go to window sessions as well as the viewer, by `try_send`. Pointer positions
-get the window's origin from the last window list added; a `Resize` becomes a `resize` control for the
-window. Page: `?window=ID` (see `docs/protocol.md`); the panel's ↗ button opens a popup the window's
+are forwarded as window-relative `Input` moves, resolved on the compositor thread; a `Resize` becomes a
+`resize` control for the window. Page: `?window=ID` (see `docs/protocol.md`); the panel's ↗ button opens a popup the window's
 size, and `sessionStorage` (the token) is copied into it by the browser.
 
 ## Browser UI (`web/desktop.js`)

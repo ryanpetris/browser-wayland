@@ -327,6 +327,7 @@ impl App {
             }
             v.audio_tx = None;
         }
+        self.window_viewers.lock().unwrap().clear(); // each window session ends with "token rotated"
         println!("token rotated; new viewer URLs:");
         self.print_urls();
         Ok(token)

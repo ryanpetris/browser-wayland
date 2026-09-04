@@ -59,7 +59,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 |---|---|
 | 4001 | unauthorized: no or wrong token within five seconds, or the token was rotated |
 | 4002 | replaced by another viewer (one at a time; the newest wins) |
-| 4003 | a window stream that can't run: no such window, the window closed, or no window streams (`--fake-source`) |
+| 4003 | a window stream that can't run: no such window, the window closed, no encoder could be made, or no window streams (`--fake-source`) |
 
 The page shows these as plain text and stops retrying; on any other close it reconnects after a second.
 
@@ -71,14 +71,16 @@ the viewer's panel opens one, sized to the window). The same messages as `/ws`, 
 - No `Resize` is needed: the stream is the window's geometry at the output's scale (even-rounded), and
   follows it. A `Resize` the page sends resizes the *window* to the given CSS size (a floating window
   only, like `resize` below).
-- Pointer positions are relative to the window's geometry, as in the input message; the server adds
-  the window's position. Keys and buttons go where they always go (the focused window, the pointer).
+- Pointer positions are relative to the window's geometry, as in the input message (they are forwarded
+  as one, resolved against the live geometry). Keys and buttons go where they always go (the focused
+  window, the pointer).
   Focusing the tab activates the window.
 - `Cursor`, `PointerLock`, `Windows` and `Clipboard` arrive as on `/ws`; there is no audio. The page
   uses the window list only for the tab title.
 - Any number can run beside the viewer, each with its own encoder (one `--bitrate` each). The
   compositor renders a window stream only when that window changed; it drops the stream when the
-  window closes (close code 4003) or the socket ends. `Hello` still picks the codec.
+  window closes (close code 4003) or the socket ends. `Hello` still picks the codec. A token rotation
+  ends them all with 4001. A tab that stops reading for ten seconds is dropped.
 
 ## HTTP API
 

@@ -6,9 +6,12 @@ use std::os::fd::AsFd;
 use anyhow::{Context, Result};
 use bw_core::{DmabufFrame, FrameSink, OutputGeometry};
 use smithay::{
-    backend::renderer::{Bind, damage::OutputDamageTracker, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
+    backend::{
+        allocator::Buffer as _,
+        renderer::{Bind, damage::OutputDamageTracker, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
+    },
     desktop::Window,
-    utils::{IsAlive, Physical, Point, Scale, Size, Transform},
+    utils::{Physical, Point, Scale, Size, Transform},
 };
 
 use crate::{State, gpu::DmabufSwapchain, render::CLEAR};
@@ -20,6 +23,10 @@ pub struct WindowStream {
     tracker: OutputDamageTracker,
     sink: Box<dyn FrameSink>,
     size: Size<i32, Physical>,
+    /// What the buffers really are (GBM may fall back); the sink is told when it differs.
+    modifier: u64,
+    /// The last frame wasn't handed over (no free buffer, or the sink refused it): render again, whole.
+    pub pending: bool,
     seq: u64,
 }
 
@@ -31,7 +38,8 @@ impl State {
         let Some(window) = self.window_by_id(id) else { return }; // the session ends on its own: nothing ever arrives
         let swapchain = self.gpu.swapchain(2, 2); // resized to the window before the first frame
         let tracker = OutputDamageTracker::new((2, 2), 1.0, Transform::Normal);
-        self.window_streams.push(WindowStream { key, window, swapchain, tracker, sink, size: Size::default(), seq: 0 });
+        let modifier = u64::from(self.gpu.modifier);
+        self.window_streams.push(WindowStream { key, window, swapchain, tracker, sink, size: Size::default(), modifier, pending: true, seq: 0 });
         self.dirty = true;
     }
 
@@ -41,7 +49,9 @@ impl State {
 
     /// Called after the output's frame: every stream whose window changed gets a frame (every stream, if `force`).
     pub fn render_window_streams(&mut self, force: bool) {
-        self.window_streams.retain(|s| s.window.alive());
+        // gone from the desktop (closed, or an X11 window withdrawn while its handle lives on): stream over
+        let present = self.full_stack();
+        self.window_streams.retain(|s| present.contains(&s.window));
         for i in 0..self.window_streams.len() {
             if let Err(e) = self.render_window_stream(i, force) {
                 tracing::warn!(key = self.window_streams[i].key, "window stream: {e:#}");
@@ -51,23 +61,35 @@ impl State {
 
     fn render_window_stream(&mut self, i: usize, force: bool) -> Result<()> {
         let scale = self.geometry.scale;
-        let (fourcc, modifier) = (self.gpu.fourcc as u32, u64::from(self.gpu.modifier));
+        let fourcc = self.gpu.fourcc as u32;
         let now = self.clock.now();
         let Self { window_streams, gpu, .. } = self;
         let s = &mut window_streams[i];
         let geo = s.window.geometry();
-        // even sizes for 4:2:0 encoders, like the output
+        // even sizes for 4:2:0 encoders, rounded up so no row or column of the window is cut off
         let size = geo.size.to_f64().to_physical(scale).to_i32_round::<i32>();
-        let size = Size::<i32, Physical>::from(((size.w & !1).max(2), (size.h & !1).max(2)));
+        let size = Size::<i32, Physical>::from((((size.w + 1) & !1).max(2), ((size.h + 1) & !1).max(2)));
+        let geometry = |modifier| (OutputGeometry { width_px: size.w as u32, height_px: size.h as u32, scale, refresh_mhz: 60_000 }, fourcc, modifier);
         if size != s.size {
             s.size = size;
             s.swapchain.resize(size.w as u32, size.h as u32);
             s.tracker = OutputDamageTracker::new(size, scale, Transform::Normal);
-            s.sink.output_changed(OutputGeometry { width_px: size.w as u32, height_px: size.h as u32, scale, refresh_mhz: 60_000 }, fourcc, modifier);
+            let (geo, fourcc, modifier) = geometry(s.modifier);
+            s.sink.output_changed(geo, fourcc, modifier);
         }
-        let Some(slot) = s.swapchain.acquire()? else { return Ok(()) }; // the encoder holds every buffer: next time
-        let age = if force { 0 } else { slot.age() as usize };
+        let Some(slot) = s.swapchain.acquire()? else {
+            s.pending = true; // the encoder holds every buffer: next tick
+            return Ok(());
+        };
+        let age = if force || s.pending { 0 } else { slot.age() as usize };
         let mut dmabuf = (*slot).clone();
+        let modifier = u64::from(dmabuf.format().modifier);
+        if modifier != s.modifier {
+            // GBM gave another layout than asked (see render.rs); the encoder must import it as it is
+            s.modifier = modifier;
+            let (geo, fourcc, modifier) = geometry(modifier);
+            s.sink.output_changed(geo, fourcc, modifier);
+        }
         // the geometry's corner at the origin, as for snapshots
         let loc = Point::from((-geo.loc.x, -geo.loc.y)).to_f64().to_physical(scale).to_i32_round();
         let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = s.window.render_elements(&mut gpu.renderer, loc, Scale::from(scale), 1.0);
@@ -78,6 +100,7 @@ impl State {
         };
         while sync.wait().is_err() {}
         if !damaged {
+            s.pending = false;
             return Ok(());
         }
         s.swapchain.submitted(&slot);
@@ -85,20 +108,20 @@ impl State {
         let slot_id = slot.userdata().get::<SlotId>().unwrap().0;
         s.seq += 1;
         let fd = dmabuf.handles().next().context("dmabuf has no plane")?.as_fd().try_clone_to_owned().context("dup dmabuf fd")?;
-        s.sink
-            .submit(DmabufFrame {
-                fd,
-                width: size.w as u32,
-                height: size.h as u32,
-                fourcc,
-                modifier,
-                stride: dmabuf.strides().next().unwrap(),
-                offset: dmabuf.offsets().next().unwrap(),
-                slot_id,
-                pts: now.into(),
-                seq: s.seq,
-                lease: Box::new(slot),
-            })
-            .map_err(|e| anyhow::anyhow!("{e}"))
+        let submitted = s.sink.submit(DmabufFrame {
+            fd,
+            width: size.w as u32,
+            height: size.h as u32,
+            fourcc,
+            modifier,
+            stride: dmabuf.strides().next().unwrap(),
+            offset: dmabuf.offsets().next().unwrap(),
+            slot_id,
+            pts: now.into(),
+            seq: s.seq,
+            lease: Box::new(slot),
+        });
+        s.pending = submitted.is_err(); // the tracker advanced: a retry redraws everything
+        submitted.map_err(|e| anyhow::anyhow!("{e}"))
     }
 }

@@ -163,6 +163,7 @@ function connect() {
     send(AUTH, t.length, dv => new Uint8Array(dv.buffer, 1).set(t));
     await sendHello();
     if (!WINDOW) sendResize(); // a window stream is the window's size
+    else if (document.hasFocus()) sendControl({ id: +WINDOW, op: 'activate' }); // a popup is focused before its script runs
   };
   ws.onmessage = e => onMessage(e.data);
   ws.onclose = e => {
