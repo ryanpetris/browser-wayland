@@ -1,16 +1,26 @@
-// Desktop UI on top of the video: the window list and click-to-activate.
+// Desktop UI on top of the video: the window list, click-to-activate, colour-coded borders.
 // Fed by the WINDOWS message; talks back with CONTROL (see crates/bw-server/src/protocol.rs).
 
 let windows = [];
-let sendControl = () => {};
+let sendControl = () => {}, streamSize = () => null; // streamSize(): logical {w, h} of the video, or null before Config
 const panel = document.getElementById('panel'), wins = document.getElementById('wins'), spawn = document.getElementById('spawn');
+const overlay = document.getElementById('overlay'), canvas = document.getElementById('c');
 
 export const getWindows = () => windows;
 export const control = obj => sendControl(obj);
 
-export function initDesktop(send) {
+export function initDesktop(send, size) {
   sendControl = send;
+  streamSize = size;
   document.getElementById('panelbtn').onclick = () => panel.classList.toggle('open');
+  const borders = document.getElementById('borders');
+  try { overlay.hidden = localStorage.getItem('bw.borders') !== '1'; } catch {}
+  borders.onclick = () => {
+    overlay.hidden = !overlay.hidden;
+    try { localStorage.setItem('bw.borders', overlay.hidden ? '0' : '1'); } catch {}
+    renderBorders();
+  };
+  window.addEventListener('resize', renderBorders);
   spawn.onkeydown = e => {
     if (e.key === 'Enter' && spawn.value.trim()) { sendControl({ op: 'spawn', cmd: spawn.value.trim() }); spawn.value = ''; }
     if (e.key === 'Escape') spawn.blur();
@@ -21,6 +31,26 @@ export function initDesktop(send) {
 export function onWindows(list) {
   windows = list;
   renderList();
+  renderBorders();
+}
+
+// One rectangle per visible window, in CSS px over the canvas; the same hue as the list.
+export function renderBorders() {
+  if (overlay.hidden) return;
+  const size = streamSize();
+  if (!size) return;
+  const r = canvas.getBoundingClientRect();
+  const sx = r.width / size.w, sy = r.height / size.h;
+  overlay.replaceChildren(...windows.filter(w => !w.minimized).map(w => {
+    const d = document.createElement('div');
+    d.className = w.focused ? 'focused' : '';
+    d.style.cssText = `left:${r.left + w.x * sx}px;top:${r.top + w.y * sy}px;width:${w.w * sx}px;height:${w.h * sy}px;border-color:${color(w)}`;
+    const label = document.createElement('span');
+    label.textContent = w.app_id || w.title;
+    label.style.background = color(w);
+    d.append(label);
+    return d;
+  }));
 }
 
 // One hue per app id, so every window of an app gets the same colour.

@@ -19,12 +19,18 @@
   .win .badge { font-size: 11px; color: #9a9; }
   .win button { background: none; border: 0; color: #aaa; cursor: pointer; padding: 0 2px; font-size: 14px; }
   .win button:hover { color: #fff; }
-  :fullscreen #btns, :fullscreen #panel { display: none; }
+  #overlay { position: fixed; inset: 0; pointer-events: none; }
+  #overlay div { position: absolute; box-sizing: border-box; border: 2px solid; }
+  #overlay div.focused { border-width: 3px; }
+  #overlay span { position: absolute; left: -2px; top: -2px; font: 11px monospace; color: #000; padding: 0 4px; border-radius: 0 0 4px 0; }
+  :fullscreen #btns, :fullscreen #panel, :fullscreen #overlay { display: none; }
 </style>
 <canvas id="c"></canvas>
+<div id="overlay" hidden></div>
 <aside id="panel"><input id="spawn" placeholder="run a command… (Enter)"><div id="wins"></div></aside>
 <div id="s">connecting…</div>
 <div id="btns">
+  <button id="borders" title="Window borders">▢</button>
   <button id="panelbtn" title="Windows">☰</button>
   <button id="fs" title="Fullscreen (browser shortcuts go to the desktop)">⛶</button>
 </div>
