@@ -14,7 +14,7 @@ optdepends=('xorg-xwayland: X11 clients'
             'libpulse: audio to the browser (pactl)'
             'intel-media-driver: VA-API on Intel GPUs'
             'libva-mesa-driver: VA-API on AMD GPUs')
-options=('!lto')
+options=('!lto' '!debug') # one package; no split -debug package with the symbols
 
 build() {
     cd "$startdir/../.."
