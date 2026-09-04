@@ -72,9 +72,11 @@ impl State {
         if !(self.dirty || self.force_full_frame) {
             return;
         }
+        let force = self.force_full_frame; // render_frame clears it
         if let Err(e) = self.render_frame() {
             tracing::warn!("render failed: {e:#}");
         }
+        self.render_window_streams(force);
     }
 
     fn render_frame(&mut self) -> Result<()> {

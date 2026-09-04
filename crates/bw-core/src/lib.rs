@@ -53,6 +53,9 @@ pub enum Command {
     /// Render one window (or the whole output) to pixels and hand them to `reply`.
     /// `scale` is relative to the output scale and only applies to windows.
     Snapshot { id: Option<u64>, scale: f64, reply: SnapshotReply },
+    /// Encode one window into its own stream through `sink` (`None` stops the stream). `key` names
+    /// the stream, so two viewers of the same window don't disturb each other.
+    WindowStream { key: u64, window: u64, sink: Option<Box<dyn FrameSink>> },
     Quit,
 }
 
@@ -256,6 +259,12 @@ pub trait FrameSink: Send {
     fn output_changed(&mut self, geo: OutputGeometry, fourcc: u32, modifier: u64);
     /// `(fourcc, modifier)` pairs the encoder can import zero-copy.
     fn accepted_formats(&self) -> Vec<(u32, u64)>;
+}
+
+impl std::fmt::Debug for dyn FrameSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FrameSink")
+    }
 }
 
 /// Encoder -> server.

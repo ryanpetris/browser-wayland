@@ -9,6 +9,7 @@ mod gpu;
 mod grabs;
 mod handlers;
 mod input;
+mod window_stream;
 mod workspace;
 pub(crate) mod render;
 mod xwayland;
@@ -149,6 +150,8 @@ pub struct State {
     pub foreign: foreign_toplevel::ForeignToplevels,
     pub workspaces: workspace::Workspaces,
     pub reading: clipboard::Reading,
+    /// Windows encoded into streams of their own, for the viewer's per-window tabs.
+    pub window_streams: Vec<window_stream::WindowStream>,
     /// The window `focus_window` last activated.
     pub active: Option<Window>,
     /// What the viewer was last told (desktop API).
@@ -280,6 +283,7 @@ impl State {
             foreign: Default::default(),
             workspaces: Default::default(),
             reading: Default::default(),
+            window_streams: Vec::new(),
             active: None,
             last_windows: Vec::new(),
             seat_state,

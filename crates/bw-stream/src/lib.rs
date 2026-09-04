@@ -11,7 +11,7 @@ use std::{
     io::{Seek, SeekFrom},
     os::fd::OwnedFd,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
 };
@@ -37,9 +37,6 @@ pub struct Stream {
 impl Drop for Stream {
     fn drop(&mut self) {
         let _ = self.pipeline.set_state(gst::State::Null);
-        if let Some(bus) = self.pipeline.bus() {
-            bus.set_flushing(true); // lets the bus-watch thread exit
-        }
     }
 }
 
@@ -148,23 +145,26 @@ fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<St
             .build(),
     );
 
-    let bus = pipeline.bus().unwrap();
     let dead = Arc::new(AtomicBool::new(false));
     let flag = dead.clone();
-    std::thread::spawn(move || {
-        for msg in bus.iter_timed(gst::ClockTime::NONE) {
-            match msg.view() {
-                gst::MessageView::Error(e) => {
-                    tracing::error!(src = ?e.src().map(|s| s.path_string()), "gstreamer: {} ({:?})", e.error(), e.debug());
-                }
-                gst::MessageView::Eos(_) => {}
-                _ => continue,
+    // Runs on the posting thread and is freed with the pipeline. (A thread waiting on the bus would
+    // never wake once the pipeline is gone, and its copy of `tx` would keep the channel open.)
+    pipeline.bus().unwrap().set_sync_handler(move |_, msg| {
+        match msg.view() {
+            gst::MessageView::Error(e) => {
+                tracing::error!(src = ?e.src().map(|s| s.path_string()), "gstreamer: {} ({:?})", e.error(), e.debug());
             }
-            // Dead: the next keyframe request drops the pipeline (freeing its leases) and the next frame rebuilds it.
-            flag.store(true, Ordering::Relaxed);
-            let _ = failed_tx.blocking_send(StreamMsg::Failed);
-            break;
+            gst::MessageView::Eos(_) => {}
+            _ => return gst::BusSyncReply::Drop,
         }
+        // Dead: the next keyframe request drops the pipeline (freeing its leases) and the next frame rebuilds it.
+        if !flag.swap(true, Ordering::Relaxed) {
+            let tx = failed_tx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.blocking_send(StreamMsg::Failed); // off the streaming thread, which must not block here
+            });
+        }
+        gst::BusSyncReply::Drop
     });
 
     pipeline.set_state(gst::State::Playing)?;
@@ -284,7 +284,28 @@ struct Inner {
     alloc: gst_allocators::DmaBufAllocator,
 }
 
+/// Keyframe and codec requests that don't keep the pipeline alive: once every `GstSink` clone is
+/// dropped (the compositor let go of a window stream), the pipeline stops and `tx` closes with it.
+pub struct GstControl(Weak<Mutex<Inner>>);
+
+impl StreamControl for GstControl {
+    fn request_keyframe(&self) {
+        if let Some(inner) = self.0.upgrade() {
+            GstSink(inner).request_keyframe();
+        }
+    }
+    fn set_codec(&self, codec: Codec) {
+        if let Some(inner) = self.0.upgrade() {
+            GstSink(inner).set_codec(codec);
+        }
+    }
+}
+
 impl GstSink {
+    pub fn control(&self) -> GstControl {
+        GstControl(Arc::downgrade(&self.0))
+    }
+
     pub fn new(bitrate_kbps: u32, tx: mpsc::Sender<StreamMsg>) -> Result<GstSink> {
         gst::init()?;
         let accepted = vapostproc_dmabuf_formats();
@@ -363,6 +384,12 @@ impl FrameSink for GstSink {
             discard(old);
         }
         Ok(i.push(frame)?)
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        discard(self.take_stream()); // never stop a pipeline on the compositor's thread
     }
 }
 

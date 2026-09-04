@@ -130,7 +130,11 @@ decides what to drop. A viewer gap is followed by a keyframe request (`UpstreamF
 plus `Command::RequestFullFrame`, since without damage no frame would be produced. Codec choice comes
 from the browser's `VideoDecoder.isConfigSupported` probes: hardware HEVC, then VP9, then H.264, unless
 `--codec` pins one. A resize or codec change tears the pipeline down and rebuilds it with a new stream
-id; the viewer resets its decoder when it sees a new id.
+id; the viewer resets its decoder when it sees a new id. Pipeline errors reach the server through a bus
+sync handler (freed with the pipeline; a watching thread would outlive it).
+
+Window streams (`/ws/window/{id}`, see [desktop-api.md](desktop-api.md)) are further `GstSink`s, one
+per streamed window, fed from per-window swapchains in the compositor.
 
 Audio: `pulsesrc` on the null sink's monitor → Opus (20 ms packets) → appsink → the WebSocket. The
 browser decodes with `AudioDecoder` and schedules the packets on an `AudioContext` a small lead ahead
@@ -169,6 +173,5 @@ directory should be persisted in containers or every start prints a new token.
 
 ## Known limitations
 
-- One workspace, one output, one viewer.
-- Per-window video streams and clipboard access from the browser are not implemented.
-- Surface cursors ignore the buffer scale; presentation feedback is not implemented.
+- One workspace, one output, one viewer (plus any number of window streams).
+- Window streams carry no audio.

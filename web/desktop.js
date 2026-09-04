@@ -146,7 +146,7 @@ function renderList() {
     if (!row) {
       row = document.createElement('div');
       row.innerHTML = '<img class="thumb"><span class="dot"></span><span class="title"></span><span class="badge"></span>'
-        + '<button title="Snapshot (PNG)">📷</button><button title="Maximize / restore">⤢</button><button title="Minimize / restore">⌄</button><button title="Close">✕</button>';
+        + '<button title="Open in its own window">↗</button><button title="Snapshot (PNG)">📷</button><button title="Maximize / restore">⤢</button><button title="Minimize / restore">⌄</button><button title="Close">✕</button>';
       row.querySelector('.dot').style.background = color(w);
       rows.set(w.id, row);
     }
@@ -165,8 +165,10 @@ function renderList() {
     title.textContent = w.title || w.app_id || `#${w.id}`;
     title.title = `${w.app_id}${w.pid ? ' · pid ' + w.pid : ''} · ${w.w}×${w.h} at ${w.x},${w.y}`;
     row.querySelector('.badge').textContent = [w.fullscreen && 'full', w.maximized && 'max', w.minimized && 'min'].filter(Boolean).join(' ');
-    const [shot, max, min, close] = row.querySelectorAll('button');
+    const [own, shot, max, min, close] = row.querySelectorAll('button');
     row.onclick = () => sendControl({ id: w.id, op: 'activate' });
+    // a popup the window's size, streaming just that window; sessionStorage (the token) is copied to it
+    own.onclick = e => { e.stopPropagation(); window.open(`/?window=${w.id}`, `bw-window-${w.id}`, `popup,width=${w.w},height=${w.h}`); };
     shot.onclick = e => {
       e.stopPropagation();
       const tab = window.open('', '_blank'); // opened now, inside the click, so popup blockers allow it

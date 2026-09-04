@@ -118,6 +118,8 @@ impl State {
             Command::ReleasePointerLock => self.release_pointer_lock(),
             Command::Control(msg) => self.control(msg),
             Command::Snapshot { id, scale, reply } => (reply.0)(self.snapshot(id, scale)),
+            Command::WindowStream { key, window, sink: Some(sink) } => self.start_window_stream(key, window, sink),
+            Command::WindowStream { key, sink: None, .. } => self.stop_window_stream(key),
             Command::Quit => self.running = false,
         }
     }

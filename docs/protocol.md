@@ -11,6 +11,7 @@ for scripts. Both are guarded by the one shared token from the data directory (`
 - **WebSocket** (`/ws`): the first message must be `AUTH` with the token. Until then the socket is
   nobody: nothing is processed, and it cannot take the stream over. A wrong token, or five seconds of
   silence, closes it with code **4001** `unauthorized`.
+- **Window streams** (`/ws/window/{id}`): authenticated like `/ws`; see below.
 - **HTTP API** (`/api/...`): `Authorization: Bearer <token>`. Nothing else is accepted, so the token
   never appears in a URL the server or a proxy logs.
 - `POST /api/token/rotate` (bearer) replaces the token everywhere at once.
@@ -58,8 +59,26 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 |---|---|
 | 4001 | unauthorized: no or wrong token within five seconds, or the token was rotated |
 | 4002 | replaced by another viewer (one at a time; the newest wins) |
+| 4003 | a window stream that can't run: no such window, the window closed, or no window streams (`--fake-source`) |
 
-The page shows both as plain text and stops retrying; on any other close it reconnects after a second.
+The page shows these as plain text and stops retrying; on any other close it reconnects after a second.
+
+### Window streams (`/ws/window/{id}`)
+
+One application window as its own video, for a tab or popup that shows just that window (the ↗ button in
+the viewer's panel opens one, sized to the window). The same messages as `/ws`, with these differences:
+
+- No `Resize` is needed: the stream is the window's geometry at the output's scale (even-rounded), and
+  follows it. A `Resize` the page sends resizes the *window* to the given CSS size (a floating window
+  only, like `resize` below).
+- Pointer positions are relative to the window's geometry, as in the input message; the server adds
+  the window's position. Keys and buttons go where they always go (the focused window, the pointer).
+  Focusing the tab activates the window.
+- `Cursor`, `PointerLock`, `Windows` and `Clipboard` arrive as on `/ws`; there is no audio. The page
+  uses the window list only for the tab title.
+- Any number can run beside the viewer, each with its own encoder (one `--bitrate` each). The
+  compositor renders a window stream only when that window changed; it drops the stream when the
+  window closes (close code 4003) or the socket ends. `Hello` still picks the codec.
 
 ## HTTP API
 

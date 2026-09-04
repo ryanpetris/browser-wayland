@@ -29,12 +29,15 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use bw_core::{Bytes, Codec, Command, ControlMsg, Event, InputMsg, StreamControl, StreamInfo, StreamMsg, WindowInfo};
+use bw_core::{Bytes, Codec, Command, ControlMsg, Event, FrameSink, InputMsg, StreamControl, StreamInfo, StreamMsg, WindowInfo};
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager};
 use tokio::sync::mpsc;
 
 /// `None` = automatic: HEVC, then VP9, then H.264, first one the browser decodes in hardware.
 pub type CodecPolicy = Option<Codec>;
+/// Makes an encoder for one window stream: the sink the compositor feeds and a control handle that
+/// must not keep the pipeline alive (the stream ends when the compositor drops the sink).
+pub type SinkFactory = Box<dyn Fn(mpsc::Sender<StreamMsg>) -> Result<(Box<dyn FrameSink>, Box<dyn StreamControl>)> + Send + Sync>;
 
 pub struct Config {
     pub listen: SocketAddr,
@@ -46,6 +49,8 @@ pub struct Config {
     pub elements: bool,
     /// Reported to MCP clients.
     pub version: &'static str,
+    /// Per-window streams (`/ws/window/{id}`); `None` without a compositor.
+    pub window_sinks: Option<SinkFactory>,
 }
 
 impl Config {
@@ -65,6 +70,9 @@ pub struct App {
     control: Box<dyn StreamControl>,
     policy: CodecPolicy,
     viewer: Mutex<Viewer>,
+    window_sinks: Option<SinkFactory>,
+    /// Event senders of the window-stream sessions (cursor, clipboard, window list go to them too).
+    window_viewers: Mutex<HashMap<u64, mpsc::Sender<Bytes>>>,
     snapshot_lock: tokio::sync::Semaphore,
     elements: bool,
     version: &'static str,
@@ -113,6 +121,8 @@ pub async fn run(
         control,
         policy: cfg.codec,
         viewer: Mutex::default(),
+        window_sinks: cfg.window_sinks,
+        window_viewers: Mutex::default(),
         snapshot_lock: tokio::sync::Semaphore::new(1),
         elements: cfg.elements,
         version: cfg.version,
@@ -128,6 +138,7 @@ pub async fn run(
         .route("/keycodes.js", get(|| async { js(include_str!("../../../web/keycodes.js")) }))
         .route("/desktop.js", get(|| async { js(include_str!("../../../web/desktop.js")) }))
         .route("/ws", get(websocket))
+        .route("/ws/window/{id}", get(window_websocket))
         .merge(
             Router::new()
                 .route("/api/windows", get(api_windows))
@@ -187,6 +198,11 @@ fn mcp_service(app: Arc<App>) -> StreamableHttpService<mcp::Mcp, LocalSessionMan
 /// Unauthenticated until the first message (see `ws::session`).
 async fn websocket(ws: WebSocketUpgrade, State(app): State<Arc<App>>) -> Response {
     ws.max_message_size(1 + (1 << 20)).on_upgrade(move |socket| ws::session(socket, app)) // a pasted clipboard can be 1 MiB
+}
+
+/// One window as its own stream (see `ws::window_session`).
+async fn window_websocket(ws: WebSocketUpgrade, UrlPath(id): UrlPath<u64>, State(app): State<Arc<App>>) -> Response {
+    ws.max_message_size(1 + (1 << 20)).on_upgrade(move |socket| ws::window_session(socket, app, id))
 }
 
 /// `Authorization: Bearer <token>` for everything under /api and /mcp; nothing else (no cookies, no query strings in logs).

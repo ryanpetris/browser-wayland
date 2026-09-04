@@ -20,7 +20,9 @@ pub type DmabufSwapchain = Swapchain<DmabufAllocator<GbmAllocator<DrmDeviceFd>>>
 pub struct Gpu {
     pub node: DrmNode,
     pub drm: DrmDeviceFd,
+    gbm: GbmDevice<DrmDeviceFd>,
     pub renderer: GlesRenderer,
+    /// The output's; window streams have their own (`swapchain()`).
     pub swapchain: DmabufSwapchain,
     pub fourcc: Fourcc,
     pub modifier: Modifier,
@@ -51,8 +53,17 @@ impl Gpu {
             .with_context(|| format!("no dmabuf format shared by renderer and encoder; encoder accepts {accepted:x?}"))?;
         tracing::info!(?fourcc, ?modifier, "render target format");
 
-        let allocator = DmabufAllocator(GbmAllocator::new(gbm, GbmBufferFlags::RENDERING));
-        let swapchain = Swapchain::new(allocator, geo.width_px, geo.height_px, fourcc, vec![modifier]);
-        Ok(Gpu { node, drm: fd, renderer, swapchain, fourcc, modifier, modifier_verified: false })
+        let swapchain = swapchain(&gbm, fourcc, modifier, geo.width_px, geo.height_px);
+        Ok(Gpu { node, drm: fd, gbm, renderer, swapchain, fourcc, modifier, modifier_verified: false })
     }
+
+    /// Buffers the encoder imports zero-copy, in the negotiated format.
+    pub fn swapchain(&self, width: u32, height: u32) -> DmabufSwapchain {
+        swapchain(&self.gbm, self.fourcc, self.modifier, width, height)
+    }
+}
+
+fn swapchain(gbm: &GbmDevice<DrmDeviceFd>, fourcc: Fourcc, modifier: Modifier, width: u32, height: u32) -> DmabufSwapchain {
+    let allocator = DmabufAllocator(GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING));
+    Swapchain::new(allocator, width, height, fourcc, vec![modifier])
 }

@@ -78,6 +78,12 @@ The page tells you when the server closed its socket: "wrong token" (the token c
 directory, e.g. a fresh container without a volume) or "replaced by another viewer" (one at a time, the
 newest wins).
 
+## Window streams
+
+The ↗ button on a window's row in the panel opens it in a popup of its own, streaming only that window
+(`/?window=ID`): the pointer, keyboard and clipboard work there as in the viewer, resizing the popup
+resizes the window, and closing the window ends the popup. Each such popup has its own encoder.
+
 ## Desktop API
 
 The compositor is the window manager, so the viewer and outside scripts can see and drive the desktop.

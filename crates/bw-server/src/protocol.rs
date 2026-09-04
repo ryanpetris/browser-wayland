@@ -69,6 +69,13 @@ pub fn cursor(img: Option<&CursorImage>) -> Bytes {
     b.into()
 }
 
+pub fn clipboard(text: &str) -> Bytes {
+    let mut b = Vec::with_capacity(1 + text.len());
+    b.push(CLIPBOARD);
+    b.extend_from_slice(text.as_bytes());
+    b.into()
+}
+
 pub fn windows(list: &[WindowInfo]) -> Bytes {
     let mut b = vec![WINDOWS];
     serde_json::to_writer(&mut b, list).expect("WindowInfo serializes");

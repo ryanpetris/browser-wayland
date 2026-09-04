@@ -9,6 +9,10 @@ const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_L
 
 const canvas = document.getElementById('c');
 const status = document.getElementById('s');
+// `?window=ID`: this tab shows one application window as its own stream (see docs/protocol.md), at the
+// window's size; the pointer is window-relative and resizing the tab resizes the window.
+const WINDOW = new URLSearchParams(location.search).get('window');
+document.body.classList.toggle('window', !!WINDOW);
 // The token (see desktop.js) is the first message on the socket and the bearer header on API calls. No cookies.
 let draw, renderer; // set by initRenderer(): paints one VideoFrame
 let pendingFrame = null, rafId = 0;
@@ -152,19 +156,20 @@ function connect() {
   if (!TOKEN) { askToken('no token: paste the one the server printed'); return; }
   audioSeq = -1; // the server kept counting while we were away
   connects++;
-  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${WINDOW ? '/window/' + WINDOW : ''}`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = async () => {
     const t = new TextEncoder().encode(TOKEN);
     send(AUTH, t.length, dv => new Uint8Array(dv.buffer, 1).set(t));
     await sendHello();
-    sendResize();
+    if (!WINDOW) sendResize(); // a window stream is the window's size
   };
   ws.onmessage = e => onMessage(e.data);
   ws.onclose = e => {
     closes.push(`${e.code}:${e.reason}`);
     if (e.code === 4001) { stream = null; askToken(`${e.reason || 'wrong token'}: paste the token the server printed`); return; }
     if (e.code === 4002) { status.textContent = 'replaced by another viewer (only one at a time); reload to take over'; return; }
+    if (e.code === 4003) { status.textContent = e.reason; return; } // the window is gone
     status.textContent = stream ? 'disconnected, retrying…' : 'no stream, retrying…';
     setTimeout(connect, 1000);
   };
@@ -231,6 +236,7 @@ function onMessage(buf) {
       if (pendingFrame) { pendingFrame.close(); pendingFrame = null; } // don't paint the old stream into the new canvas
       canvas.width = stream.width;
       canvas.height = stream.height;
+      if (WINDOW) { canvas.style.width = `${stream.width / stream.scale}px`; canvas.style.height = `${stream.height / stream.scale}px`; } // 1:1, centred
       resync();
       updateStatus();
       fetchElements(); // the scale may have changed
@@ -264,9 +270,12 @@ function onMessage(buf) {
     case AUDIO:
       onAudio(buf);
       break;
-    case WINDOWS:
-      onWindows(JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1))));
+    case WINDOWS: {
+      const list = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
+      if (WINDOW) { const w = list.find(w => w.id === +WINDOW); if (w) document.title = w.title || w.app_id; break; } // no panel here
+      onWindows(list);
       break;
+    }
     case CLIPBOARD:
       onClipboard(new TextDecoder().decode(new Uint8Array(buf, 1)));
       break;
@@ -454,7 +463,12 @@ window.onblur = blur;
 document.onvisibilitychange = () => { if (document.hidden) blur(); };
 
 let resizeTimer;
-window.onresize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(sendResize, 150); };
+window.onresize = () => {
+  // a window tab's size is the window's: only a real change (not the popup settling) resizes the window
+  if (WINDOW && stream && innerWidth === Math.round(stream.width / stream.scale) && innerHeight === Math.round(stream.height / stream.scale)) return;
+  clearTimeout(resizeTimer); resizeTimer = setTimeout(sendResize, 150);
+};
+if (WINDOW) window.onfocus = () => sendControl({ id: +WINDOW, op: 'activate' }); // keyboard focus follows the tab
 
 // Fullscreen + Keyboard Lock: Ctrl+W, Ctrl+T, Alt+Tab… reach the Wayland clients instead of the browser.
 document.getElementById('fs').onclick = async () => {

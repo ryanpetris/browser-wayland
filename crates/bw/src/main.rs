@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::Result;
-use bw_core::{Codec, Command, StreamControl};
+use bw_core::{Codec, Command, FrameSink, StreamControl};
 use clap::Parser;
 use tokio::sync::mpsc;
 
@@ -102,6 +102,13 @@ fn main() -> Result<()> {
         }
     }
 
+    let bitrate = cli.bitrate;
+    let window_sinks: Option<bw_server::SinkFactory> = (!cli.fake_source).then(|| {
+        Box::new(move |tx| {
+            let sink = bw_stream::GstSink::new(bitrate, tx)?;
+            Ok((Box::new(sink.clone()) as Box<dyn FrameSink>, Box::new(sink.control()) as Box<dyn StreamControl>))
+        }) as bw_server::SinkFactory
+    });
     let (commands, control): (calloop::channel::Sender<Command>, Box<dyn StreamControl>) = if cli.fake_source {
         // No compositor: just log what the browser sends.
         let (commands, rx) = calloop::channel::channel();
@@ -148,7 +155,7 @@ fn main() -> Result<()> {
 
     // the fake source can't switch codecs, so its policy is whatever it was built with
     let codec = if cli.fake_source { Some(codec.unwrap_or(Codec::H264)) } else { codec };
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, version: env!("BW_VERSION") };
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, version: env!("BW_VERSION"), window_sinks };
     // Ctrl+C returns here so the audio sink gets unloaded and the pipelines stopped.
     let result = tokio::runtime::Runtime::new()?.block_on(async {
         tokio::select! {

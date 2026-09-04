@@ -145,12 +145,32 @@ needs no permission) delivers the text, that goes to the desktop as `SetClipboar
 press and release follow, so the application pastes the browser's content. If no paste event comes
 within 150 ms the key goes through on its own.
 
+## Window streams
+
+`window_stream.rs`. `Command::WindowStream { key, window, sink }` starts (or, with no sink, stops) one
+stream: a `WindowStream` holds the window, a dmabuf swapchain and damage tracker of its own, and the
+encoder sink the server made for it (`SinkFactory` in `bw-server`, a `GstSink` per stream). After every
+output frame, `render_window_streams` renders each streamed window's elements (popups included) with
+the geometry's corner at the origin, at the output's scale, into its swapchain, and submits the frame
+only if its damage tracker saw a change, so an idle window costs nothing; a size change resizes the
+swapchain and tells the sink, which rebuilds its pipeline with a new stream id. Streams of dead windows
+are dropped, which drops their sinks and so their pipelines; the server session sees its channel close
+and ends with `4003`.
+
+Server: `ws::window_session` authenticates, takes `Hello` for the codec, builds the sink, and forwards
+frames straight from its own channel to the socket, in order (the pipeline drops raw frames upstream
+of the encoder while the socket is busy, so nothing is lost between encoder and page and there is no
+keyframe dance). Events go to window sessions as well as the viewer, by `try_send`. Pointer positions
+get the window's origin from the last window list added; a `Resize` becomes a `resize` control for the
+window. Page: `?window=ID` (see `docs/protocol.md`); the panel's ↗ button opens a popup the window's
+size, and `sessionStorage` (the token) is copied into it by the browser.
+
 ## Browser UI (`web/desktop.js`)
 
 - **Window panel** (☰ button, hidden in fullscreen): one row per window, top-most first, minimized
-  last: a thumbnail, a colour dot, the title, badges (`full`, `max`, `min`), and buttons for snapshot,
-  maximize/restore, minimize/restore (restore uses `activate`, so the window also gets the keyboard),
-  close. Clicking a row activates the window. A command box at the top spawns programs; focusing it
+  last: a thumbnail, a colour dot, the title, badges (`full`, `max`, `min`), and buttons to open the
+  window in its own popup (a window stream), snapshot, maximize/restore, minimize/restore (restore uses
+  `activate`, so the window also gets the keyboard), close. Clicking a row activates the window. A command box at the top spawns programs; focusing it
   releases any key held in the compositor and its keys never reach the desktop.
 - Rows are kept per window id across list updates, so a thumbnail reloads only when its `updated_ms`
   changed. `<img>` can't send the bearer header, so thumbnails and the full-size snapshot come through
@@ -185,8 +205,7 @@ server prints the new URLs. Per-viewer tokens with individual revocation are not
 
 ## Deferred
 
-- Per-window video streams (a browser tab per application): one encoder per window and per-stream
-  negotiation.
-- Clipboard read/write from the browser and the API.
+- Window streams: audio, a bitrate scaled to the window's size, sharing one render between two
+  viewers of the same window.
 - Elements: acting on an element through AT-SPI (activate, set text) instead of clicking its rectangle;
   element states (checked, focused, disabled); Flatpak applications, whose pid on the bus is the sandbox's.
