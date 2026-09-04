@@ -1,7 +1,7 @@
 // Viewer: decodes the H.264 stream with WebCodecs and forwards input.
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
-import { initDesktop, onWindows, renderBorders, fetchElements, control, getWindows, snapshot, elementsOf } from './desktop.js';
+import { TOKEN, initDesktop, onWindows, renderBorders, fetchElements, control, getWindows, snapshot, elementsOf } from './desktop.js';
 
 const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05, WINDOWS = 0x06;
 const AUTH = 0x80, HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A, CONTROL = 0x8B;
@@ -9,8 +9,7 @@ const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_L
 
 const canvas = document.getElementById('c');
 const status = document.getElementById('s');
-// The token lives in the page URL: first message on the socket, bearer header on API calls. No cookies.
-const TOKEN = new URLSearchParams(location.search).get('token') ?? '';
+// The token (see desktop.js) is the first message on the socket and the bearer header on API calls. No cookies.
 let draw, renderer; // set by initRenderer(): paints one VideoFrame
 let pendingFrame = null, rafId = 0;
 
@@ -133,7 +132,24 @@ async function initRenderer() {
 let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, fps = 0, mbps = 0, windowFrames = 0, windowBytes = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [], keyframes = 0, decodeErrors = 0, dropped = 0;
 let videoSeq = -1, audioSeq = -1, lost = 0, dropNext = false; // seq: last message seen per stream; lost: gaps in either
 
+// No usable token: a paste box instead of a connection attempt.
+function askToken(why) {
+  try { sessionStorage.removeItem('bw.token'); } catch {}
+  status.textContent = why;
+  const form = document.getElementById('tokenform');
+  form.hidden = false;
+  form.onsubmit = e => {
+    e.preventDefault();
+    const t = form.token.value.trim();
+    if (!t) return;
+    try { sessionStorage.setItem('bw.token', t); } catch {}
+    location.reload();
+  };
+  form.token.focus();
+}
+
 function connect() {
+  if (!TOKEN) { askToken('no token: paste the one the server printed'); return; }
   audioSeq = -1; // the server kept counting while we were away
   connects++;
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
@@ -147,7 +163,7 @@ function connect() {
   ws.onmessage = e => onMessage(e.data);
   ws.onclose = e => {
     closes.push(`${e.code}:${e.reason}`);
-    if (e.code === 4001) { status.textContent = 'wrong token: open the URL with ?token= printed by the server'; return; }
+    if (e.code === 4001) { stream = null; askToken(`${e.reason || 'wrong token'}: paste the token the server printed`); return; }
     if (e.code === 4002) { status.textContent = 'replaced by another viewer (only one at a time); reload to take over'; return; }
     status.textContent = stream ? 'disconnected, retrying…' : 'no stream, retrying…';
     setTimeout(connect, 1000);

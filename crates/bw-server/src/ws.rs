@@ -141,6 +141,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         v.audio_tx = Some(atx);
         v.announced = None;
         v.need_key = true;
+        v.revoked = false;
         (v.generation, v.cursor.clone(), v.locked, v.windows.clone())
     };
     if let Some(c) = cursor {
@@ -161,8 +162,9 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
             out = rx.recv() => match out {
                 Some(b) => if socket.send(Message::Binary(b)).await.is_err() { break },
                 None => {
-                    // replaced by a newer viewer: tell the page so it stops retrying
-                    let _ = socket.send(Message::Close(Some(CloseFrame { code: REPLACED, reason: "replaced by another viewer".into() }))).await;
+                    // replaced by a newer viewer (or the token was rotated): tell the page so it stops retrying
+                    let (code, reason) = if app.viewer.lock().unwrap().revoked { (UNAUTHORIZED, "token rotated") } else { (REPLACED, "replaced by another viewer") };
+                    let _ = socket.send(Message::Close(Some(CloseFrame { code, reason: reason.into() }))).await;
                     break;
                 }
             },

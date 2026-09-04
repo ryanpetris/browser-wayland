@@ -13,7 +13,23 @@ const overlay = document.getElementById('overlay'), canvas = document.getElement
 
 export const getWindows = () => windows;
 export const control = obj => sendControl(obj);
-const TOKEN = new URLSearchParams(location.search).get('token') ?? '';
+// The token arrives once in the URL, then lives in sessionStorage (this tab only) and leaves the address
+// bar, so the URL can be shared or bookmarked without it. Reloading the tab reconnects.
+export const TOKEN = (() => {
+  try {
+    const url = new URL(location);
+    const t = url.searchParams.get('token');
+    if (t) {
+      sessionStorage.setItem('bw.token', t);
+      url.searchParams.delete('token');
+      history.replaceState(null, '', url);
+      return t;
+    }
+    return sessionStorage.getItem('bw.token') ?? '';
+  } catch {
+    return new URLSearchParams(location.search).get('token') ?? '';
+  }
+})();
 /// fetch() with the bearer token, for the HTTP API.
 export const api = (path, init = {}) => fetch(path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${TOKEN}` } });
 export const snapshotUrl = (id, scale = 1) => `${id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`}?scale=${scale}`;

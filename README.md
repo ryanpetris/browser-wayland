@@ -81,9 +81,11 @@ newest wins).
 ## Desktop API
 
 The compositor is the window manager, so the viewer and outside scripts can see and drive the desktop.
-HTTP calls send the token as `Authorization: Bearer <token>`; the viewer page keeps it in its URL and
-sends it as the first message on its WebSocket. There are no cookies and the token is never in a URL
-the server sees.
+HTTP calls send the token as `Authorization: Bearer <token>`; the viewer page takes it from its URL once,
+keeps it in `sessionStorage` and drops it from the address bar, and sends it as the first message on its
+WebSocket. A tab without a token shows a paste box. There are no cookies and the token is never in a URL
+the server sees. `POST /api/token/rotate` (with the current token) issues a new one: the file, the API and
+the viewer switch at once and the server prints the new URLs.
 
 ```sh
 T=$(cat ~/.config/browser-wayland/token)

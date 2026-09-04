@@ -16,7 +16,7 @@ use std::{
     net::SocketAddr,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use anyhow::{Context, Result};
@@ -59,7 +59,8 @@ impl Config {
 }
 
 pub struct App {
-    token: String,
+    token: RwLock<String>,
+    data_dir: PathBuf,
     commands: calloop::channel::Sender<Command>,
     control: Box<dyn StreamControl>,
     policy: CodecPolicy,
@@ -67,6 +68,8 @@ pub struct App {
     snapshot_lock: tokio::sync::Semaphore,
     elements: bool,
     version: &'static str,
+    tls: bool,
+    port: u16,
 }
 
 #[derive(Default)]
@@ -90,6 +93,8 @@ pub(crate) struct Viewer {
     /// Per-stream message counters (every produced frame or packet, sent or dropped); wrap at u16.
     video_seq: u16,
     audio_seq: u16,
+    /// The token was rotated under the current viewer: its session ends as "wrong token", not "replaced".
+    revoked: bool,
 }
 
 pub async fn run(
@@ -102,7 +107,8 @@ pub async fn run(
     fs::create_dir_all(&cfg.data_dir)?;
     let token = load_or_create(&cfg.data_dir.join("token"), || Ok(random_hex(32)))?;
     let app = Arc::new(App {
-        token,
+        token: RwLock::new(token),
+        data_dir: cfg.data_dir.clone(),
         commands,
         control,
         policy: cfg.codec,
@@ -110,6 +116,8 @@ pub async fn run(
         snapshot_lock: tokio::sync::Semaphore::new(1),
         elements: cfg.elements,
         version: cfg.version,
+        tls: cfg.tls,
+        port: cfg.listen.port(),
     });
     tokio::spawn(ws::distribute(app.clone(), stream_rx));
     tokio::spawn(ws::forward_events(app.clone(), events_rx));
@@ -128,6 +136,7 @@ pub async fn run(
                 .route("/api/windows/{id}/snapshot.png", get(api_window_snapshot))
                 .route("/api/screenshot.png", get(api_screenshot))
                 .route("/api/windows/{id}/elements", get(api_window_elements))
+                .route("/api/token/rotate", post(api_token_rotate))
                 .nest_service("/mcp", mcp_service(app.clone()))
                 .layer(middleware::from_fn_with_state(app.clone(), bearer)),
         )
@@ -140,10 +149,7 @@ pub async fn run(
         // Compare this with the browser's certificate viewer before accepting the warning.
         println!("certificate SHA-256: {}", fingerprint(cert)?);
     }
-    let scheme = if cfg.tls { "https" } else { "http" };
-    for ip in lan_ips() {
-        println!("{scheme}://{ip}:{}/?token={}", cfg.listen.port(), app.token);
-    }
+    app.print_urls(cfg.tls, cfg.listen.port());
 
     if let Some((cert, key)) = tls_pem {
         let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert, key).await?;
@@ -225,6 +231,15 @@ async fn api_control(State(app): State<Arc<App>>, Json(msg): Json<ControlMsg>) -
     }
 }
 
+/// A new token: written to the data directory, printed like at startup, returned to the caller; the
+/// current viewer is closed with "wrong token" so a leaked link stops working at once.
+async fn api_token_rotate(State(app): State<Arc<App>>) -> Response {
+    match app.rotate_token() {
+        Ok(token) => (NO_STORE, Json(serde_json::json!({ "token": token }))).into_response(),
+        Err(e) => ApiError::Internal(format!("{e:#}")).into_response(),
+    }
+}
+
 async fn api_input(State(app): State<Arc<App>>, Json(msg): Json<InputMsg>) -> Response {
     match app.input(msg) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
@@ -240,8 +255,35 @@ impl App {
 
     pub(crate) fn token_ok(&self, t: &str) -> bool {
         // constant-time compare, no dependency needed
-        t.len() == self.token.len()
-            && t.bytes().zip(self.token.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+        let token = self.token.read().unwrap();
+        t.len() == token.len() && t.bytes().zip(token.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+    }
+
+    fn print_urls(&self, tls: bool, port: u16) {
+        let scheme = if tls { "https" } else { "http" };
+        let token = self.token.read().unwrap();
+        for ip in lan_ips() {
+            println!("{scheme}://{ip}:{port}/?token={token}");
+        }
+    }
+
+    fn rotate_token(&self) -> Result<String> {
+        let token = random_hex(32);
+        let path = self.data_dir.join("token");
+        let _ = fs::remove_file(&path);
+        write_private(&path, token.as_bytes())?;
+        *self.token.write().unwrap() = token.clone();
+        {
+            // the connected viewer authenticated with the old token: close it as "wrong token"
+            let mut v = self.viewer.lock().unwrap();
+            v.revoked = true;
+            v.generation += 1;
+            v.tx = None;
+            v.audio_tx = None;
+        }
+        println!("token rotated; new viewer URLs:");
+        self.print_urls(self.tls, self.port);
+        Ok(token)
     }
 }
 

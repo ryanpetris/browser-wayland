@@ -12,6 +12,9 @@ for scripts. Both are guarded by the one shared token from the data directory (`
   silence, closes it with code **4001** `unauthorized`.
 - **HTTP API** (`/api/...`): `Authorization: Bearer <token>`. Nothing else is accepted, so the token
   never appears in a URL the server or a proxy logs.
+- **Viewer page**: the token arrives once as `?token=` and is moved into `sessionStorage`, the address
+  bar rewritten without it; a page with no token shows a paste box. `POST /api/token/rotate` (bearer)
+  replaces it.
 
 No cookies are used anywhere.
 
@@ -78,6 +81,7 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `GET /api/windows/{id}/snapshot.png?scale=` | PNG of that window. `scale` 0.05–2, relative to the output scale, default 1. `404` unknown id, `429` another snapshot is in flight, `500` the render failed (logged), `503` the compositor didn't answer within 2 s. |
 | `GET /api/screenshot.png?scale=` | PNG of the whole output (layers included, cursor excluded); `scale` as for a window; `429`, `500`, `503` as for a window. |
 | `POST /api/input` | Body: an input message (below). `202`; `404` unknown window; `503` compositor gone. |
+| `POST /api/token/rotate` | Replaces the token: written to the data directory, printed as new URLs, returned as `{"token": …}`; the connected viewer is closed with `4001 token rotated` and the old token stops working. Not an MCP tool. |
 | `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` the tree couldn't be read: no D-Bus session or accessibility bus, the application went away, or 2 s passed (body: `{"error": …}`), `404` unknown id. |
 
 Status codes: `401` (empty body) missing or wrong bearer token; the statuses above come with
