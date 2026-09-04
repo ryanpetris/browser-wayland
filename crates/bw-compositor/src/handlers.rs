@@ -3,6 +3,7 @@
 use std::{cell::RefCell, os::unix::io::OwnedFd};
 
 use smithay::{
+    backend::renderer::utils::with_renderer_surface_state,
     input::pointer::CursorImageSurfaceData,
     backend::{
         allocator::dmabuf::Dmabuf,
@@ -164,6 +165,15 @@ impl CompositorHandler for State {
             if let Some(window) = self.window_for(&root).or_else(minimized) {
                 window.on_commit();
                 self.touch_window(&window);
+                // A new window takes the keyboard once it has something to show (its first buffer), so typing
+                // goes to it without a click, unless a launcher holds an exclusive grab. Once per window.
+                if self.active.as_ref() == Some(&window)
+                    && with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false)
+                    && window.user_data().insert_if_missing(|| InitialFocus)
+                    && !self.exclusive_layer_focused()
+                {
+                    self.focus_window(Some(&window), SERIAL_COUNTER.next_serial());
+                }
                 // wl_surface.offset: the client moved its buffer origin, so move the window with it.
                 // map_element always puts the window on top, so only do it for a real move: some
                 // clients attach with a zero offset on every frame.
@@ -194,6 +204,20 @@ impl CompositorHandler for State {
         ensure_initial_configure(surface, self);
         grabs::handle_commit(&mut self.space, surface);
         self.dirty = true;
+    }
+}
+
+/// Marker: this window has had its one initial keyboard focus.
+struct InitialFocus;
+
+impl State {
+    /// A Top or Overlay layer surface with exclusive keyboard interactivity (a launcher) holds the keyboard.
+    fn exclusive_layer_focused(&self) -> bool {
+        let Some(focus) = self.seat.get_keyboard().and_then(|k| k.current_focus()) else { return false };
+        let layers = layer_map_for_output(&self.output);
+        layers
+            .layer_for_surface(&focus, WindowSurfaceType::TOPLEVEL)
+            .is_some_and(|l| l.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive && matches!(l.layer(), Layer::Top | Layer::Overlay))
     }
 }
 
