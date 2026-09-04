@@ -1,7 +1,7 @@
 //! One window as its own video stream: rendered from its buffers (popups included) into a private
 //! dmabuf swapchain and handed to its own encoder, at the output's scale, only when it changed.
 
-use std::os::fd::AsFd;
+use std::{os::fd::AsFd, time::{Duration, Instant}};
 
 use anyhow::{Context, Result};
 use bw_core::{DmabufFrame, FrameSink, OutputGeometry};
@@ -14,7 +14,10 @@ use smithay::{
     utils::{Physical, Point, Scale, Size, Transform},
 };
 
-use crate::{State, gpu::DmabufSwapchain, render::CLEAR};
+use crate::{State, gpu::DmabufSwapchain, render::{CLEAR, SlotId}};
+
+/// An interactive resize commits a new size every frame; the encoder is rebuilt once it stops.
+const SETTLE: Duration = Duration::from_millis(150);
 
 pub struct WindowStream {
     pub key: u64,
@@ -23,6 +26,9 @@ pub struct WindowStream {
     tracker: OutputDamageTracker,
     sink: Box<dyn FrameSink>,
     size: Size<i32, Physical>,
+    scale: f64,
+    /// A size other than `size`, and since when.
+    settling: Option<(Size<i32, Physical>, Instant)>,
     /// What the buffers really are (GBM may fall back); the sink is told when it differs.
     modifier: u64,
     /// The last frame wasn't handed over (no free buffer, or the sink refused it): render again, whole.
@@ -30,16 +36,13 @@ pub struct WindowStream {
     seq: u64,
 }
 
-/// Swapchain slot id (see `render.rs`), counted per stream.
-struct SlotId(u32);
-
 impl State {
     pub fn start_window_stream(&mut self, key: u64, id: u64, sink: Box<dyn FrameSink>) {
         let Some(window) = self.window_by_id(id) else { return }; // the session ends on its own: nothing ever arrives
         let swapchain = self.gpu.swapchain(2, 2); // resized to the window before the first frame
         let tracker = OutputDamageTracker::new((2, 2), 1.0, Transform::Normal);
         let modifier = u64::from(self.gpu.modifier);
-        self.window_streams.push(WindowStream { key, window, swapchain, tracker, sink, size: Size::default(), modifier, pending: true, seq: 0 });
+        self.window_streams.push(WindowStream { key, window, swapchain, tracker, sink, size: Size::default(), scale: 0.0, settling: None, modifier, pending: true, seq: 0 });
         self.dirty = true;
     }
 
@@ -55,6 +58,7 @@ impl State {
         for i in 0..self.window_streams.len() {
             if let Err(e) = self.render_window_stream(i, force) {
                 tracing::warn!(key = self.window_streams[i].key, "window stream: {e:#}");
+                self.window_streams[i].pending = true; // the update it missed is retried whole
             }
         }
     }
@@ -68,11 +72,34 @@ impl State {
         let geo = s.window.geometry();
         // even sizes for 4:2:0 encoders, rounded up so no row or column of the window is cut off
         let size = geo.size.to_f64().to_physical(scale).to_i32_round::<i32>();
-        let size = Size::<i32, Physical>::from((((size.w + 1) & !1).max(2), ((size.h + 1) & !1).max(2)));
+        let size = Size::<i32, Physical>::from(((size.w + 1) & !1, (size.h + 1) & !1));
+        if size.w < 16 || size.h < 16 {
+            s.pending = false;
+            return Ok(()); // unmapped (no buffer, no geometry); the encoder takes nothing this small anyway
+        }
         let geometry = |modifier| (OutputGeometry { width_px: size.w as u32, height_px: size.h as u32, scale, refresh_mhz: 60_000 }, fourcc, modifier);
-        if size != s.size {
+        if size != s.size || scale != s.scale {
+            if s.size != Size::default() && size != s.size {
+                // not the first size: wait for it to settle
+                match s.settling {
+                    Some((sz, since)) if sz == size && since.elapsed() >= SETTLE => {}
+                    Some((sz, _)) if sz == size => {
+                        s.pending = true; // keeps the loop ticking until then
+                        return Ok(());
+                    }
+                    _ => {
+                        s.settling = Some((size, Instant::now()));
+                        s.pending = true;
+                        return Ok(());
+                    }
+                }
+            }
+            s.settling = None;
+            if size != s.size {
+                s.swapchain.resize(size.w as u32, size.h as u32);
+            }
             s.size = size;
-            s.swapchain.resize(size.w as u32, size.h as u32);
+            s.scale = scale;
             s.tracker = OutputDamageTracker::new(size, scale, Transform::Normal);
             let (geo, fourcc, modifier) = geometry(s.modifier);
             s.sink.output_changed(geo, fourcc, modifier);

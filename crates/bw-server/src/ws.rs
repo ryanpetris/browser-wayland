@@ -106,12 +106,14 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
             };
             (msg, v.tx.clone(), app.window_viewers.lock().unwrap().values().cloned().collect::<Vec<_>>())
         };
+        // ponytail: a window tab that can't keep up misses a cursor change. Before the wait below, so a
+        // rotation isn't held up by these clones of senders it cleared.
+        for tx in window_txs {
+            let _ = tx.try_send(msg.clone());
+        }
         // State, not a frame: wait for room rather than drop it. A replaced viewer's sender just fails.
         if let Some(tx) = tx {
-            let _ = tx.send(msg.clone()).await;
-        }
-        for tx in window_txs {
-            let _ = tx.try_send(msg.clone()); // ponytail: a window tab that can't keep up misses a cursor change
+            let _ = tx.send(msg).await;
         }
     }
 }
@@ -322,6 +324,9 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) => {
+                    if !app.token_ok(&token) {
+                        break Some((UNAUTHORIZED, "token rotated")); // a queued command must not get through after a rotation
+                    }
                     let cmd = match protocol::decode(&b) {
                         // window-relative, resolved against the live geometry on the compositor thread
                         Some(ClientMsg::MotionAbs { x, y }) => Some(Command::Input(InputMsg::Move { x: x as f64, y: y as f64, window: Some(id) })),

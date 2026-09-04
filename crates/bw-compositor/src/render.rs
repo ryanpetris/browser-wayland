@@ -26,7 +26,7 @@ use crate::State;
 pub const CLEAR: [f32; 4] = [0.12, 0.12, 0.14, 1.0];
 
 /// Per-swapchain-slot id so the encoder can cache its import.
-struct SlotId(u32);
+pub(crate) struct SlotId(pub u32);
 
 impl State {
     /// A mapped window is fullscreen: it covers the panels (Top layer), only the Overlay layer stays above.

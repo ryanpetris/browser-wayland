@@ -237,7 +237,7 @@ function onMessage(buf) {
       if (pendingFrame) { pendingFrame.close(); pendingFrame = null; } // don't paint the old stream into the new canvas
       canvas.width = stream.width;
       canvas.height = stream.height;
-      if (WINDOW) { canvas.style.width = `${stream.width / stream.scale}px`; canvas.style.height = `${stream.height / stream.scale}px`; } // 1:1, centred
+      fitCanvas();
       resync();
       updateStatus();
       fetchElements(); // the scale may have changed
@@ -463,8 +463,16 @@ const blur = () => { pendingPaste = null; send(BLUR, 0); }; // a deferred paste 
 window.onblur = blur;
 document.onvisibilitychange = () => { if (document.hidden) blur(); };
 
+// Window mode: the canvas at the window's size, centred, scaled down (never distorted) if the tab is smaller.
+function fitCanvas() {
+  if (!WINDOW || !stream) return;
+  const w = stream.width / stream.scale, h = stream.height / stream.scale, k = Math.min(1, innerWidth / w, innerHeight / h);
+  canvas.style.width = `${w * k}px`;
+  canvas.style.height = `${h * k}px`;
+}
 let resizeTimer;
 window.onresize = () => {
+  fitCanvas();
   // a window tab's size is the window's: only a real change (not the popup settling) resizes the window
   if (WINDOW && stream && innerWidth === Math.round(stream.width / stream.scale) && innerHeight === Math.round(stream.height / stream.scale)) return;
   clearTimeout(resizeTimer); resizeTimer = setTimeout(sendResize, 150);

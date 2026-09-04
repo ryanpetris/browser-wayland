@@ -82,7 +82,7 @@ newest wins).
 
 The ↗ button on a window's row in the panel opens it in a popup of its own, streaming only that window
 (`/?window=ID`): the pointer, keyboard and clipboard work there as in the viewer, resizing the popup
-resizes the window, and closing the window ends the popup. Each such popup has its own encoder.
+resizes the window, and the popup reports when the window closes. Each such popup has its own encoder.
 
 ## Desktop API
 
