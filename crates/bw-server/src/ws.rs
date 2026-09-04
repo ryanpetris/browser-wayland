@@ -87,6 +87,7 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 Event::Windows(list) => {
                     let msg = protocol::windows(&list);
                     v.windows = Some(msg.clone());
+                    v.window_list = list;
                     msg
                 }
             };

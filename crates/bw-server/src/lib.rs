@@ -2,6 +2,7 @@
 //! HTTP API with a bearer token (never a cookie), streams encoded video out and turns browser input
 //! into `Command`s.
 
+mod api;
 mod elements;
 mod protocol;
 mod ws;
@@ -16,15 +17,16 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use api::ApiError;
 use axum::{
-    Router,
-    extract::{Path as UrlPath, Query, State, ws::WebSocketUpgrade},
-    Json,
+    Json, Router,
+    extract::{Path as UrlPath, Query, Request, State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode, header},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use bw_core::{Bytes, Codec, Command, ControlMsg, Event, Snapshot, SnapshotReply, StreamControl, StreamInfo, StreamMsg};
+use bw_core::{Bytes, Codec, Command, ControlMsg, Event, InputMsg, StreamControl, StreamInfo, StreamMsg, WindowInfo};
 use tokio::sync::mpsc;
 
 /// `None` = automatic: HEVC, then VP9, then H.264, first one the browser decodes in hardware.
@@ -75,8 +77,9 @@ pub(crate) struct Viewer {
     cursor: Option<Bytes>,
     /// Whether a client currently holds a pointer lock, replayed to a new viewer.
     locked: bool,
-    /// Last WINDOWS message, replayed to a new viewer and served on /api/windows.
+    /// Last WINDOWS message, replayed to a new viewer, and the list it encodes (the API's view).
     windows: Option<Bytes>,
+    window_list: Vec<WindowInfo>,
 }
 
 pub async fn run(
@@ -106,11 +109,16 @@ pub async fn run(
         .route("/keycodes.js", get(|| async { js(include_str!("../../../web/keycodes.js")) }))
         .route("/desktop.js", get(|| async { js(include_str!("../../../web/desktop.js")) }))
         .route("/ws", get(websocket))
-        .route("/api/windows", get(api_windows))
-        .route("/api/control", post(api_control))
-        .route("/api/windows/{id}/snapshot.png", get(api_window_snapshot))
-        .route("/api/screenshot.png", get(api_screenshot))
-        .route("/api/windows/{id}/elements", get(api_window_elements))
+        .merge(
+            Router::new()
+                .route("/api/windows", get(api_windows))
+                .route("/api/control", post(api_control))
+                .route("/api/input", post(api_input))
+                .route("/api/windows/{id}/snapshot.png", get(api_window_snapshot))
+                .route("/api/screenshot.png", get(api_screenshot))
+                .route("/api/windows/{id}/elements", get(api_window_elements))
+                .layer(middleware::from_fn_with_state(app.clone(), bearer)),
+        )
         .with_state(app.clone());
 
     let tls_pem = if cfg.tls { Some(load_or_create_cert(&cfg.data_dir)?) } else { None };
@@ -150,92 +158,58 @@ async fn websocket(ws: WebSocketUpgrade, State(app): State<Arc<App>>) -> Respons
     ws.max_message_size(64 << 10).on_upgrade(move |socket| ws::session(socket, app))
 }
 
-/// The current window list as JSON (what the viewer was last sent).
-async fn api_windows(headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
-    if !app.authorized(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let body = app.viewer.lock().unwrap().windows.as_ref().map(|b| b.slice(1..)).unwrap_or_else(|| Bytes::from_static(b"[]"));
-    ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+/// `Authorization: Bearer <token>` for everything under /api and /mcp; nothing else (no cookies, no query strings in logs).
+async fn bearer(State(app): State<Arc<App>>, req: Request, next: Next) -> Response {
+    if app.authorized(req.headers()) { next.run(req).await } else { StatusCode::UNAUTHORIZED.into_response() }
 }
 
-async fn api_window_snapshot(UrlPath(id): UrlPath<u64>, Query(q): Query<HashMap<String, String>>, headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
-    snapshot(&app, &headers, &q, Some(id)).await
+const NO_STORE: [(header::HeaderName, &str); 1] = [(header::CACHE_CONTROL, "no-store")];
+
+async fn api_windows(State(app): State<Arc<App>>) -> Response {
+    (NO_STORE, Json(app.windows())).into_response()
 }
 
-async fn api_screenshot(Query(q): Query<HashMap<String, String>>, headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
-    snapshot(&app, &headers, &q, None).await
+fn scale_of(q: &HashMap<String, String>) -> f64 {
+    q.get("scale").and_then(|s| s.parse().ok()).unwrap_or(1.0)
 }
 
-/// `?scale=` (windows only, 0.05..=2, default 1) → PNG. 404 for an unknown window, 503 if the compositor doesn't answer.
-async fn snapshot(app: &App, headers: &HeaderMap, q: &HashMap<String, String>, id: Option<u64>) -> Response {
-    if !app.authorized(headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    // One at a time: the compositor renders these on its own thread and a queued request can't be cancelled.
-    let Ok(_busy) = app.snapshot_lock.try_acquire() else { return StatusCode::TOO_MANY_REQUESTS.into_response() };
-    let scale = q.get("scale").and_then(|s| s.parse::<f64>().ok()).unwrap_or(1.0).clamp(0.05, 2.0);
-    let (tx, rx) = tokio::sync::oneshot::channel::<Option<Snapshot>>();
-    let reply = SnapshotReply(Box::new(move |s| {
-        let _ = tx.send(s);
-    }));
-    if app.commands.send(Command::Snapshot { id, scale, reply }).is_err() {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    }
-    let snap = match tokio::time::timeout(std::time::Duration::from_secs(2), rx).await {
-        Ok(Ok(Some(s))) => s,
-        Ok(Ok(None)) => return StatusCode::NOT_FOUND.into_response(),
-        _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    };
-    let png = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
-        let mut out = Vec::new();
-        let mut enc = png::Encoder::new(&mut out, snap.width, snap.height);
-        enc.set_color(png::ColorType::Rgba);
-        enc.set_depth(png::BitDepth::Eight);
-        enc.write_header()?.write_image_data(&snap.rgba)?;
-        Ok(out)
-    })
-    .await;
-    match png {
-        Ok(Ok(bytes)) => ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "no-store")], bytes).into_response(),
-        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+fn png(result: Result<Vec<u8>, ApiError>) -> Response {
+    match result {
+        Ok(bytes) => ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "no-store")], bytes).into_response(),
+        Err(e) => e.into_response(),
     }
 }
 
-/// 501 without `--elements`, 503 when the accessibility bus can't be reached, 404 for an unknown window,
-/// else `{level, toolkit, elements}` (see `elements.rs`).
-async fn api_window_elements(UrlPath(id): UrlPath<u64>, headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
-    if !app.authorized(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if !app.elements {
-        return (StatusCode::NOT_IMPLEMENTED, Json(serde_json::json!({ "error": "started without --elements" }))).into_response();
-    }
-    let (list, scale) = {
-        let v = app.viewer.lock().unwrap();
-        let list = v.windows.as_ref().and_then(|b| serde_json::from_slice::<Vec<bw_core::WindowInfo>>(&b[1..]).ok()).unwrap_or_default();
-        (list, v.info.as_ref().map_or(1.0, |i| i.scale))
-    };
-    let Some(win) = list.into_iter().find(|w| w.id == id) else { return StatusCode::NOT_FOUND.into_response() };
-    let no_store = [(header::CACHE_CONTROL, "no-store")];
-    match tokio::time::timeout(std::time::Duration::from_secs(2), elements::elements(&win, scale)).await {
-        Ok(Ok(page)) => (no_store, Json(page)).into_response(),
-        Ok(Err(e)) => (StatusCode::SERVICE_UNAVAILABLE, no_store, Json(serde_json::json!({ "error": format!("{e:#}") }))).into_response(),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, no_store, Json(serde_json::json!({ "error": "timed out reading the tree" }))).into_response(),
+async fn api_window_snapshot(UrlPath(id): UrlPath<u64>, Query(q): Query<HashMap<String, String>>, State(app): State<Arc<App>>) -> Response {
+    png(app.snapshot(Some(id), scale_of(&q)).await)
+}
+
+async fn api_screenshot(Query(q): Query<HashMap<String, String>>, State(app): State<Arc<App>>) -> Response {
+    png(app.snapshot(None, scale_of(&q)).await)
+}
+
+async fn api_window_elements(UrlPath(id): UrlPath<u64>, State(app): State<Arc<App>>) -> Response {
+    match app.elements(id).await {
+        Ok(page) => (NO_STORE, Json(page)).into_response(),
+        Err(e) => e.into_response(),
     }
 }
 
-/// Fire-and-forget: the compositor ignores unknown ids and impossible requests.
-async fn api_control(headers: HeaderMap, State(app): State<Arc<App>>, Json(msg): Json<ControlMsg>) -> Response {
-    if !app.authorized(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
+async fn api_control(State(app): State<Arc<App>>, Json(msg): Json<ControlMsg>) -> Response {
+    match app.control(msg) {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => e.into_response(),
     }
-    let _ = app.commands.send(Command::Control(msg));
-    StatusCode::ACCEPTED.into_response()
+}
+
+async fn api_input(State(app): State<Arc<App>>, Json(msg): Json<InputMsg>) -> Response {
+    match app.input(msg) {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => e.into_response(),
+    }
 }
 
 impl App {
-    /// HTTP API: `Authorization: Bearer <token>`, nothing else (no cookies, no query strings in logs).
     fn authorized(&self, headers: &HeaderMap) -> bool {
         let bearer = headers.get(header::AUTHORIZATION).and_then(|a| a.to_str().ok()).and_then(|a| a.strip_prefix("Bearer "));
         bearer.is_some_and(|t| self.token_ok(t))

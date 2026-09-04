@@ -6,4 +6,5 @@ license.workspace = true
 
 [dependencies]
 bytes.workspace = true
+schemars = "1"
 serde = { version = "1", features = ["derive"] }

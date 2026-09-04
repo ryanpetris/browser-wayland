@@ -4,6 +4,7 @@
 use std::{any::Any, os::fd::OwnedFd, time::Duration};
 
 pub use bytes::Bytes;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,6 +42,10 @@ pub enum Command {
     ReleasePointerLock,
     /// A window action or spawn from the viewer page or the HTTP API.
     Control(ControlMsg),
+    /// Type a string through the keyboard layout: each character pressed and released, Shift as needed.
+    Text(String),
+    /// Press these keys together (xkb keysym names, e.g. `Control_L`, `t`), then release them in reverse.
+    Chord(Vec<String>),
     /// Render one window (or the whole output) to pixels and hand them to `reply`.
     /// `scale` is relative to the output scale and only applies to windows.
     Snapshot { id: Option<u64>, scale: f64, reply: SnapshotReply },
@@ -62,7 +67,7 @@ impl std::fmt::Debug for SnapshotReply {
 }
 
 /// One window as the desktop API reports it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WindowInfo {
     pub id: u64,
     pub title: String,
@@ -91,7 +96,7 @@ pub struct WindowInfo {
 }
 
 /// `{"id":3,"op":"move","x":10,"y":20}`, `{"op":"spawn","cmd":"foot"}`.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 pub struct ControlMsg {
     #[serde(default)]
     pub id: u64,
@@ -99,7 +104,7 @@ pub struct ControlMsg {
     pub op: ControlOp,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum ControlOp {
     Activate,
@@ -114,6 +119,45 @@ pub enum ControlOp {
     Resize { w: i32, h: i32 },
     /// `sh -c`, with the same environment as `--exec`
     Spawn { cmd: String },
+}
+
+/// One input action (`POST /api/input`, MCP tools). Coordinates are logical pixels on the output, or
+/// relative to a window's geometry when `window` is given, like element rectangles.
+#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum InputMsg {
+    /// Move the pointer.
+    Move { x: f64, y: f64, #[serde(default)] window: Option<u64> },
+    /// Move the pointer there and click `count` times (default 1).
+    Click { x: f64, y: f64, #[serde(default)] window: Option<u64>, #[serde(default)] button: Button, #[serde(default)] count: Option<u32> },
+    /// Press or release a button where the pointer is (drags).
+    Button { button: Button, pressed: bool },
+    /// Scroll by wheel lines; positive `dy` scrolls down.
+    Scroll { #[serde(default)] dx: f64, #[serde(default)] dy: f64 },
+    /// A key chord, `+`-separated: `ctrl+shift+t`, `Return`, `alt+F4`. Modifiers first, the key last; all released after.
+    Key { keys: String },
+    /// Type text through the keyboard layout.
+    Text { text: String },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Button {
+    #[default]
+    Left,
+    Right,
+    Middle,
+}
+
+impl Button {
+    /// Linux `BTN_*` code.
+    pub fn code(self) -> u32 {
+        match self {
+            Button::Left => 0x110,
+            Button::Right => 0x111,
+            Button::Middle => 0x112,
+        }
+    }
 }
 
 /// Compositor -> server.

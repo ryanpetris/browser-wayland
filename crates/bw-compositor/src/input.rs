@@ -5,7 +5,7 @@ use smithay::{
     backend::input::{Axis, AxisSource, ButtonState, KeyState, Keycode},
     desktop::{LayerSurface, Window, WindowSurface, WindowSurfaceType, layer_map_for_output},
     input::{
-        keyboard::FilterResult,
+        keyboard::{FilterResult, Keysym, xkb},
         pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent, PointerHandle, RelativeMotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -21,10 +21,67 @@ use crate::State;
 
 const BTN_LEFT: u32 = 0x110;
 
+/// The keycode producing `sym` in `layout`, and whether it needs Shift (level 1); unshifted keys win.
+fn key_for(keymap: &xkb::Keymap, layout: u32, sym: Keysym) -> Option<(Keycode, bool)> {
+    (0..2u32).find_map(|level| {
+        (keymap.min_keycode().raw()..=keymap.max_keycode().raw())
+            .map(Keycode::new)
+            .find(|kc| keymap.key_get_syms_by_level(*kc, layout, level).contains(&sym))
+            .map(|kc| (kc, level == 1))
+    })
+}
+
+/// `ctrl`, `Return`, `F5`, `plus`, `a`, `é`: friendly modifier names, then xkb keysym names, then single characters.
+fn keysym(name: &str) -> Option<Keysym> {
+    let name = match name.to_ascii_lowercase().as_str() {
+        "ctrl" | "control" => "Control_L",
+        "shift" => "Shift_L",
+        "alt" | "opt" | "option" => "Alt_L",
+        "super" | "meta" | "win" | "cmd" | "command" => "Super_L",
+        "altgr" => "ISO_Level3_Shift",
+        "enter" => "Return",
+        "esc" => "Escape",
+        "backspace" => "BackSpace",
+        "del" => "Delete",
+        "pageup" | "pgup" => "Prior",
+        "pagedown" | "pgdn" => "Next",
+        "space" => "space",
+        _ => name,
+    };
+    let mut chars = name.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        return Some(xkb::utf32_to_keysym(c as u32));
+    }
+    let sym = xkb::keysym_from_name(name, xkb::KEYSYM_CASE_INSENSITIVE);
+    (sym.raw() != 0).then_some(sym)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_resolve_in_us_layout() {
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap = xkb::Keymap::new_from_names(&ctx, "", "", "us", "", None, xkb::KEYMAP_COMPILE_NO_FLAGS).unwrap();
+        let (a, shift) = key_for(&keymap, 0, keysym("a").unwrap()).unwrap();
+        assert_eq!((a.raw() - 8, shift), (30, false)); // KEY_A
+        let (big_a, shift) = key_for(&keymap, 0, keysym("A").unwrap()).unwrap();
+        assert_eq!((big_a, shift), (a, true));
+        assert_eq!(key_for(&keymap, 0, keysym("ctrl").unwrap()).unwrap().0.raw() - 8, 29); // KEY_LEFTCTRL
+        assert_eq!(key_for(&keymap, 0, keysym("Return").unwrap()).unwrap().0.raw() - 8, 28);
+        assert_eq!(key_for(&keymap, 0, keysym("F5").unwrap()).unwrap().0.raw() - 8, 63);
+        assert!(key_for(&keymap, 0, keysym("plus").unwrap()).unwrap().1); // Shift+=
+        assert!(keysym("nonsense_key").is_none());
+    }
+}
+
 impl State {
     pub fn handle_command(&mut self, cmd: Command) {
         match cmd {
             Command::Key { evdev, pressed } => self.key(evdev, pressed),
+            Command::Text(text) => self.type_text(&text),
+            Command::Chord(keys) => self.chord(&keys),
             Command::ReleaseAllInput => self.release_all(),
             Command::PointerMotionAbsolute { x, y } => self.pointer_motion((x, y).into()),
             Command::PointerMotionRelative { dx, dy } => self.pointer_motion(self.pointer_location + Point::<f64, Logical>::from((dx, dy))),
@@ -56,6 +113,52 @@ impl State {
         }
         let state = if pressed { KeyState::Pressed } else { KeyState::Released };
         keyboard.input::<(), _>(self, keycode, state, SERIAL_COUNTER.next_serial(), self.now(), |_, _, _| FilterResult::Forward);
+    }
+
+    fn type_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            let sym = match ch {
+                '\n' => Keysym::Return,
+                '\t' => Keysym::Tab,
+                c => xkb::utf32_to_keysym(c as u32),
+            };
+            self.tap(&[sym]);
+        }
+    }
+
+    fn chord(&mut self, keys: &[String]) {
+        let syms: Vec<Keysym> = keys.iter().filter_map(|k| keysym(k)).collect();
+        if syms.len() == keys.len() {
+            self.tap(&syms);
+        } else {
+            tracing::warn!(?keys, "chord has an unknown key name");
+        }
+    }
+
+    /// Press `syms` in order (Shift first when one of them needs it) and release them in reverse.
+    fn tap(&mut self, syms: &[Keysym]) {
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let keys: Vec<Keycode> = keyboard.with_xkb_state(self, |ctx| {
+            let xkb = ctx.xkb().lock().unwrap();
+            // Safety: the keymap reference doesn't outlive the lock.
+            let keymap = unsafe { xkb.keymap() };
+            let layout = xkb.active_layout().0;
+            let resolved: Vec<(Keycode, bool)> = syms.iter().filter_map(|s| key_for(keymap, layout, *s)).collect();
+            let mut keys = Vec::new();
+            if resolved.iter().any(|(_, shift)| *shift)
+                && let Some((shift, _)) = key_for(keymap, layout, Keysym::Shift_L)
+            {
+                keys.push(shift);
+            }
+            keys.extend(resolved.into_iter().map(|(k, _)| k));
+            keys
+        });
+        for k in &keys {
+            self.key(k.raw() - 8, true);
+        }
+        for k in keys.iter().rev() {
+            self.key(k.raw() - 8, false);
+        }
     }
 
     fn release_all(&mut self) {
