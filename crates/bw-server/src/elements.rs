@@ -81,35 +81,40 @@ pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
     }
     let Some(app) = app else { return Ok(none) };
     let toolkit = proxy::<ApplicationProxy>(&conn, &app).await?.toolkit_name().await.ok();
-    // The application's toplevels: real windows (frame, dialog) and, in GTK 3, one `window` per open menu.
-    let (mut frames, mut popups) = (Vec::new(), Vec::new());
+    // The application's toplevels: real windows (frame, dialog) and, in GTK 3, one borderless `window`
+    // per open menu. The frame is the one named like the window; a lone toplevel needs no match.
+    let mut tops = Vec::new();
     for r in proxy::<AccessibleProxy>(&conn, &app).await?.get_children().await?.into_iter().filter(|r| !is_null(r)) {
         let acc = proxy::<AccessibleProxy>(&conn, &r).await?;
-        if acc.get_role().await.ok() == Some(ROLE_WINDOW) {
-            popups.push(r);
-        } else {
-            frames.push((r, acc.name().await.unwrap_or_default()));
-        }
+        tops.push((r, acc.get_role().await.ok() == Some(ROLE_WINDOW), acc.name().await.unwrap_or_default()));
+    }
+    let mut frames: Vec<&Ref> = tops.iter().filter(|t| !t.1).map(|t| &t.0).collect();
+    if frames.is_empty() {
+        frames = tops.iter().map(|t| &t.0).collect();
     }
     let frame = match frames.len() {
-        1 => frames.pop().map(|(r, _)| r),
-        _ => frames.into_iter().find(|(_, name)| *name == win.title).map(|(r, _)| r),
+        1 => Some(frames[0].clone()),
+        _ => tops.iter().find(|t| t.2 == win.title).map(|t| t.0.clone()),
     };
     let Some(frame) = frame else { return Ok(Page { level: "app", toolkit, elements: vec![] }) };
     let (dx, dy) = origin(proxy::<ComponentProxy>(&conn, &frame).await?.get_extents(COORD_WINDOW).await?, win);
-    let mut children = proxy::<AccessibleProxy>(&conn, &frame).await?.get_children().await?;
-    let level = if children.is_empty() { "frame" } else { "full" };
-    children.extend(popups);
+    let children = proxy::<AccessibleProxy>(&conn, &frame).await?.get_children().await?;
+    let level = if children.is_empty() && win.popups.is_empty() { "frame" } else { "full" };
+    // menu windows are walked only while this window has popups open; their nodes count only once placed
+    let menus = tops.iter().filter(|t| t.1 && t.0 != frame && !win.popups.is_empty()).map(|t| t.0.clone());
 
     // depth-first in document order; a subtree that isn't showing is skipped whole. The flag marks
     // Chromium web content, whose extents are in device pixels (everything else is logical). The shift
     // places an open menu: toolkits report its items relative to the menu's own popup surface, so a menu
     // node with the size of an open popup gets that popup's position for itself and its subtree.
     let chromium = toolkit.as_deref() == Some("Chromium");
-    let mut stack: Vec<(Ref, bool, Option<(i32, i32)>)> = children.into_iter().rev().map(|r| (r, false, None)).collect();
+    let mut used = vec![false; win.popups.len()];
+    // (node, in Chromium web content, shift onto a popup, inside a menu window)
+    let mut stack: Vec<(Ref, bool, Option<(i32, i32)>, bool)> = menus.rev().map(|r| (r, false, None, true)).collect();
+    stack.extend(children.into_iter().rev().map(|r| (r, false, None, false)));
     let mut out = Vec::new();
     let mut visited = 0;
-    while let Some((r, device, mut shift)) = stack.pop() {
+    while let Some((r, device, mut shift, in_menu)) = stack.pop() {
         visited += 1;
         if visited > MAX_VISITED || out.len() >= MAX_ELEMENTS {
             break;
@@ -131,18 +136,21 @@ pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
             let s = if device { scale } else { 1.0 };
             let px = |v: i32| (v as f64 / s).round() as i32;
             let (x, y, w, h) = (px(x), px(y), px(w), px(h));
-            if role == ROLE_MENU && let Some(p) = win.popups.iter().find(|p| (p.2, p.3) == (w, h)) {
-                shift = Some((p.0 - x, p.1 - y));
+            if role == ROLE_MENU && let Some(i) = win.popups.iter().enumerate().position(|(i, p)| (p.2, p.3) == (w, h) && !used[i]) {
+                used[i] = true;
+                shift = Some((win.popups[i].0 - x, win.popups[i].1 - y));
             }
             let (x, y) = match shift {
                 Some((sx, sy)) => (x + sx, y + sy),
                 None => (x - dx, y - dy),
             };
-            out.push(Element { role: name, name: acc.name().await.unwrap_or_default(), x, y, w, h });
+            if shift.is_some() || !in_menu {
+                out.push(Element { role: name, name: acc.name().await.unwrap_or_default(), x, y, w, h });
+            }
         }
         if let Ok(children) = acc.get_children().await {
             let device = device || (chromium && role == ROLE_DOCUMENT_WEB);
-            stack.extend(children.into_iter().rev().map(|r| (r, device, shift)));
+            stack.extend(children.into_iter().rev().map(|r| (r, device, shift, in_menu)));
         }
     }
     Ok(Page { level, toolkit, elements: out })

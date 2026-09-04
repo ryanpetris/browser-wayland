@@ -100,10 +100,12 @@ the mechanism.
 - **Menus** live in their own popup surfaces, and toolkits report a menu's items relative to that
   surface, so they would land at the window's top-left. The window list therefore carries the open popups
   (`popups`, from `PopupManager::popups_for_surface`, positioned relative to the geometry like the
-  positioner defines them), and a `menu` node whose size equals an open popup's takes that popup's
-  position for itself and its subtree; a submenu matches its own popup the same way. GTK 3 hangs each
-  open menu off the application as a separate `window` toplevel rather than under the frame, so those are
-  walked too.
+  positioner defines them), and a `menu` node whose size equals a not yet matched open popup takes that
+  popup's position for itself and its subtree, each popup once. GTK 3 hangs each open menu off the
+  application as a separate borderless `window` toplevel rather than under the frame, so those are walked
+  too while the window has popups open, and their nodes are reported only once placed on a popup (an
+  application's other windows may have menus of their own). GTK 4 popovers and Firefox menus already
+  report window coordinates; their sizes include a shadow, so the size match leaves them alone.
 - **Getting trees at all.** GTK always connects to the bus. Firefox connects when the bus reports
   accessibility enabled or `GNOME_ACCESSIBILITY=1` is set; Qt has `QT_LINUX_ACCESSIBILITY_ALWAYS_ON`.
   Both variables are added to the `--exec` environment when the flag is on, and they propagate to

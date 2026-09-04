@@ -96,8 +96,9 @@ curl -o screen.png -H "Authorization: Bearer $T" http://host:8443/api/screenshot
 curl -s -H "Authorization: Bearer $T" http://host:8443/api/windows/3/elements | jq   # with --elements
 ```
 
-Each window reports `id`, `title`, `app_id`, `x11`, `pid`, its geometry `x y w h` in logical pixels, its
-stacking index `z` (`null` while minimized), `maximized`, `fullscreen`, `minimized`, `focused`, and
+Each window reports `id`, `title`, `app_id`, `x11`, `pid`, its geometry `x y w h` in logical pixels, where
+that geometry sits in the client's surface (`geo_x geo_y`), its open `popups` (`[x, y, w, h]` relative to
+the geometry), its stacking index `z` (`null` while minimized), `maximized`, `fullscreen`, `minimized`, `focused`, and
 `updated_ms`, the time of its last commit to the second. Ops: `activate`, `close`, `minimize`, `unminimize`, `maximize`,
 `unmaximize`, `fullscreen`, `unfullscreen`, `move` (`x`, `y`), `resize` (`w`, `h`), `spawn` (`cmd`, run
 with `sh -c` in the same environment as `--exec`). Requests are fire-and-forget; unknown ids are ignored.
