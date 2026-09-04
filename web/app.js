@@ -1,7 +1,7 @@
 // Viewer: decodes the H.264 stream with WebCodecs and forwards input.
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
-import { initDesktop, onWindows, control, getWindows, snapshot } from './desktop.js';
+import { initDesktop, onWindows, renderBorders, control, getWindows, snapshot } from './desktop.js';
 
 const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05, WINDOWS = 0x06;
 const HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A, CONTROL = 0x8B;
@@ -168,6 +168,7 @@ function onMessage(buf) {
       canvas.height = stream.height;
       resync();
       updateStatus();
+      renderBorders(); // the window list usually arrives before the first Config
       break;
     case CURSOR: {
       // The compositor doesn't draw the pointer; we do, with zero latency.

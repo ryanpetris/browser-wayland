@@ -36,9 +36,10 @@ pub fn window_id(window: &Window) -> u64 {
 }
 
 impl State {
+    /// Whole seconds: a window redrawing at 60 fps must not mean 60 window lists a second.
     pub fn touch_window(&self, window: &Window) {
         window.user_data().insert_if_missing(|| LastCommit(Cell::new(0)));
-        window.user_data().get::<LastCommit>().unwrap().0.set(self.clock.now().as_micros() / 1000);
+        window.user_data().get::<LastCommit>().unwrap().0.set(self.clock.now().as_micros() / 1_000_000 * 1000);
     }
 
     pub fn title_app_id(window: &Window) -> (String, String) {
@@ -198,7 +199,7 @@ fn readback<E: RenderElement<GlesRenderer>>(renderer: &mut GlesRenderer, element
     let (w, h) = (size.w as usize, size.h as usize);
     let stride = w * 4;
     let mut rgba = vec![0u8; stride * h];
-    // GL reads the framebuffer bottom-up unless the mapping says it already flipped it for us
+    // `flipped()` means row 0 is the top (GLES renders that way); otherwise GL's rows start at the bottom
     for y in 0..h {
         let src = if mapping.flipped() { y } else { h - 1 - y };
         rgba[y * stride..(y + 1) * stride].copy_from_slice(&data[src * stride..(src + 1) * stride]);

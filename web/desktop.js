@@ -14,7 +14,7 @@ export const snapshot = async (id, scale = 1) => (await fetch(snapshotUrl(id, sc
 export function initDesktop(send, size) {
   sendControl = send;
   streamSize = size;
-  document.getElementById('panelbtn').onclick = () => panel.classList.toggle('open');
+  document.getElementById('panelbtn').onclick = () => { panel.classList.toggle('open'); renderList(); };
   const borders = document.getElementById('borders');
   try { overlay.hidden = localStorage.getItem('bw.borders') !== '1'; } catch {}
   borders.onclick = () => {
@@ -64,6 +64,7 @@ function hue(s) {
 export const color = w => `hsl(${hue(w.app_id || w.title)} 70% 55%)`;
 
 function renderList() {
+  if (!panel.classList.contains('open')) return; // a hidden <img> still fetches its thumbnail
   const order = windows.slice().sort((a, b) => (a.minimized - b.minimized) || (b.z - a.z)); // top-most first, minimized last
   wins.replaceChildren(...order.map(w => {
     const row = document.createElement('div');
@@ -71,8 +72,8 @@ function renderList() {
     row.innerHTML = '<img class="thumb"><span class="dot"></span><span class="title"></span><span class="badge"></span>'
       + '<button title="Snapshot (PNG)">📷</button><button title="Maximize / restore">⤢</button><button title="Minimize / restore">⌄</button><button title="Close">✕</button>';
     row.querySelector('.dot').style.background = color(w);
-    // the cache key only changes every 2 s, so a busy window costs at most one render per 2 s
-    row.querySelector('.thumb').src = snapshotUrl(w.id, 0.12) + `&t=${Math.floor(w.updated_ms / 2000)}`;
+    // updated_ms has whole-second resolution, so a busy window costs at most one render per second
+    row.querySelector('.thumb').src = snapshotUrl(w.id, 0.12) + `&t=${w.updated_ms}`;
     const title = row.querySelector('.title');
     title.textContent = w.title || w.app_id || `#${w.id}`;
     title.title = `${w.app_id}${w.pid ? ' · pid ' + w.pid : ''} · ${w.w}×${w.h} at ${w.x},${w.y}`;

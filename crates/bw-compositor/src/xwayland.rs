@@ -76,7 +76,6 @@ impl State {
     /// Move/resize an X11 window and tell X about it (so its own coordinates stay right).
     fn place_x11(&mut self, window: &Window, surface: &X11Surface, rect: Rectangle<i32, Logical>) {
         self.space.map_element(window.clone(), rect.loc, true);
-        self.active = Some(window.clone());
         let _ = surface.configure(rect);
         self.dirty = true;
     }
@@ -96,12 +95,13 @@ impl XwmHandler for State {
             let _ = window.set_fullscreen(true);
             let geo = self.space.output_geometry(&self.output).unwrap_or_default();
             self.place_x11(&win, &window, geo);
-            return;
+        } else {
+            let n = self.space.elements().count() as i32 % 10;
+            let mut rect = window.geometry();
+            rect.loc = self.work_area().loc + smithay::utils::Point::from((40 + 30 * n, 40 + 30 * n));
+            self.place_x11(&win, &window, rect);
         }
-        let n = self.space.elements().count() as i32 % 10;
-        let mut rect = window.geometry();
-        rect.loc = self.work_area().loc + smithay::utils::Point::from((40 + 30 * n, 40 + 30 * n));
-        self.place_x11(&win, &window, rect);
+        self.active = Some(win); // mapped activated: that is what the desktop API reports as focused
     }
 
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, window: X11Surface) {
