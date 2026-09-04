@@ -128,17 +128,17 @@ pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
             continue;
         }
         let role = acc.get_role().await.unwrap_or(0);
+        let s = if device { scale } else { 1.0 };
+        let ext = extents(&conn, &r, s).await.ok().filter(|e| e.2 > 0 && e.3 > 0);
+        let mut matched = false;
         if let Some(name) = role_name(role)
-            && let Ok((x, y, w, h)) = proxy::<ComponentProxy>(&conn, &r).await?.get_extents(COORD_WINDOW).await
-            && w > 0
-            && h > 0
+            && let Some((x, y, w, h)) = ext
         {
-            let s = if device { scale } else { 1.0 };
-            let px = |v: i32| (v as f64 / s).round() as i32;
-            let (x, y, w, h) = (px(x), px(y), px(w), px(h));
+            // a menu in its own window (context menu): the menu node itself has the popup's size
             if role == ROLE_MENU && let Some(i) = win.popups.iter().enumerate().position(|(i, p)| (p.2, p.3) == (w, h) && !used[i]) {
                 used[i] = true;
                 shift = Some((win.popups[i].0 - x, win.popups[i].1 - y));
+                matched = true;
             }
             let (x, y) = match shift {
                 Some((sx, sy)) => (x + sx, y + sy),
@@ -149,8 +149,28 @@ pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
             }
         }
         if let Ok(children) = acc.get_children().await {
+            let mut child_shift = shift;
+            // a menubar menu: GTK 3 hangs the items straight off the menubar item, in the coordinates of the
+            // items' popup, so they fall outside the item; as a group they have the popup's width and about
+            // its height
+            if role == ROLE_MENU && !matched && let Some((mx, my, mw, mh)) = ext {
+                let mut union: Option<(i32, i32, i32, i32)> = None; // x0, y0, x1, y1
+                for c in &children {
+                    if let Ok((cx, cy, cw, ch)) = extents(&conn, c, s).await && cw > 0 && ch > 0 && cx.abs() < 1 << 20 && cy.abs() < 1 << 20 {
+                        union = Some(union.map_or((cx, cy, cx + cw, cy + ch), |u| (u.0.min(cx), u.1.min(cy), u.2.max(cx + cw), u.3.max(cy + ch))));
+                    }
+                }
+                if let Some((x0, y0, x1, y1)) = union
+                    && !(x0 >= mx && y0 >= my && x1 <= mx + mw && y1 <= my + mh)
+                    && let Some(i) = win.popups.iter().enumerate().position(|(i, p)| !used[i] && p.2 == x1 - x0 && (0..=16).contains(&(p.3 - (y1 - y0))))
+                {
+                    used[i] = true;
+                    let p = win.popups[i];
+                    child_shift = Some((p.0 - x0, p.1 + (p.3 - (y1 - y0)) / 2 - y0));
+                }
+            }
             let device = device || (chromium && role == ROLE_DOCUMENT_WEB);
-            stack.extend(children.into_iter().rev().map(|r| (r, device, shift, in_menu)));
+            stack.extend(children.into_iter().rev().map(|r| (r, device, child_shift, in_menu)));
         }
     }
     Ok(Page { level, toolkit, elements: out })
@@ -203,6 +223,13 @@ async fn a11y_bus() -> Result<Connection> {
         }
     };
     zbus::connection::Builder::address(addr.as_str())?.build().await.context("accessibility bus")
+}
+
+/// Window-relative extents in logical pixels (`scale` > 1 for Chromium web content, which reports device pixels).
+async fn extents(conn: &Connection, r: &Ref, scale: f64) -> Result<(i32, i32, i32, i32)> {
+    let (x, y, w, h) = proxy::<ComponentProxy>(conn, r).await?.get_extents(COORD_WINDOW).await?;
+    let px = |v: i32| (v as f64 / scale).round() as i32;
+    Ok((px(x), px(y), px(w), px(h)))
 }
 
 /// A proxy for one object; no property cache, so hundreds of short-lived proxies don't each subscribe to signals.
