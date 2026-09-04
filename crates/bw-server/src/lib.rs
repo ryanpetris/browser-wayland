@@ -93,8 +93,6 @@ pub(crate) struct Viewer {
     /// Per-stream message counters (every produced frame or packet, sent or dropped); wrap at u16.
     video_seq: u16,
     audio_seq: u16,
-    /// Generation whose token was rotated away: that session ends as "token rotated", not "replaced".
-    revoked: u64,
 }
 
 pub async fn run(
@@ -237,7 +235,7 @@ async fn api_token_rotate(headers: HeaderMap, State(app): State<Arc<App>>) -> Re
     let presented = headers.get(header::AUTHORIZATION).and_then(|a| a.to_str().ok()).and_then(|a| a.strip_prefix("Bearer ")).unwrap_or_default();
     match app.rotate_token(presented) {
         Ok(token) => (NO_STORE, Json(serde_json::json!({ "token": token }))).into_response(),
-        Err(e) => ApiError::Internal(format!("{e:#}")).into_response(),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -286,7 +284,6 @@ impl App {
             // The connected viewer authenticated with the old token: its session ends as "token rotated",
             // and the compositor hears what it would have on a disconnect.
             let mut v = self.viewer.lock().unwrap();
-            v.revoked = v.generation;
             v.generation += 1;
             if v.tx.take().is_some() {
                 let _ = self.commands.send(Command::ReleaseAllInput);

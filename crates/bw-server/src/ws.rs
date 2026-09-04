@@ -171,8 +171,9 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
             out = rx.recv() => match out {
                 Some(b) => if socket.send(Message::Binary(b)).await.is_err() { break },
                 None => {
-                    // replaced by a newer viewer (or the token was rotated): tell the page so it stops retrying
-                    let (code, reason) = if app.viewer.lock().unwrap().revoked == my_gen { (UNAUTHORIZED, "token rotated") } else { (REPLACED, "replaced by another viewer") };
+                    // replaced by a newer viewer, or the token this session came in with was rotated away:
+                    // tell the page so it stops retrying (or asks for the new token)
+                    let (code, reason) = if app.token_ok(&token) { (REPLACED, "replaced by another viewer") } else { (UNAUTHORIZED, "token rotated") };
                     let _ = socket.send(Message::Close(Some(CloseFrame { code, reason: reason.into() }))).await;
                     break;
                 }
