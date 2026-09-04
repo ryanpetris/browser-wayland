@@ -93,6 +93,7 @@ curl -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
 curl -X POST ... /api/control -d '{"op":"spawn","cmd":"firefox"}'             # start a program
 curl -o w.png -H "Authorization: Bearer $T" 'http://host:8443/api/windows/3/snapshot.png?scale=0.5'
 curl -o screen.png -H "Authorization: Bearer $T" http://host:8443/api/screenshot.png
+curl -s -H "Authorization: Bearer $T" http://host:8443/api/windows/3/elements | jq   # with --elements
 ```
 
 Each window reports `id`, `title`, `app_id`, `x11`, `pid`, its geometry `x y w h` in logical pixels, its
@@ -103,10 +104,19 @@ with `sh -c` in the same environment as `--exec`). Requests are fire-and-forget;
 Snapshots are lossless PNGs of a window's own buffers, so they include covered and minimized windows;
 `scale` (0.05 to 2) is relative to the output scale and applies to windows only.
 
+With `--elements`, `/api/windows/{id}/elements` lists a window's UI elements (buttons, links, text fields,
+tabs, menu items, …) with role, name and rectangle relative to the window, so a script or an agent can
+target a control instead of interpreting pixels. It reads the toolkits' accessibility trees over the D-Bus
+session browser-wayland was started in (`dbus-run-session -- browser-wayland --elements …` if there is
+none; the container does this). GTK and Qt applications and Firefox publish their trees when started from
+`--exec` or `spawn`; Chromium and Electron apps need `--force-renderer-accessibility`. Without the flag
+the route answers `501`, without a bus `503`.
+
 The viewer page uses the same data over its WebSocket: the ☰ button opens a window list with thumbnails
 and maximize/minimize/close buttons (click a row to bring the window forward, type in the box to start a
-program), and ▢ draws colour-coded borders with the app id over every window. In the browser console,
-`bw.windows()`, `bw.activate(id)`, `bw.control({...})`, `bw.spawn(cmd)` and `bw.snapshot(id)` do the same.
+program), ▢ draws colour-coded borders with the app id over every window, and ⌖ outlines the focused
+window's elements. In the browser console, `bw.windows()`, `bw.activate(id)`, `bw.control({...})`,
+`bw.spawn(cmd)`, `bw.snapshot(id)` and `bw.elements(id)` do the same.
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,

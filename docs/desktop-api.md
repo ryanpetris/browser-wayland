@@ -1,8 +1,8 @@
 # Desktop API and browser desktop UI
 
 The compositor is the window manager, so it exposes what it knows and can do: the window list with
-state and geometry, control of windows and process launching, PNG snapshots of windows, and a small
-desktop UI in the viewer built on the same data. Wire formats and routes are in
+state and geometry, control of windows and process launching, PNG snapshots of windows, the UI elements
+of a window, and a small desktop UI in the viewer built on the same data. Wire formats and routes are in
 [protocol.md](protocol.md); this document covers the design.
 
 ## Decisions
@@ -18,6 +18,7 @@ desktop UI in the viewer built on the same data. Wire formats and routes are in
 | Snapshot content | The window's xdg geometry (shadows clipped), popups included, minimized windows included, rendered offscreen at `scale` × output scale. The full screenshot uses the same path with the whole space at the output's own scale. |
 | Snapshot format | PNG, straight alpha, encoded on the server's blocking pool; the compositor only renders and reads back. JPEG/WebP later if size matters. |
 | Concurrency | One snapshot in flight; more get `429`. A queued request can't be cancelled once it is on the compositor's channel. |
+| Elements | Behind `--elements`; read live from AT-SPI per request, never cached; the compositor is not involved beyond exporting the geometry offset. |
 
 ## Window list
 
@@ -65,6 +66,44 @@ GLES renderer:
 The HTTP handler sends `Command::Snapshot` with a oneshot reply, waits at most two seconds, encodes the
 PNG with `spawn_blocking`, and answers `image/png` with `Cache-Control: no-store`.
 
+## UI elements
+
+A Wayland compositor sees pixel buffers and a surface tree, never widgets. What does know about buttons,
+links and text fields is the toolkit, and every major toolkit publishes that as an accessibility tree
+over AT-SPI (GTK 3 and 4, Qt, Firefox, Chromium). `elements.rs` reads it so that scripts and agents can
+target an element instead of interpreting a screenshot; the feature is named for what it returns, not for
+the mechanism.
+
+- **Bus.** `AT_SPI_BUS_ADDRESS`, else the session bus (`org.a11y.Bus.GetAddress`) of the D-Bus session
+  browser-wayland runs in. Nothing is launched: without a session the route answers `503`, and the
+  container's start script already wraps everything in `dbus-run-session`. Hand-declared `zbus` proxies
+  for the four interfaces used (`Accessible`, `Component`, `Application`, the launcher), property caching
+  off so that hundreds of short-lived proxies don't each subscribe to signals.
+- **Matching.** The registry root lists the applications; the pid behind each connection (asked from the
+  bus) is compared with the window's `pid`. Among the application's toplevels the one named like the
+  window title wins; a lone toplevel needs no match. That gives the `level`: `none`, `app`, `frame`
+  (toplevel without children) or `full`. AT-SPI has no surface handle, so title is the best key there is.
+- **Walk.** Depth first from the toplevel, in document order; a node whose state lacks SHOWING is skipped
+  with its whole subtree (this cuts a Firefox window from about 1700 nodes to about 400). Nodes whose
+  role is interactive (buttons, toggles, links, text fields, menus, tabs, sliders, list and tree items,
+  scroll bars, headings) and whose extents are non-empty are returned; at most 500 from at most 3000
+  visited. One request takes tens of milliseconds locally; the handler gives up after 2 s.
+- **Coordinates.** Only window-relative extents are usable: the screen variant is all zeros on Wayland,
+  since clients don't know where they are. Toolkits disagree on what "window" means. GTK 4 measures from
+  the xdg geometry; GTK 3 and Chromium from the whole surface including the client-side shadow; Firefox
+  from the surface too, but reports its toplevel at the geometry's position. So the window list carries
+  the geometry's offset inside the surface (`geo_x`, `geo_y`, from `Window::geometry().loc`) and the rule
+  is: if the toplevel's extents have the geometry's size, its position is the origin; otherwise the
+  surface is, and the offset is subtracted. Verified pixel-exact against window snapshots for all four.
+- **Chromium's web content** (everything under a `document web` node) comes in device pixels at the
+  output scale while its own toolbar is logical; those subtrees are divided by the stream's scale.
+- **Getting trees at all.** GTK always connects to the bus. Firefox connects when the bus reports
+  accessibility enabled or `GNOME_ACCESSIBILITY=1` is set; Qt has `QT_LINUX_ACCESSIBILITY_ALWAYS_ON`.
+  Both variables are added to the `--exec` environment when the flag is on, and they propagate to
+  everything a panel launches. Chromium registers only an empty toplevel unless started with
+  `--force-renderer-accessibility` (the bus's screen-reader flag does nothing for it), so that stays a
+  documented requirement rather than something browser-wayland tries to inject.
+
 ## Browser UI (`web/desktop.js`)
 
 - **Window panel** (☰ button, hidden in fullscreen): one row per window, top-most first, minimized
@@ -81,7 +120,12 @@ PNG with `spawn_blocking`, and answers `image/png` with `Cache-Control: no-store
   from the app id (the same hue as the row's dot), thicker for the focused window, app id label in the
   corner. Redrawn on every list, on resize, and when the stream config arrives (the list usually comes
   first).
-- `window.bw` gains `windows()`, `control()`, `activate()`, `spawn()`, `snapshot()`.
+- **Elements** (⌖ button, remembered in `localStorage`): the focused window's elements as thin
+  rectangles coloured by role, positioned like the borders from the window's current geometry, so a
+  moving window needs no refetch. Fetched when the focused window's id, title or `updated_ms` changes,
+  300 ms after the last change, one request at a time with a superseded answer dropped. A note under
+  the window says why there are none (`501`, `503`, or the `level`).
+- `window.bw` gains `windows()`, `control()`, `activate()`, `spawn()`, `snapshot()`, `elements()`.
 
 ## Security model
 
@@ -99,3 +143,5 @@ moving it out (sessionStorage, a paste box, rotation) is future work.
 - New windows are activated but don't take the keyboard until clicked; the API exposes this
   pre-existing behaviour as `focused: true` on a window without keyboard focus.
 - GL failures in a snapshot answer `404` rather than `500`.
+- Elements: acting on an element through AT-SPI (activate, set text) instead of clicking its rectangle;
+  element states (checked, focused, disabled); Flatpak applications, whose pid on the bus is the sandbox's.

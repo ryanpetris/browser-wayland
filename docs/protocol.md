@@ -68,6 +68,7 @@ curl -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
      https://host:8443/api/control -d '{"op":"spawn","cmd":"firefox"}'
 curl -o w.png -H "Authorization: Bearer $T" 'https://host:8443/api/windows/3/snapshot.png?scale=0.5'
 curl -o screen.png -H "Authorization: Bearer $T" https://host:8443/api/screenshot.png
+curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements      # needs --elements
 ```
 
 | Route | Result |
@@ -76,6 +77,7 @@ curl -o screen.png -H "Authorization: Bearer $T" https://host:8443/api/screensho
 | `POST /api/control` | Body: a control message. `202 Accepted`; fire-and-forget. |
 | `GET /api/windows/{id}/snapshot.png?scale=` | PNG of that window. `scale` 0.05–2, relative to the output scale, default 1. `404` unknown id, `429` another snapshot is in flight, `503` the compositor didn't answer within 2 s. |
 | `GET /api/screenshot.png` | PNG of the whole output at its own scale (layers included, cursor excluded). |
+| `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` no D-Bus session or accessibility bus (body: `{"error": …}`), `404` unknown id. |
 
 Status codes: `401` missing or wrong bearer token; the JSON body is limited to 2 MiB by axum.
 
@@ -83,7 +85,7 @@ Status codes: `401` missing or wrong bearer token; the JSON body is limited to 2
 
 ```json
 {"id": 3, "title": "…", "app_id": "org.gnome.Calculator", "x11": false, "pid": 4242,
- "x": 70, "y": 70, "w": 360, "h": 616, "z": 1,
+ "x": 70, "y": 70, "w": 360, "h": 616, "geo_x": 26, "geo_y": 23, "z": 1,
  "maximized": false, "fullscreen": false, "minimized": false, "focused": true,
  "updated_ms": 34044000}
 ```
@@ -91,9 +93,27 @@ Status codes: `401` missing or wrong bearer token; the JSON body is limited to 2
 - `id` is stable for the window's life and never reused.
 - `app_id` is the X11 `WM_CLASS` for X11 windows; `pid` comes from the socket credentials (Wayland) or `_NET_WM_PID` (X11), when known.
 - `x y w h` is the xdg geometry in logical pixels. For a minimized window it is where the window will come back.
+- `geo_x geo_y` is where that geometry sits inside the client's own surface (the width of its client-side shadow), 0 for X11 windows.
 - `z` is the stacking index, 0 = bottom, over the listed windows; `null` while minimized. Menus and tooltips (X11 override-redirect) are not listed.
 - `focused` is the compositor's intent: the window last activated by a click, the taskbar or the API.
 - `updated_ms` is the time of the window's last commit on the compositor's monotonic clock, whole seconds, so a client redrawing at 60 fps does not produce sixty lists a second.
+
+### Elements object
+
+```json
+{"level": "full", "toolkit": "GTK",
+ "elements": [{"role": "button", "name": "Save As…", "x": 549, "y": 47, "w": 107, "h": 34}, …]}
+```
+
+- `level`: `none` (the application publishes no tree), `app` (it does, but no toplevel of it matches this
+  window), `frame` (the toplevel is there but empty; Chromium without `--force-renderer-accessibility`),
+  `full`. `elements` is empty below `full`.
+- `toolkit` as the application names it (`GTK`, `gtk`, `Gecko`, `Chromium`, …), when it says.
+- `role` is one of `button`, `toggle`, `switch`, `checkbox`, `radio`, `link`, `entry`, `text`,
+  `password`, `combobox`, `menu`, `menuitem`, `tab`, `slider`, `spinbutton`, `listitem`, `treeitem`,
+  `scrollbar`, `heading`. Containers and static text are not listed.
+- `x y w h` are logical pixels relative to the window's `x y`, so `x + window.x` is where to click. Only
+  elements that are showing and have a size are listed; at most 500, from a walk of at most 3000 nodes.
 
 ### Control message
 
