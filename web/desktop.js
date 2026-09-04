@@ -56,11 +56,11 @@ export function onWindows(list) {
 const focusedWindow = () => windows.find(w => w.focused && !w.minimized);
 
 // The focused window's elements, fetched again when anything the answer depends on changed: the focus,
-// the title, the content (updated_ms, whole seconds), the geometry or the stream scale (Chromium's web
-// content is scaled by it). The 300 ms delay merges a burst of list updates into one request.
+// the title, the content (updated_ms, whole seconds), the geometry, the open popups or the stream scale
+// (Chromium's web content is scaled by it). The 300 ms delay merges a burst of list updates into one request.
 export function fetchElements() {
   const f = focusedWindow();
-  const key = elementsOn && f ? `${f.id}/${f.title}/${f.updated_ms}/${f.w}x${f.h}+${f.geo_x}+${f.geo_y}@${streamSize()?.scale}` : '';
+  const key = elementsOn && f ? `${f.id}/${f.title}/${f.updated_ms}/${f.w}x${f.h}+${f.geo_x}+${f.geo_y}@${streamSize()?.scale}/${JSON.stringify(f.popups)}` : '';
   if (key === elementsKey) return;
   elementsKey = key;
   clearTimeout(elementsTimer);

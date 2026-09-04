@@ -78,6 +78,8 @@ pub struct WindowInfo {
     /// where the geometry sits inside the client's surface (its shadow margin); 0 for X11
     pub geo_x: i32,
     pub geo_y: i32,
+    /// open popups (menus, combo lists) as `(x, y, w, h)` relative to the geometry; Wayland only
+    pub popups: Vec<(i32, i32, i32, i32)>,
     /// stacking index, 0 = bottom; `None` while minimized
     pub z: Option<u32>,
     pub maximized: bool,

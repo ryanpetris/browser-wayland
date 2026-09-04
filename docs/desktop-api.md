@@ -97,6 +97,13 @@ the mechanism.
   surface is, and the offset is subtracted. Verified pixel-exact against window snapshots for all four.
 - **Chromium's web content** (everything under a `document web` node) comes in device pixels at the
   output scale while its own toolbar is logical; those subtrees are divided by the stream's scale.
+- **Menus** live in their own popup surfaces, and toolkits report a menu's items relative to that
+  surface, so they would land at the window's top-left. The window list therefore carries the open popups
+  (`popups`, from `PopupManager::popups_for_surface`, positioned relative to the geometry like the
+  positioner defines them), and a `menu` node whose size equals an open popup's takes that popup's
+  position for itself and its subtree; a submenu matches its own popup the same way. GTK 3 hangs each
+  open menu off the application as a separate `window` toplevel rather than under the frame, so those are
+  walked too.
 - **Getting trees at all.** GTK always connects to the bus. Firefox connects when the bus reports
   accessibility enabled or `GNOME_ACCESSIBILITY=1` is set; Qt has `QT_LINUX_ACCESSIBILITY_ALWAYS_ON`.
   Both variables are added to the `--exec` environment when the flag is on, and they propagate to
@@ -123,7 +130,7 @@ the mechanism.
 - **Elements** (⌖ button, remembered in `localStorage`): the focused window's elements as thin
   rectangles coloured by role, positioned like the borders from the window's current geometry, so a
   moving window needs no refetch. Fetched when the focused window's id, title, `updated_ms`, geometry
-  or the stream scale changes, 300 ms after the last change; an answer that no longer matches the current
+  or the stream scale changes, or a popup opens or closes, 300 ms after the last change; an answer that no longer matches the current
   state is dropped, a failed request is retried on the next list update. A note under
   the window says why there are none (`501`, `503`, or the `level`).
 - `window.bw` gains `windows()`, `control()`, `activate()`, `spawn()`, `snapshot()`, `elements()`.

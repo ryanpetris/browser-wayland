@@ -85,7 +85,7 @@ Status codes: `401` missing or wrong bearer token; the JSON body is limited to 2
 
 ```json
 {"id": 3, "title": "…", "app_id": "org.gnome.Calculator", "x11": false, "pid": 4242,
- "x": 70, "y": 70, "w": 360, "h": 616, "geo_x": 26, "geo_y": 23, "z": 1,
+ "x": 70, "y": 70, "w": 360, "h": 616, "geo_x": 26, "geo_y": 23, "popups": [[12, 40, 200, 310]], "z": 1,
  "maximized": false, "fullscreen": false, "minimized": false, "focused": true,
  "updated_ms": 34044000}
 ```
@@ -94,6 +94,7 @@ Status codes: `401` missing or wrong bearer token; the JSON body is limited to 2
 - `app_id` is the X11 `WM_CLASS` for X11 windows; `pid` comes from the socket credentials (Wayland) or `_NET_WM_PID` (X11), when known.
 - `x y w h` is the xdg geometry in logical pixels. For a minimized window it is where the window will come back.
 - `geo_x geo_y` is where that geometry sits inside the client's own surface (the width of its client-side shadow), 0 for X11 windows.
+- `popups` lists the window's open popups (menus, combo box lists, tooltips) as `[x, y, w, h]` relative to `x y`; always empty for X11 windows.
 - `z` is the stacking index, 0 = bottom, over the listed windows; `null` while minimized. Menus and tooltips (X11 override-redirect) are not listed.
 - `focused` is the compositor's intent: the window last activated by a click, the taskbar or the API.
 - `updated_ms` is the time of the window's last commit on the compositor's monotonic clock, whole seconds, so a client redrawing at 60 fps does not produce sixty lists a second.
@@ -114,6 +115,7 @@ Status codes: `401` missing or wrong bearer token; the JSON body is limited to 2
   `scrollbar`, `heading`. Containers and static text are not listed.
 - `x y w h` are logical pixels relative to the window's `x y`, so `x + window.x` is where to click. Only
   elements that are showing and have a size are listed; at most 500, from a walk of at most 3000 nodes.
+  Items of an open menu are placed at the menu's popup (see `popups` on the window object).
 
 ### Control message
 

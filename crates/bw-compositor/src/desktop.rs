@@ -16,7 +16,7 @@ use smithay::{
             gles::{GlesRenderer, GlesTexture},
         },
     },
-    desktop::{Window, WindowSurface, space::space_render_elements},
+    desktop::{Window, WindowSurface, space::space_render_elements, PopupManager},
     reexports::{wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState, wayland_server::Resource},
     utils::{Buffer, Physical, Rectangle, SERIAL_COUNTER, Scale, Size, Transform},
     wayland::{compositor::with_states, shell::xdg::XdgToplevelSurfaceData},
@@ -59,10 +59,16 @@ impl State {
             let loc = self.minimized.iter().find(|(w, _)| w == window).map(|(_, l)| *l).unwrap_or_default();
             Rectangle::new(loc, window.geometry().size)
         });
+        let mut popups = Vec::new();
         let (x11, pid, maximized, fullscreen) = match window.underlying_surface() {
             WindowSurface::Wayland(t) => {
                 let st = t.current_state().states;
                 let pid = t.wl_surface().client().and_then(|c| c.get_credentials(&self.dh).ok()).map(|c| c.pid as u32);
+                // a popup's location is relative to the parent's geometry, like our x/y
+                popups.extend(PopupManager::popups_for_surface(t.wl_surface()).map(|(p, loc)| {
+                    let g = p.geometry();
+                    (loc.x, loc.y, g.size.w, g.size.h)
+                }));
                 (false, pid, st.contains(XdgState::Maximized), st.contains(XdgState::Fullscreen))
             }
             WindowSurface::X11(x) => (true, x.pid(), x.is_maximized(), x.is_fullscreen()),
@@ -79,6 +85,7 @@ impl State {
             h: geo.size.h,
             geo_x: window.geometry().loc.x,
             geo_y: window.geometry().loc.y,
+            popups,
             z,
             maximized,
             fullscreen,

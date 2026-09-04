@@ -11,6 +11,8 @@ use zbus::{Connection, names::BusName, proxy, proxy::CacheProperties, zvariant::
 type Ref = (String, OwnedObjectPath);
 
 const COORD_WINDOW: u32 = 1;
+const ROLE_MENU: u32 = 33;
+const ROLE_WINDOW: u32 = 69;
 const ROLE_DOCUMENT_WEB: u32 = 95;
 const STATE_SHOWING: u32 = 25;
 const MAX_VISITED: usize = 3000;
@@ -79,30 +81,35 @@ pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
     }
     let Some(app) = app else { return Ok(none) };
     let toolkit = proxy::<ApplicationProxy>(&conn, &app).await?.toolkit_name().await.ok();
-    let mut frame = None;
-    let frames: Vec<Ref> = proxy::<AccessibleProxy>(&conn, &app).await?.get_children().await?.into_iter().filter(|r| !is_null(r)).collect();
-    if frames.len() == 1 {
-        frame = frames.into_iter().next();
-    } else {
-        for f in frames {
-            if proxy::<AccessibleProxy>(&conn, &f).await?.name().await.ok().as_deref() == Some(win.title.as_str()) {
-                frame = Some(f);
-                break;
-            }
+    // The application's toplevels: real windows (frame, dialog) and, in GTK 3, one `window` per open menu.
+    let (mut frames, mut popups) = (Vec::new(), Vec::new());
+    for r in proxy::<AccessibleProxy>(&conn, &app).await?.get_children().await?.into_iter().filter(|r| !is_null(r)) {
+        let acc = proxy::<AccessibleProxy>(&conn, &r).await?;
+        if acc.get_role().await.ok() == Some(ROLE_WINDOW) {
+            popups.push(r);
+        } else {
+            frames.push((r, acc.name().await.unwrap_or_default()));
         }
     }
+    let frame = match frames.len() {
+        1 => frames.pop().map(|(r, _)| r),
+        _ => frames.into_iter().find(|(_, name)| *name == win.title).map(|(r, _)| r),
+    };
     let Some(frame) = frame else { return Ok(Page { level: "app", toolkit, elements: vec![] }) };
     let (dx, dy) = origin(proxy::<ComponentProxy>(&conn, &frame).await?.get_extents(COORD_WINDOW).await?, win);
-    let children = proxy::<AccessibleProxy>(&conn, &frame).await?.get_children().await?;
+    let mut children = proxy::<AccessibleProxy>(&conn, &frame).await?.get_children().await?;
     let level = if children.is_empty() { "frame" } else { "full" };
+    children.extend(popups);
 
     // depth-first in document order; a subtree that isn't showing is skipped whole. The flag marks
-    // Chromium web content, whose extents are in device pixels (everything else is logical).
+    // Chromium web content, whose extents are in device pixels (everything else is logical). The shift
+    // places an open menu: toolkits report its items relative to the menu's own popup surface, so a menu
+    // node with the size of an open popup gets that popup's position for itself and its subtree.
     let chromium = toolkit.as_deref() == Some("Chromium");
-    let mut stack: Vec<(Ref, bool)> = children.into_iter().rev().map(|r| (r, false)).collect();
+    let mut stack: Vec<(Ref, bool, Option<(i32, i32)>)> = children.into_iter().rev().map(|r| (r, false, None)).collect();
     let mut out = Vec::new();
     let mut visited = 0;
-    while let Some((r, device)) = stack.pop() {
+    while let Some((r, device, mut shift)) = stack.pop() {
         visited += 1;
         if visited > MAX_VISITED || out.len() >= MAX_ELEMENTS {
             break;
@@ -116,18 +123,26 @@ pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
             continue;
         }
         let role = acc.get_role().await.unwrap_or(0);
-        if let Some(role) = role_name(role)
+        if let Some(name) = role_name(role)
             && let Ok((x, y, w, h)) = proxy::<ComponentProxy>(&conn, &r).await?.get_extents(COORD_WINDOW).await
             && w > 0
             && h > 0
         {
             let s = if device { scale } else { 1.0 };
             let px = |v: i32| (v as f64 / s).round() as i32;
-            out.push(Element { role, name: acc.name().await.unwrap_or_default(), x: px(x) - dx, y: px(y) - dy, w: px(w), h: px(h) });
+            let (x, y, w, h) = (px(x), px(y), px(w), px(h));
+            if role == ROLE_MENU && let Some(p) = win.popups.iter().find(|p| (p.2, p.3) == (w, h)) {
+                shift = Some((p.0 - x, p.1 - y));
+            }
+            let (x, y) = match shift {
+                Some((sx, sy)) => (x + sx, y + sy),
+                None => (x - dx, y - dy),
+            };
+            out.push(Element { role: name, name: acc.name().await.unwrap_or_default(), x, y, w, h });
         }
         if let Ok(children) = acc.get_children().await {
             let device = device || (chromium && role == ROLE_DOCUMENT_WEB);
-            stack.extend(children.into_iter().rev().map(|r| (r, device)));
+            stack.extend(children.into_iter().rev().map(|r| (r, device, shift)));
         }
     }
     Ok(Page { level, toolkit, elements: out })
@@ -194,7 +209,7 @@ mod tests {
     fn win(w: i32, h: i32, geo_x: i32, geo_y: i32) -> WindowInfo {
         WindowInfo {
             id: 1, title: String::new(), app_id: String::new(), x11: false, pid: None,
-            x: 0, y: 0, w, h, geo_x, geo_y, z: Some(0), maximized: false, fullscreen: false, minimized: false, focused: true, updated_ms: 0,
+            x: 0, y: 0, w, h, geo_x, geo_y, popups: vec![], z: Some(0), maximized: false, fullscreen: false, minimized: false, focused: true, updated_ms: 0,
         }
     }
 
