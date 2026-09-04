@@ -538,7 +538,13 @@ impl ServerDndGrabHandler for State {
     fn send(&mut self, _mime_type: String, _fd: OwnedFd, _seat: Seat<Self>) {}
 }
 
-impl OutputHandler for State {}
+impl OutputHandler for State {
+    fn output_bound(&mut self, _output: smithay::output::Output, wl_output: WlOutput) {
+        // a panel that binds wl_output after our globals still learns which output its workspace and windows are on
+        self.workspaces.output_bound(&wl_output);
+        self.foreign.output_bound(&wl_output);
+    }
+}
 
 impl DrmSyncobjHandler for State {
     fn drm_syncobj_state(&mut self) -> Option<&mut DrmSyncobjState> {

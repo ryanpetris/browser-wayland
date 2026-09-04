@@ -8,12 +8,28 @@ use smithay::reexports::{
         ext_workspace_handle_v1::{self as handle, ExtWorkspaceHandleV1},
         ext_workspace_manager_v1::{self as manager, ExtWorkspaceManagerV1},
     },
-    wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource},
+    wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, protocol::wl_output::WlOutput},
 };
 
 use crate::State;
 
 pub const VERSION: u32 = 1;
+
+/// The live groups, so a client that binds `wl_output` after the manager still gets `output_enter`.
+#[derive(Default)]
+pub struct Workspaces {
+    groups: Vec<(ExtWorkspaceManagerV1, ExtWorkspaceGroupHandleV1)>,
+}
+
+impl Workspaces {
+    pub fn output_bound(&mut self, wl_output: &WlOutput) {
+        self.groups.retain(|(m, g)| m.is_alive() && g.is_alive());
+        for (manager, group) in self.groups.iter().filter(|(m, _)| m.client().is_some_and(|c| Some(c) == wl_output.client())) {
+            group.output_enter(wl_output);
+            manager.done();
+        }
+    }
+}
 
 impl GlobalDispatch<ExtWorkspaceManagerV1, ()> for State {
     fn bind(state: &mut Self, dh: &DisplayHandle, client: &Client, resource: New<ExtWorkspaceManagerV1>, _: &(), data_init: &mut DataInit<'_, Self>) {
@@ -37,6 +53,7 @@ impl GlobalDispatch<ExtWorkspaceManagerV1, ()> for State {
         ws.capabilities(handle::WorkspaceCapabilities::empty());
         group.workspace_enter(&ws);
         manager.done();
+        state.workspaces.groups.push((manager, group));
     }
 }
 

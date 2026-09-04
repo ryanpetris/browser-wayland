@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use smithay::{
+    reexports::wayland_server::protocol::wl_output::WlOutput,
     desktop::{Window, WindowSurface},
     output::Output,
     reexports::{
@@ -54,6 +55,16 @@ fn new_handle(dh: &DisplayHandle, output: &Output, manager: &ZwlrForeignToplevel
     h.state(info.states.clone());
     h.done();
     Some(h)
+}
+
+impl ForeignToplevels {
+    /// A client bound `wl_output` after its handles were made: tell it the windows are on that output.
+    pub fn output_bound(&self, wl_output: &WlOutput) {
+        for h in self.windows.values().flat_map(|e| &e.handles).filter(|h| h.client().is_some_and(|c| Some(c) == wl_output.client())) {
+            h.output_enter(wl_output);
+            h.done();
+        }
+    }
 }
 
 impl State {

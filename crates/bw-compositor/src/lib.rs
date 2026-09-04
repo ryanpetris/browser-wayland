@@ -146,6 +146,7 @@ pub struct State {
     /// Minimized windows with where they come back and their stacking index at the time.
     pub minimized: Vec<(Window, Point<i32, Logical>, usize)>,
     pub foreign: foreign_toplevel::ForeignToplevels,
+    pub workspaces: workspace::Workspaces,
     /// The window `focus_window` last activated.
     pub active: Option<Window>,
     /// What the viewer was last told (desktop API).
@@ -275,6 +276,7 @@ impl State {
             minimized: Vec::new(),
             panels_hidden: false,
             foreign: Default::default(),
+            workspaces: Default::default(),
             active: None,
             last_windows: Vec::new(),
             seat_state,
