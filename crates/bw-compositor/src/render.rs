@@ -3,11 +3,13 @@ use std::{os::fd::AsFd, time::{Duration, Instant}};
 use anyhow::{Context, Result};
 use bw_core::DmabufFrame;
 use smithay::{
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    wayland::compositor::SurfaceData,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     desktop::Window,
     utils::{Logical, Point},
     backend::allocator::Buffer as _,
-    backend::renderer::{Bind, utils::with_renderer_surface_state, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
+    backend::renderer::{Bind, utils::with_renderer_surface_state, element::{AsRenderElements, Id, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
     desktop::{
         WindowSurface, layer_map_for_output,
         utils::{OutputPresentationFeedback, send_frames_surface_tree, surface_presentation_feedback_flags_from_states},
@@ -106,13 +108,16 @@ impl State {
         self.last_render = Instant::now();
 
         let now = self.clock.now();
-        // wp_presentation: clients that asked learn when this frame went out (or that it didn't)
+        // wp_presentation: clients that asked learn when this frame went out (or that it didn't). Only
+        // surfaces that were actually drawn (not occluded, not a panel hidden under a fullscreen window).
         let mut feedback = OutputPresentationFeedback::new(&self.output);
+        let drawn = |s: &WlSurface, _: &SurfaceData| states.element_was_presented(Id::from_wayland_resource(s)).then(|| self.output.clone());
+        let flags = |s: &WlSurface, _: &SurfaceData| surface_presentation_feedback_flags_from_states(s, &states);
         for window in self.space.elements() {
-            window.take_presentation_feedback(&mut feedback, |_, _| Some(self.output.clone()), |s, _| surface_presentation_feedback_flags_from_states(s, &states));
+            window.take_presentation_feedback(&mut feedback, drawn, flags);
         }
         for layer in layer_map_for_output(&self.output).layers() {
-            layer.take_presentation_feedback(&mut feedback, |_, _| Some(self.output.clone()), |s, _| surface_presentation_feedback_flags_from_states(s, &states));
+            layer.take_presentation_feedback(&mut feedback, drawn, flags);
         }
         for window in self.space.elements() {
             window.send_frame(&self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
@@ -135,15 +140,23 @@ impl State {
             feedback.discarded(); // rendered, but nothing went out
             return Ok(()); // nothing new to show (or nobody watching): don't encode
         }
-        // handed to the encoder: the closest thing to "presented" there is without a display
-        feedback.presented(now, Refresh::Fixed(self.frame_interval), self.frame_seq, wp_presentation_feedback::Kind::empty());
+
         self.gpu.swapchain.submitted(&slot);
         slot.userdata().insert_if_missing_threadsafe(|| SlotId(self.frame_seq as u32));
         let slot_id = slot.userdata().get::<SlotId>().unwrap().0;
         self.frame_seq += 1;
 
+        let fd = dmabuf.handles().next().context("dmabuf has no plane").and_then(|fd| fd.as_fd().try_clone_to_owned().context("dup dmabuf fd"));
+        let fd = match fd {
+            Ok(fd) => fd,
+            Err(e) => {
+                feedback.discarded();
+                return Err(e);
+            }
+        };
+        let now = self.clock.now(); // after the GPU wait: when the frame really left
         let submitted = self.sink.submit(DmabufFrame {
-            fd: dmabuf.handles().next().context("dmabuf has no plane")?.as_fd().try_clone_to_owned()?,
+            fd,
             width: self.geometry.width_px,
             height: self.geometry.height_px,
             fourcc: self.gpu.fourcc as u32,
@@ -159,11 +172,14 @@ impl State {
             Ok(()) => {
                 self.dirty = false;
                 self.force_full_frame = false;
+                // the encoder has it: the closest thing to "presented" without a display; no MSC, so seq 0
+                feedback.presented(now, Refresh::Fixed(self.frame_interval), 0, wp_presentation_feedback::Kind::empty());
             }
             Err(e) => {
                 // The damage tracker already advanced, so the retry must redraw everything.
                 tracing::warn!("frame not encoded: {e}");
                 self.force_full_frame = true;
+                feedback.discarded();
             }
         }
         Ok(())
