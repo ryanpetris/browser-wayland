@@ -116,7 +116,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         loop {
             match socket.recv().await {
                 Some(Ok(Message::Binary(b))) => {
-                    let t = std::str::from_utf8(&b[1..]).unwrap_or("");
+                    let t = std::str::from_utf8(b.get(1..).unwrap_or_default()).unwrap_or("");
                     return (b.first() == Some(&protocol::AUTH) && app.token_ok(t)).then(|| t.to_string());
                 }
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return None,
