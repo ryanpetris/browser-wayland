@@ -93,7 +93,7 @@ pub(crate) struct Viewer {
     /// Per-stream message counters (every produced frame or packet, sent or dropped); wrap at u16.
     video_seq: u16,
     audio_seq: u16,
-    /// Last clipboard text a desktop application set (replayed to a new viewer, served on the API).
+    /// The last clipboard text, from an application, the browser or the API (served on the API; not replayed to a viewer).
     clipboard: Option<String>,
 }
 

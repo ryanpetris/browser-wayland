@@ -131,7 +131,7 @@ Xwayland path in `xwayland.rs`), the compositor asks the owner for the text thro
 loop idle (the request is deferred out of the selection handler and any read still in progress is
 dropped), reads it on the event loop (calloop `Generic` on the non-blocking read end, 1 MiB cap) and
 sends `Event::Clipboard`; the server keeps the last text for `GET /api/clipboard` and the `Clipboard`
-message (replayed to a new viewer). `Command::SetClipboard` makes a compositor-owned selection whose
+message (not replayed to a connecting viewer, whose browser clipboard may be newer). `Command::SetClipboard` makes a compositor-owned selection whose
 user data carries the text; `send_selection` writes it from a calloop source on the non-blocking pipe,
 so a slow reader never blocks the compositor, and X11 clients are offered it too. The selection user
 data distinguishes relayed X11 selections from our own. Setting the clipboard drops a read still in

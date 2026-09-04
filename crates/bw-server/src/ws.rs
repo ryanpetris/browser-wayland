@@ -141,7 +141,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     let (tx, mut rx) = mpsc::channel::<Bytes>(8);
     let (atx, mut arx) = mpsc::channel::<Bytes>(4);
     // Taking over drops the previous viewer's only sender, which ends its session below.
-    let (my_gen, cursor, locked, windows, clipboard) = {
+    let (my_gen, cursor, locked, windows) = {
         let mut v = app.viewer.lock().unwrap();
         if !app.token_ok(&token) {
             // rotated between the check above and now: this socket authenticated with a dead token
@@ -157,7 +157,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         v.audio_tx = Some(atx);
         v.announced = None;
         v.need_key = true;
-        (v.generation, v.cursor.clone(), v.locked, v.windows.clone(), v.clipboard.clone())
+        (v.generation, v.cursor.clone(), v.locked, v.windows.clone())
     };
     if let Some(c) = cursor {
         let _ = socket.send(Message::Binary(c)).await;
@@ -167,11 +167,6 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     }
     if locked {
         let _ = socket.send(Message::Binary(Bytes::from(vec![protocol::POINTER_LOCK, 1]))).await;
-    }
-    if let Some(text) = clipboard {
-        let mut b = vec![protocol::CLIPBOARD];
-        b.extend_from_slice(text.as_bytes());
-        let _ = socket.send(Message::Binary(Bytes::from(b))).await;
     }
     // Frames start once Hello has picked the codec (see command_for).
 
