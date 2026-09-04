@@ -155,7 +155,9 @@ external-texture path exists behind `?renderer=webgpu` but is opt-in because Chr
 occasionally presented a blank frame with it. The canvas is the whole viewport; a browser resize is
 debounced and sent as a `Resize`, and the old picture is stretched until the new stream arrives.
 Fullscreen with the Keyboard Lock API lets shortcuts like Ctrl+W reach the desktop. The status line
-shows codec, size, renderer, fps, bandwidth, input-to-frame latency and drop counters; `bw()` in the
+shows codec, size, renderer, fps, bandwidth, input-to-frame latency and loss counters; the ▤ overlay adds
+per-stage timings (receive to decoded, decoded to paint, paint interval as p50/p95), decode queue depth,
+keyframe cadence and audio lead once a second, collected only while it is shown; `bw()` in the
 console returns the same as JSON.
 
 ## Running and deployment

@@ -30,11 +30,12 @@ function paint() {
 }
 // The 2D canvas is fine with immediate draws, and it saves up to one display refresh of latency.
 function paintNow(frame) {
+  const pts = frame.timestamp; // before draw() closes the frame
   try { draw(frame); frames++; windowFrames++; } catch (e) { console.error(e); frame.close(); }
   if (lastInput) { latencyMs = performance.now() - lastInput; lastInput = 0; } // input -> next painted frame
   if (stats.hidden) { inflight.clear(); return; }
-  const t = performance.now(), rec = inflight.get(frame.timestamp);
-  inflight.delete(frame.timestamp);
+  const t = performance.now(), rec = inflight.get(pts);
+  inflight.delete(pts);
   if (rec?.output) { stage.decode.push(rec.output - rec.at); stage.paint.push(t - rec.output); }
   if (lastPaint) stage.interval.push(t - lastPaint);
   lastPaint = t;
@@ -320,7 +321,6 @@ function onAudioData(data) {
   const now = audioCtx.currentTime;
   // Not running (no user gesture yet) or too far ahead (capture clock faster than ours): drop 20 ms.
   if (audioCtx.state !== 'running' || nextPlay > now + 3 * AUDIO_LEAD) { data.close(); return; }
-  if (nextPlay && nextPlay < now) audioUnderruns++; // the lead ran out: the next packet starts late
   const ab = audioCtx.createBuffer(data.numberOfChannels, data.numberOfFrames, data.sampleRate);
   for (let ch = 0; ch < data.numberOfChannels; ch++) {
     const plane = new Float32Array(data.numberOfFrames);
@@ -331,7 +331,7 @@ function onAudioData(data) {
   const src = audioCtx.createBufferSource();
   src.buffer = ab;
   src.connect(analyser);
-  if (nextPlay < now + 0.01) nextPlay = now + AUDIO_LEAD; // (re)start after a gap or underrun
+  if (nextPlay < now + 0.01) { if (nextPlay) audioUnderruns++; nextPlay = now + AUDIO_LEAD; } // (re)start after a gap or underrun
   src.start(nextPlay);
   nextPlay += ab.duration;
 }

@@ -140,6 +140,9 @@ the mechanism.
   from the app id (the same hue as the row's dot), thicker for the focused window, app id label in the
   corner. Redrawn on every list, on resize, and when the stream config arrives (the list usually comes
   first).
+- **Stats** (▤ button, remembered in `localStorage`): stream and per-stage timing statistics once a
+  second; frames in flight are tracked by pts only while the overlay is shown, so a hidden overlay
+  costs nothing.
 - **Elements** (⌖ button, remembered in `localStorage`): the focused window's elements as thin
   rectangles coloured by role, positioned like the borders from the window's current geometry, so a
   moving window needs no refetch. Fetched when the focused window's id, title, `updated_ms`, geometry
