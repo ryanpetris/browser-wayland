@@ -114,9 +114,11 @@ impl XwmHandler for State {
 
     fn unmapped_window(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Some(win) = self.window_for_x11(&window) {
+            self.forget_window(&win);
             self.space.unmap_elem(&win);
+        } else if let Some(win) = self.minimized.iter().map(|(w, ..)| w).find(|w| w.x11_surface() == Some(&window)).cloned() {
+            self.forget_window(&win);
         }
-        self.minimized.retain(|(w, ..)| w.x11_surface() != Some(&window));
         self.dirty = true;
     }
 
@@ -150,10 +152,10 @@ impl XwmHandler for State {
     /// `xwm` stays set: Smithay's shell hooks and in-flight selection transfers still call `xwm_state`.
     fn disconnected(&mut self, _xwm: XwmId) {
         tracing::warn!("xwayland exited");
-        for w in self.space.elements().filter(|w| w.x11_surface().is_some()).cloned().collect::<Vec<_>>() {
+        for w in self.full_stack().into_iter().filter(|w| w.x11_surface().is_some()) {
+            self.forget_window(&w);
             self.space.unmap_elem(&w);
         }
-        self.minimized.retain(|(w, ..)| w.x11_surface().is_none());
         self.x11_display = None;
         self.dirty = true;
     }

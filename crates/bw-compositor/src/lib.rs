@@ -352,8 +352,10 @@ impl State {
         let signal = event_loop.get_signal();
         event_loop
             .run(None, &mut self, |state| {
+                for w in state.full_stack().into_iter().filter(|w| !w.alive()) {
+                    state.forget_window(&w); // before refresh drops it from the space, while its position is known
+                }
                 state.space.refresh();
-                state.minimized.retain(|(w, ..)| w.alive());
                 if state.active.as_ref().is_some_and(|w| !w.alive()) {
                     state.active = None;
                 }
@@ -377,16 +379,30 @@ impl State {
             .unwrap();
     }
 
-    /// Hide a window until a taskbar (or its own client) asks for it back; focus moves to the top-most window left.
     /// Every window bottom to top, minimized ones at the position they had when minimized.
     fn full_stack(&self) -> Vec<Window> {
         let mut stack: Vec<Window> = self.space.elements().cloned().collect();
-        for (w, _, z) in &self.minimized {
+        let mut minimized: Vec<_> = self.minimized.iter().collect();
+        minimized.sort_by_key(|(_, _, z)| *z); // lowest first, so each insert lands below the ones above it
+        for (w, _, z) in minimized {
             stack.insert((*z).min(stack.len()), w.clone());
         }
         stack
     }
 
+    /// A window is going away (closed, unmapped, Xwayland gone): minimized windows above it move down one.
+    pub fn forget_window(&mut self, window: &Window) {
+        if let Some(i) = self.full_stack().iter().position(|w| w == window) {
+            for (_, _, z) in &mut self.minimized {
+                if *z > i {
+                    *z -= 1;
+                }
+            }
+        }
+        self.minimized.retain(|(w, ..)| w != window);
+    }
+
+    /// Hide a window until a taskbar (or its own client) asks for it back; focus moves to the top-most window left.
     pub fn minimize(&mut self, window: &Window) {
         let Some(loc) = self.space.element_location(window) else { return };
         let z = self.full_stack().iter().position(|w| w == window).unwrap_or(0);
@@ -407,7 +423,7 @@ impl State {
             // map_element puts it on top, so the mapped windows above its place go back on top of it, in order
             let stack = self.full_stack();
             let pos = stack.iter().position(|w| w == window).unwrap_or(stack.len());
-            let above: Vec<(Window, Point<i32, Logical>)> = stack[pos..].iter().skip(1).filter_map(|w| Some((w.clone(), self.space.element_location(w)?))).collect();
+            let above: Vec<(Window, Point<i32, Logical>)> = stack.iter().skip(pos + 1).filter_map(|w| Some((w.clone(), self.space.element_location(w)?))).collect();
             let (window, loc, _) = self.minimized.remove(i);
             self.space.map_element(window, loc, false);
             for (w, l) in above {
