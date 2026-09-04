@@ -13,3 +13,5 @@ xcursor = "0.3"
 smithay = { version = "0.7", default-features = false, features = [
     "wayland_frontend", "desktop", "backend_drm", "backend_gbm", "backend_egl", "renderer_gl", "xwayland",
 ] }
+ab_glyph = "0.2.32"
+fontdb = "0.24.0"

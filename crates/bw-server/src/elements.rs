@@ -63,8 +63,20 @@ pub struct Page {
     pub elements: Vec<Element>,
 }
 
+/// The window's elements: the application's from its accessibility tree, then the compositor's own
+/// decorations (title bar and buttons, above the geometry at negative `y`) when it draws them.
 /// `scale` is the output scale: Chromium reports its web content in device pixels (its own UI in logical ones).
 pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
+    let mut page = app_elements(win, scale).await?;
+    if win.decoration > 0 {
+        use bw_core::decoration::{BAR, BUTTON, buttons};
+        page.elements.push(Element { role: "title bar", name: win.title.clone(), x: 0, y: -BAR, w: win.w, h: BAR });
+        page.elements.extend(buttons(win.w).map(|(b, x)| Element { role: "push button", name: b.name(win.maximized).into(), x, y: -BAR, w: BUTTON, h: BAR }));
+    }
+    Ok(page)
+}
+
+async fn app_elements(win: &WindowInfo, scale: f64) -> Result<Page> {
     // ponytail: a fresh bus connection per request; cache one if requests ever get frequent
     let conn = a11y_bus().await?;
     let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
@@ -245,7 +257,7 @@ mod tests {
     fn win(w: i32, h: i32, geo_x: i32, geo_y: i32) -> WindowInfo {
         WindowInfo {
             id: 1, title: String::new(), app_id: String::new(), x11: false, pid: None,
-            x: 0, y: 0, w, h, geo_x, geo_y, popups: vec![], z: Some(0), maximized: false, fullscreen: false, minimized: false, focused: true, updated_ms: 0,
+            x: 0, y: 0, w, h, geo_x, geo_y, popups: vec![], decoration: 0, z: Some(0), maximized: false, fullscreen: false, minimized: false, focused: true, updated_ms: 0,
         }
     }
 

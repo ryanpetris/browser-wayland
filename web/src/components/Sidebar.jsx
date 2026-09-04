@@ -78,7 +78,7 @@ function WindowRow({ viewer, w }) {
         </div>
         <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-zinc-500">
           <span className="truncate" title={w.app_id}>{w.app_id || (w.x11 ? 'X11' : 'Wayland')}</span>
-          <span className="shrink-0 font-mono">{w.w}×{w.h}</span>
+          <span className="shrink-0 font-mono" title={w.decoration ? 'plus the title bar' : ''}>{w.w}×{w.h}</span>
           {badges.map(b => <span key={b} className="shrink-0 rounded bg-zinc-800 px-1 text-[10px] text-zinc-400">{b}</span>)}
         </div>
       </div>

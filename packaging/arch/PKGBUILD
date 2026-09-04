@@ -11,6 +11,7 @@ license=('MIT')
 depends=('gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-plugin-va' 'mesa' 'libxkbcommon')
 makedepends=('cargo' 'nodejs' 'npm')
 optdepends=('xorg-xwayland: X11 clients'
+            'ttf-dejavu: titles on the window decorations the compositor draws'
             'libpulse: audio to the browser (pactl)'
             'intel-media-driver: VA-API on Intel GPUs'
             'libva-mesa-driver: VA-API on AMD GPUs')

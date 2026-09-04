@@ -1,14 +1,19 @@
 //! Browser input (`Command`) → seat events.
 
-use bw_core::{AxisSource as Src, Command, Event, InputMsg, OutputGeometry};
+use std::time::{Duration, Instant};
+
+use bw_core::{AxisSource as Src, Command, ControlMsg, ControlOp, Event, InputMsg, OutputGeometry, decoration::Button as DecorButton};
 use smithay::{
     backend::input::{Axis, AxisSource, ButtonState, KeyState, Keycode},
     desktop::{LayerSurface, Window, WindowSurface, WindowSurfaceType, layer_map_for_output},
     input::{
         keyboard::{FilterResult, Keysym, xkb},
-        pointer::{AxisFrame, ButtonEvent, Focus, GrabStartData, MotionEvent, PointerHandle, RelativeMotionEvent},
+        pointer::{AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus, GrabStartData, MotionEvent, PointerHandle, RelativeMotionEvent},
     },
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    reexports::{
+        wayland_protocols::xdg::shell::server::xdg_toplevel::{self, ResizeEdge},
+        wayland_server::protocol::wl_surface::WlSurface,
+    },
     utils::{Logical, Point, SERIAL_COUNTER, Serial},
     wayland::{
         pointer_constraints::{PointerConstraint, with_pointer_constraint},
@@ -17,7 +22,11 @@ use smithay::{
     },
 };
 
-use crate::State;
+use crate::{
+    State,
+    decor::{Hit, maximized, resize_cursor},
+    desktop::window_id,
+};
 
 const BTN_LEFT: u32 = 0x110;
 
@@ -267,6 +276,17 @@ impl State {
         pointer.motion(self, under.clone(), &MotionEvent { location, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
         pointer.relative_motion(self, under.clone(), &relative);
         pointer.frame(self);
+        if under.is_none() && !pointer.is_grabbed() {
+            // over our decorations or the bare desktop: the cursor is ours to set
+            let icon = match self.decoration_under(location) {
+                Some((_, Hit::Edge(edge))) => resize_cursor(edge),
+                _ => CursorIcon::Default,
+            };
+            if self.cursor_status != CursorImageStatus::Named(icon) {
+                self.cursor_status = CursorImageStatus::Named(icon);
+                self.export_cursor();
+            }
+        }
         // entering a surface with a pending lock activates it (unless the browser just bailed out of one)
         if let (false, Some((surface, origin))) = (self.lock_suppressed, under) {
             activate_lock(&surface, &pointer, location - origin);
@@ -312,6 +332,18 @@ impl State {
         if pressed {
             self.lock_suppressed = false; // a click is the user gesture the browser needs to lock again
         }
+        if !pressed && let Some((window, b)) = self.decor_press.take() {
+            // a decoration button acts on release, if the pointer is still on it
+            if self.decoration_under(self.pointer_location).is_some_and(|(w, h)| w == window && h == Hit::Button(b)) {
+                let op = match b {
+                    DecorButton::Close => ControlOp::Close,
+                    DecorButton::Minimize => ControlOp::Minimize,
+                    DecorButton::Maximize if maximized(&window) => ControlOp::Unmaximize,
+                    DecorButton::Maximize => ControlOp::Maximize,
+                };
+                self.control(ControlMsg { id: window_id(&window), op });
+            }
+        }
         if pressed && !pointer.is_grabbed() {
             if let Some((layer, _, _)) = self.layer_under(self.pointer_location, true) {
                 // a panel: the windows under it stay where they are; it gets the keyboard only if it asked
@@ -319,8 +351,30 @@ impl State {
                     self.focus_window(None, serial);
                     keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);
                 }
+            } else if let Some((window, hit)) = self.decoration_under(self.pointer_location) {
+                // our title bar: focus, then a button, a drag (or a double-click), or a resize from the band
+                self.focus_window(Some(&window), serial);
+                match hit {
+                    Hit::Button(b) => self.decor_press = Some((window, b)),
+                    Hit::Bar if button == BTN_LEFT => {
+                        let now = Instant::now();
+                        let again = self.bar_click.take().is_some_and(|(w, at)| w == window && now.duration_since(at) < Duration::from_millis(400));
+                        if again {
+                            self.fill(&window, xdg_toplevel::State::Maximized, !maximized(&window));
+                        } else {
+                            self.bar_click = Some((window.clone(), now));
+                        }
+                        if !again && !maximized(&window) {
+                            let initial_location = self.space.element_location(&window).unwrap();
+                            let start_data = GrabStartData { focus: None, button, location: self.pointer_location };
+                            pointer.set_grab(self, crate::grabs::MoveGrab { start_data, window, initial_location }, serial, Focus::Clear);
+                        }
+                    }
+                    Hit::Edge(edges) if button == BTN_LEFT => self.start_resize(&window, edges, button, serial),
+                    _ => {}
+                }
             } else {
-                // Super/Alt + left drag moves any window, decorated or not (X11 apps have no title bar here).
+                // Super/Alt + left drag moves any window, decorated or not.
                 let mods = keyboard.modifier_state();
                 if button == BTN_LEFT && (mods.logo || mods.alt) {
                     let draggable = |w: &Window| match w.underlying_surface() {
@@ -377,9 +431,25 @@ impl State {
         pointer.frame(self);
     }
 
+    /// A resize from our decoration band, like an xdg resize request but started by us.
+    fn start_resize(&mut self, window: &Window, edges: ResizeEdge, button: u32, serial: Serial) {
+        let pointer = self.seat.get_pointer().unwrap();
+        let mut initial_rect = window.geometry();
+        initial_rect.loc = self.space.element_location(window).unwrap();
+        if let Some(toplevel) = window.toplevel() {
+            crate::grabs::ResizeState::with(toplevel.wl_surface(), |s| *s = crate::grabs::ResizeState::Resizing { edges, initial_rect });
+            toplevel.with_pending_state(|s| s.states.set(xdg_toplevel::State::Resizing));
+            toplevel.send_pending_configure();
+        }
+        let start_data = GrabStartData { focus: None, button, location: self.pointer_location };
+        let grab = crate::grabs::ResizeGrab { start_data, window: window.clone(), edges, initial_rect, last_size: initial_rect.size };
+        pointer.set_grab(self, grab, serial, Focus::Clear);
+    }
+
     /// Raise and activate `window` (none: just deactivate everything) and give it the keyboard.
     pub fn focus_window(&mut self, window: Option<&Window>, serial: Serial) {
         self.active = window.cloned();
+        self.dirty = true; // the bars follow the focus
         let keyboard = self.seat.get_keyboard().unwrap();
         for w in self.space.elements() {
             w.set_activated(false);

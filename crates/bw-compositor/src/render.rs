@@ -9,7 +9,7 @@ use smithay::{
     desktop::Window,
     utils::{Logical, Point},
     backend::allocator::Buffer as _,
-    backend::renderer::{Bind, utils::with_renderer_surface_state, element::{AsRenderElements, Id, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
+    backend::renderer::{Bind, ImportAll, ImportMem, utils::with_renderer_surface_state, element::{AsRenderElements, Id, memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
     desktop::{
         WindowSurface, layer_map_for_output,
         utils::{OutputPresentationFeedback, send_frames_surface_tree},
@@ -24,6 +24,13 @@ use smithay::{
 use crate::State;
 
 pub const CLEAR: [f32; 4] = [0.12, 0.12, 0.14, 1.0];
+
+smithay::backend::renderer::element::render_elements! {
+    /// What the output is made of: the clients' surfaces and our title bars.
+    pub OutputElement<R> where R: ImportAll + ImportMem;
+    Surface = WaylandSurfaceRenderElement<R>,
+    Bar = MemoryRenderBufferRenderElement<R>,
+}
 
 /// Per-swapchain-slot id so the encoder can cache its import.
 pub(crate) struct SlotId(pub u32);
@@ -41,9 +48,9 @@ impl State {
     }
 
     /// Everything on the output, front to back, at `scale` physical pixels per logical pixel: the overlay
-    /// (and, unless a window is fullscreen, top) layers, the windows with their popups, then the bottom
-    /// and background layers.
-    pub fn output_elements(&mut self, scale: f64) -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
+    /// (and, unless a window is fullscreen, top) layers, the windows with their popups and title bars,
+    /// then the bottom and background layers.
+    pub fn output_elements(&mut self, scale: f64) -> Vec<OutputElement<GlesRenderer>> {
         let s = Scale::from(scale);
         let output_loc = self.space.output_geometry(&self.output).map(|g| g.loc).unwrap_or_default();
         let fullscreen = self.fullscreen_window_mapped();
@@ -57,14 +64,26 @@ impl State {
                 .flat_map(|(loc, l)| l.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(renderer, loc.to_physical_precise_round(scale), s, 1.0))
                 .collect()
         };
-        let mut out = layer_elements(&mut self.gpu.renderer, if fullscreen { |l| l == Layer::Overlay } else { |l| matches!(l, Layer::Top | Layer::Overlay) });
+        let mut out: Vec<OutputElement<GlesRenderer>> = layer_elements(&mut self.gpu.renderer, if fullscreen { |l| l == Layer::Overlay } else { |l| matches!(l, Layer::Top | Layer::Overlay) }).into_iter().map(Into::into).collect();
+        drop(layers);
         let windows: Vec<(Window, Point<i32, Logical>)> = self.space.elements().rev().filter_map(|w| Some((w.clone(), self.space.element_location(w)?))).collect();
         for (w, loc) in windows {
+            out.extend(self.bar_element(&w, scale).map(Into::into));
             // the space places the geometry; render_elements wants the surface origin
             let origin = loc - w.geometry().loc - output_loc;
-            out.extend(w.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(&mut self.gpu.renderer, origin.to_physical_precise_round(scale), s, 1.0));
+            out.extend(w.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(&mut self.gpu.renderer, origin.to_physical_precise_round(scale), s, 1.0).into_iter().map(Into::into));
         }
-        out.extend(layer_elements(&mut self.gpu.renderer, |l| matches!(l, Layer::Bottom | Layer::Background)));
+        let layers = layer_map_for_output(&self.output);
+        let layer_elements = |renderer: &mut GlesRenderer, pick: fn(Layer) -> bool| -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
+            layers
+                .layers()
+                .rev()
+                .filter(|l| pick(l.layer()))
+                .filter_map(|l| layers.layer_geometry(l).map(|g| (g.loc, l)))
+                .flat_map(|(loc, l)| l.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(renderer, loc.to_physical_precise_round(scale), s, 1.0))
+                .collect()
+        };
+        out.extend(layer_elements(&mut self.gpu.renderer, |l| matches!(l, Layer::Bottom | Layer::Background)).into_iter().map(Into::into));
         out
     }
 

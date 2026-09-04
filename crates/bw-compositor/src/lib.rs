@@ -3,6 +3,7 @@
 
 mod clipboard;
 mod cursor;
+mod decor;
 mod desktop;
 mod foreign_toplevel;
 mod gpu;
@@ -56,6 +57,7 @@ use smithay::{
         relative_pointer::RelativePointerManagerState,
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
         shell::{
+            kde::decoration::KdeDecorationState,
             wlr_layer::WlrLayerShellState,
             xdg::{XdgShellState, decoration::XdgDecorationState},
         },
@@ -167,11 +169,17 @@ pub struct State {
     pub lock_suppressed: bool,
     pub cursor_status: CursorImageStatus,
     pub cursor: cursor::CursorTheme,
+    /// For the titles on server-side decorations.
+    pub font: Option<ab_glyph::FontVec>,
+    /// A decoration button pressed and not yet released, and the last press on a bar (double-click).
+    pub decor_press: Option<(Window, bw_core::decoration::Button)>,
+    pub bar_click: Option<(Window, Instant)>,
 
     pub compositor_state: CompositorState,
     pub shm_state: ShmState,
     pub xdg_shell_state: XdgShellState,
     pub xdg_decoration_state: XdgDecorationState,
+    pub kde_decoration_state: KdeDecorationState,
     pub layer_shell_state: WlrLayerShellState,
     pub output_manager_state: OutputManagerState,
     pub data_device_state: DataDeviceState,
@@ -294,10 +302,14 @@ impl State {
             lock_suppressed: false,
             cursor_status: CursorImageStatus::default_named(),
             cursor: cursor::CursorTheme::load(),
+            font: decor::load_font(),
+            decor_press: None,
+            bar_click: None,
             compositor_state: CompositorState::new::<State>(&dh),
             shm_state: ShmState::new::<State>(&dh, vec![]),
             xdg_shell_state: XdgShellState::new::<State>(&dh),
             xdg_decoration_state: XdgDecorationState::new::<State>(&dh),
+            kde_decoration_state: KdeDecorationState::new::<State>(&dh, smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode::Server),
             layer_shell_state: WlrLayerShellState::new::<State>(&dh),
             output_manager_state: OutputManagerState::new_with_xdg_output::<State>(&dh),
             data_device_state: DataDeviceState::new::<State>(&dh),
@@ -465,11 +477,12 @@ impl State {
         layer_map_for_output(&self.output).non_exclusive_zone()
     }
 
-    /// Keep at least a corner of a window at `loc` reachable in the work area.
-    pub fn clamp_to_output(&self, loc: Point<i32, Logical>) -> Point<i32, Logical> {
+    /// Keep at least a corner of `window` at `loc` (and its title bar, if we draw one) reachable in the work area.
+    pub fn clamp_to_output(&self, window: &Window, loc: Point<i32, Logical>) -> Point<i32, Logical> {
         let work = self.work_area();
+        let bar = self.bar_height(window);
         let max = |lo: i32, len: i32| (lo + len - 64).max(lo);
-        Point::from((loc.x.clamp(work.loc.x, max(work.loc.x, work.size.w)), loc.y.clamp(work.loc.y, max(work.loc.y, work.size.h))))
+        Point::from((loc.x.clamp(work.loc.x, max(work.loc.x, work.size.w)), loc.y.clamp(work.loc.y + bar, max(work.loc.y + bar, work.size.h))))
     }
 
     /// Apply a new output size/scale from the viewer.
@@ -539,11 +552,11 @@ impl State {
     }
 
     pub fn relayout(&mut self) {
-        let output = self.space.output_geometry(&self.output).unwrap_or_default();
         let work = self.work_area();
         let scale = self.geometry.scale;
         for window in self.space.elements().cloned().collect::<Vec<_>>() {
-            // maximized windows fill the work area, fullscreen ones the whole output
+            // maximized windows fill the work area (under their title bar), fullscreen ones the whole output
+            let (output, work_rect) = (self.fill_rect(&window, true), self.fill_rect(&window, false));
             let filled = match window.underlying_surface() {
                 WindowSurface::Wayland(toplevel) => {
                     let rect = toplevel.with_pending_state(|s| {
@@ -552,7 +565,7 @@ impl State {
                         let rect = if s.states.contains(S::Fullscreen) {
                             Some(output)
                         } else if s.states.contains(S::Maximized) {
-                            Some(work)
+                            Some(work_rect)
                         } else {
                             None
                         };
@@ -568,7 +581,7 @@ impl State {
                     let rect = if x11.is_fullscreen() {
                         Some(output)
                     } else if x11.is_maximized() {
-                        Some(work)
+                        Some(work_rect)
                     } else {
                         None
                     };
@@ -582,7 +595,7 @@ impl State {
             let loc = match (filled, self.space.element_location(&window)) {
                 (Some(rect), _) => rect.loc,
                 (None, Some(loc)) => {
-                    let clamped = self.clamp_to_output(loc); // keep a corner of every floating window reachable
+                    let clamped = self.clamp_to_output(&window, loc); // keep a corner of every floating window reachable
                     if let (true, WindowSurface::X11(x11)) = (clamped != loc, window.underlying_surface()) {
                         let _ = x11.configure(Rectangle::new(clamped, window.geometry().size));
                     }

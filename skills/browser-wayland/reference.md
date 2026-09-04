@@ -36,6 +36,11 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
       "description": "X11: the WM_CLASS",
       "type": "string"
     },
+    "decoration": {
+      "description": "height of the compositor's title bar above the geometry (see [`decoration`]); 0 when the client draws its own",
+      "type": "integer",
+      "format": "int32"
+    },
     "focused": {
       "type": "boolean"
     },
@@ -148,6 +153,7 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
     "geo_x",
     "geo_y",
     "popups",
+    "decoration",
     "maximized",
     "fullscreen",
     "minimized",

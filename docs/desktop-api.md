@@ -74,6 +74,35 @@ GLES renderer:
 The HTTP handler sends `Command::Snapshot` with a oneshot reply, waits at most two seconds, encodes the
 PNG with `spawn_blocking`, and answers `image/png` with `Cache-Control: no-store`.
 
+## Decorations
+
+`decor.rs`. A title bar (32 logical px, the layout in `bw_core::decoration` so the server agrees on
+it) above windows that don't draw their own: X11 windows without the Motif "no decorations" hint,
+Wayland toplevels that asked for server-side decorations through xdg-decoration (libdecor apps do) or
+never said anything; GTK, Qt, Firefox and Chromium say they draw their own, GTK and Firefox through
+KDE's server-decoration protocol, which the compositor offers for that answer alone. Fullscreen
+windows have no bar. The bar is compositor chrome above the geometry: `WindowInfo` reports the client
+area as before plus `decoration` (the bar's height, 0 when the client decorates), and elements,
+snapshots and window streams keep meaning the client area; the border overlay includes the bar.
+
+Rendering: one RGBA bitmap per bar at the output's resolution (title in a system sans-serif face found
+with `fontdb`, glyphs from `ab_glyph`; buttons as line art), cached in the window's user data and redrawn
+only when title, focus, maximized state or width change, drawn as a memory render element right above
+the window's own elements. Layout: placement, clamping and maximizing leave room for the bar
+(`fill_rect`, `clamp_to_output`).
+
+Input (`input.rs`): before the clients' surfaces, `decoration_under` finds the top-most window whose bar
+or resize band (6 px around bar and window, not when maximized) holds the pointer, unless a window's
+own area covers the point. A press on the bar focuses and raises the window and starts the same move
+grab an xdg move request uses; a second press within 400 ms toggles maximized; a press in the band
+starts a resize grab with that edge; a button acts on release if the pointer is still on it (close,
+minimize, maximize or restore, through `control`). Over the bar or band the compositor sets the cursor
+itself (arrow or a resize arrow), since no client surface is under the pointer there.
+
+Elements (`elements.rs`): when `decoration` > 0 the page ends with a `title bar` element and three
+`push button`s (`Minimize`, `Maximize` or `Restore`, `Close`) at `y = -32`, at any `level`, so an agent
+targets them like the application's own controls.
+
 ## UI elements
 
 A Wayland compositor sees pixel buffers and a surface tree, never widgets. What does know about buttons,
@@ -224,5 +253,6 @@ cost an encoder and a swapchain each and are not limited: the token holder is tr
 
 - Window streams: audio, a bitrate scaled to the window's size, sharing one render between two
   viewers of the same window.
+- Decorations: hover highlights on the buttons, a right-click menu, borders around the client area.
 - Elements: acting on an element through AT-SPI (activate, set text) instead of clicking its rectangle;
   element states (checked, focused, disabled); Flatpak applications, whose pid on the bus is the sandbox's.

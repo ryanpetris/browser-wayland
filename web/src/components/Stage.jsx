@@ -45,7 +45,8 @@ function Overlay({ viewer, size, borders, elements }) {
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden">
       {borders && windows.filter(w => !w.minimized).map(w => (
-        <div key={w.id} className={`absolute box-border ${w.focused ? 'border-[3px]' : 'border-2'}`} style={{ ...box(w.x, w.y, w.w, w.h), borderColor: windowColor(w) }}>
+        // the compositor's title bar, when it draws one, is part of the window
+        <div key={w.id} className={`absolute box-border ${w.focused ? 'border-[3px]' : 'border-2'}`} style={{ ...box(w.x, w.y - w.decoration, w.w, w.h + w.decoration), borderColor: windowColor(w) }}>
           <span className="absolute -top-0.5 -left-0.5 rounded-br px-1 font-mono text-[11px] leading-4 text-zinc-950" style={{ background: windowColor(w) }}>
             {w.app_id || w.title}
           </span>

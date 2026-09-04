@@ -87,6 +87,7 @@ impl State {
             geo_x: window.geometry().loc.x,
             geo_y: window.geometry().loc.y,
             popups,
+            decoration: self.bar_height(window),
             z,
             maximized,
             fullscreen,
@@ -115,6 +116,7 @@ impl State {
         if list != self.last_windows {
             let _ = self.events.send(Event::Windows(list.clone()));
             self.last_windows = list;
+            self.dirty = true; // a title or state change redraws the bar
         }
     }
 

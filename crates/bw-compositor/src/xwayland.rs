@@ -98,7 +98,7 @@ impl XwmHandler for State {
         } else {
             let n = self.space.elements().count() as i32 % 10;
             let mut rect = window.geometry();
-            rect.loc = self.work_area().loc + smithay::utils::Point::from((40 + 30 * n, 40 + 30 * n));
+            rect.loc = self.work_area().loc + smithay::utils::Point::from((40 + 30 * n, 40 + bw_core::decoration::BAR + 30 * n));
             self.place_x11(&win, &window, rect);
         }
         win.set_activated(true);
@@ -287,7 +287,7 @@ impl State {
             *restore.borrow_mut() = Some(r);
         }
         let _ = set(&window);
-        let geo = self.fill_rect(window.is_fullscreen()); // fullscreen wins over maximized when both are set
+        let geo = self.fill_rect(&win, window.is_fullscreen()); // fullscreen wins over maximized when both are set
         self.place_x11(&win, &window, geo);
     }
 
@@ -295,12 +295,12 @@ impl State {
         let _ = set(&window);
         let Some(win) = self.window_for_x11(&window) else { return };
         if window.is_maximized() || window.is_fullscreen() {
-            let geo = self.fill_rect(window.is_fullscreen());
+            let geo = self.fill_rect(&win, window.is_fullscreen());
             return self.place_x11(&win, &window, geo); // still filled the other way: re-fit to that rect
         }
         let saved = win.user_data().get::<Restore>().and_then(|r| r.borrow_mut().take());
         if let Some(mut rect) = saved {
-            rect.loc = self.clamp_to_output(rect.loc); // the output may have shrunk meanwhile
+            rect.loc = self.clamp_to_output(&win, rect.loc); // the output may have shrunk meanwhile
             self.place_x11(&win, &window, rect);
         }
     }

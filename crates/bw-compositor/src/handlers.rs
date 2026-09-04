@@ -267,7 +267,7 @@ impl XdgShellHandler for State {
         let work = self.work_area();
         surface.with_pending_state(|s| {
             s.bounds = Some(work.size);
-            s.decoration_mode = Some(DecorationMode::ClientSide);
+            s.decoration_mode = Some(DecorationMode::ServerSide); // ours unless the client asks to draw its own
             s.capabilities.replace([xdg_toplevel::WmCapabilities::Maximize, xdg_toplevel::WmCapabilities::Fullscreen]);
             if !self.kiosk {
                 s.capabilities.set(xdg_toplevel::WmCapabilities::Minimize); // a nested desktop has nowhere to come back from
@@ -286,7 +286,8 @@ impl XdgShellHandler for State {
         }
         let n = self.space.elements().count() as i32 % 10;
         let window = Window::new_wayland_window(surface);
-        self.space.map_element(window.clone(), work.loc + Point::from((40 + 30 * n, 40 + 30 * n)), true);
+        // room for a title bar above (the client's answer on decorations comes with its first commit)
+        self.space.map_element(window.clone(), work.loc + Point::from((40 + 30 * n, 40 + bw_core::decoration::BAR + 30 * n)), true);
         self.active = Some(window); // mapped activated: that is what the desktop API reports as focused
     }
 
@@ -376,23 +377,32 @@ impl XdgShellHandler for State {
 }
 
 /// Where a window was before it got maximized/fullscreened.
-type RestoreLocation = RefCell<Option<Point<i32, Logical>>>;
+/// Where (and how big) a window was before it filled the output.
+type RestoreLocation = RefCell<Option<Rectangle<i32, Logical>>>;
 
 impl State {
     /// Fullscreen covers the whole output, maximized only the work area.
-    pub fn fill_rect(&self, fullscreen: bool) -> Rectangle<i32, Logical> {
-        if fullscreen { self.space.output_geometry(&self.output).unwrap_or_default() } else { self.work_area() }
+    /// Where `window` goes fullscreen (the output) or maximized (the work area, under its title bar if we draw one).
+    pub fn fill_rect(&self, window: &Window, fullscreen: bool) -> Rectangle<i32, Logical> {
+        if fullscreen {
+            return self.space.output_geometry(&self.output).unwrap_or_default();
+        }
+        let mut work = self.work_area();
+        let bar = self.bar_height(window);
+        work.loc.y += bar;
+        work.size.h -= bar;
+        work
     }
 
     pub(crate) fn fill_output(&mut self, surface: &ToplevelSurface, what: xdg_toplevel::State) {
         // fullscreen wins over maximized when both are set
         let fullscreen = what == xdg_toplevel::State::Fullscreen || surface.with_pending_state(|s| s.states.contains(xdg_toplevel::State::Fullscreen));
-        let geo = self.fill_rect(fullscreen);
         let Some(window) = self.window_for(surface.wl_surface()) else { return };
+        let geo = self.fill_rect(&window, fullscreen);
         window.user_data().insert_if_missing(RestoreLocation::default);
         let restore = window.user_data().get::<RestoreLocation>().unwrap();
         if restore.borrow().is_none() {
-            *restore.borrow_mut() = self.space.element_location(&window);
+            *restore.borrow_mut() = self.space.element_location(&window).map(|loc| Rectangle::new(loc, window.geometry().size));
         }
         surface.with_pending_state(|s| {
             s.states.set(what);
@@ -413,13 +423,13 @@ impl State {
         if still_filled {
             return self.fill_output(surface, other); // e.g. unfullscreen back to maximized: re-fit to the work area
         }
-        surface.with_pending_state(|s| s.size = None);
-        if let Some(window) = self.window_for(surface.wl_surface()) {
-            let saved = window.user_data().get::<RestoreLocation>().and_then(|r| r.borrow_mut().take());
-            if let Some(loc) = saved {
-                let loc = self.clamp_to_output(loc);
-                self.space.map_element(window, loc, false);
-            }
+        // the size it had, said explicitly: a client that only ever takes what it is told keeps the big one otherwise
+        let Some(window) = self.window_for(surface.wl_surface()) else { return };
+        let saved = window.user_data().get::<RestoreLocation>().and_then(|r| r.borrow_mut().take());
+        surface.with_pending_state(|s| s.size = saved.map(|r| r.size));
+        if let Some(rect) = saved {
+            let loc = self.clamp_to_output(&window, rect.loc);
+            self.space.map_element(window, loc, false);
         }
         surface.send_pending_configure();
     }
@@ -456,18 +466,20 @@ impl WlrLayerShellHandler for State {
 }
 delegate_layer_shell!(State);
 
+/// We draw the decorations unless the client wants to (GTK, Qt, browsers); what it asks for, it gets.
 impl XdgDecorationHandler for State {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
-        toplevel.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ClientSide));
+        toplevel.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ServerSide));
     }
-    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: DecorationMode) {
-        toplevel.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ClientSide));
+    fn request_mode(&mut self, toplevel: ToplevelSurface, mode: DecorationMode) {
+        toplevel.with_pending_state(|s| s.decoration_mode = Some(mode));
         if toplevel.is_initial_configure_sent() {
             toplevel.send_pending_configure();
         }
+        self.dirty = true;
     }
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
-        self.request_mode(toplevel, DecorationMode::ClientSide);
+        self.request_mode(toplevel, DecorationMode::ServerSide);
     }
 }
 

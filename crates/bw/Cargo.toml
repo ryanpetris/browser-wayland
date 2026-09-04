@@ -18,7 +18,7 @@ A headless Wayland compositor whose output is hardware-encoded (VA-API) and show
 over a WebSocket with WebCodecs; mouse, keyboard and audio travel the same way. Runs Wayland and \
 X11 clients, layer-shell panels and taskbars, and exposes a window-management HTTP API."""
 depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad"
-recommends = "xwayland, pulseaudio-utils | pipewire-pulse, va-driver-all"
+recommends = "xwayland, pulseaudio-utils | pipewire-pulse, va-driver-all, fonts-dejavu-core"
 assets = [
     ["target/release/browser-wayland", "usr/bin/", "755"],
     ["../../README.md", "usr/share/doc/browser-wayland/", "644"],

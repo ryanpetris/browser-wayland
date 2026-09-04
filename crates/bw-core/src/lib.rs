@@ -80,6 +80,43 @@ impl std::fmt::Debug for SnapshotReply {
     }
 }
 
+/// The compositor's own title bar, drawn above windows that don't draw their own (X11 windows, Wayland
+/// toplevels that ask for server-side decorations or never bring the protocol up). It sits above the
+/// window's geometry, so its elements have negative `y` relative to it, like everything reported
+/// about a window. The layout lives here so the compositor (drawing, hit-testing) and the server (the
+/// elements page) agree on it.
+pub mod decoration {
+    /// The bar's height in logical pixels.
+    pub const BAR: i32 = 32;
+    /// Each button's width; they are the bar's full height.
+    pub const BUTTON: i32 = 32;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Button {
+        Minimize,
+        Maximize,
+        Close,
+    }
+
+    impl Button {
+        /// The accessible name, as the elements page reports it.
+        pub fn name(self, maximized: bool) -> &'static str {
+            match self {
+                Button::Minimize => "Minimize",
+                Button::Maximize if maximized => "Restore",
+                Button::Maximize => "Maximize",
+                Button::Close => "Close",
+            }
+        }
+    }
+
+    /// The buttons at the bar's right end for a window `w` wide: `(button, x)`, `x` relative to the
+    /// geometry, each `BUTTON` wide at `y = -BAR`.
+    pub fn buttons(w: i32) -> [(Button, i32); 3] {
+        [(Button::Minimize, w - 3 * BUTTON), (Button::Maximize, w - 2 * BUTTON), (Button::Close, w - BUTTON)]
+    }
+}
+
 /// One window as the desktop API reports it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WindowInfo {
@@ -99,6 +136,8 @@ pub struct WindowInfo {
     pub geo_y: i32,
     /// open popups (menus, combo lists) as `(x, y, w, h)` relative to the geometry; Wayland only
     pub popups: Vec<(i32, i32, i32, i32)>,
+    /// height of the compositor's title bar above the geometry (see [`decoration`]); 0 when the client draws its own
+    pub decoration: i32,
     /// stacking index, 0 = bottom; `None` while minimized
     pub z: Option<u32>,
     pub maximized: bool,

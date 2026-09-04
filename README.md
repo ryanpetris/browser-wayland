@@ -38,6 +38,10 @@ fullscreen button hands it the whole screen, with keyboard lock so shortcuts lik
 Frames are painted on a 2D canvas. `?renderer=webgpu` in the URL uses a WebGPU external-texture path
 instead; it is opt-in because Chromium on Linux occasionally presents a blank frame that way, which looks like flicker.
 
+Windows that don't draw their own title bar (X11 applications, Vulkan and SDL programs, anything that
+asks for server-side decorations) get one from the compositor: drag it, double-click it to maximize,
+resize from the edges, close, maximize and minimize with its buttons.
+
 Other clients can join later: `WAYLAND_DISPLAY=wayland-browser some-app`. X11 apps work too: an
 Xwayland is started automatically and the log prints its `DISPLAY`. Super (or Alt) + left drag moves
 any window, which is how undecorated X11 windows get moved.

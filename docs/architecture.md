@@ -105,7 +105,10 @@ cascade inside the work area (the output minus panel exclusive zones); maximize 
 fullscreen the output. Focus, raising and activation go through one function (`focus_window`), which
 the click handler, the taskbar protocol, the desktop API and minimize all use. Minimized windows leave
 the space into a list (no rendering, hit-testing or frame callbacks) and come back through `relayout`.
-Super/Alt + left drag moves any window, which is how undecorated X11 windows are moved.
+Windows that don't draw their own decorations (X11 windows, Wayland toplevels that ask for server-side
+decorations or bind neither xdg-decoration nor KDE's server-decoration protocol) get a title bar drawn
+by the compositor (`decor.rs`, see [desktop-api.md](desktop-api.md)). Super/Alt + left drag moves any
+window besides.
 
 **Input.** Browser keys arrive as evdev codes (xkb keycode = evdev + 8); the compositor never
 auto-repeats (clients do, via `repeat_info`) and ignores repeats. Pointer motion hit-tests overlay/top

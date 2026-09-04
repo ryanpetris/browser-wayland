@@ -88,6 +88,9 @@ MCP tools return the same failures as tool errors with the same text.
 
 - Coordinates from `elements` are relative to the window; the window's own `x y` are output
   coordinates. Pass the window id to the input operations and you never have to add them.
+- A window with `decoration: 32` has a title bar drawn by the compositor above it. Its elements list
+  ends with that bar (`title bar`) and its `Close`, `Maximize`/`Restore` and `Minimize` buttons at
+  `y: -32`: click those like any element (negative `y` is fine), or use the `window_control` tool.
 - Two windows of the same application look alike in the list; use `title` and `focused`.
 - A dialog is a new window with its own id. A file chooser is often a separate window too.
 - Chromium and Electron applications need `--force-renderer-accessibility` on their command line to
