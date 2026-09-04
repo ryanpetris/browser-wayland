@@ -38,7 +38,7 @@ curl -s -H "$H" https://host:8443/api/windows | jq
    correct rectangles too.
 5. **Take a snapshot when you need to see** (`GET /api/windows/{id}/snapshot.png`, tool `snapshot`;
    `/api/screenshot.png`, tool `screenshot`). Window snapshots are lossless PNGs of the window's own
-   buffers, so they work for covered and minimized windows; `scale` shrinks them (0.5 is usually
+   buffers, so they work for covered and minimized windows; `scale` shrinks either kind (0.5 is usually
    plenty for reading a layout). Prefer elements for finding things and snapshots for confirming.
 
 ## Input details

@@ -105,7 +105,7 @@ the geometry), its stacking index `z` (`null` while minimized), `maximized`, `fu
 `unmaximize`, `fullscreen`, `unfullscreen`, `move` (`x`, `y`), `resize` (`w`, `h`), `spawn` (`cmd`, run
 with `sh -c` in the same environment as `--exec`). Requests are fire-and-forget; unknown ids are ignored.
 Snapshots are lossless PNGs of a window's own buffers, so they include covered and minimized windows;
-`scale` (0.05 to 2) is relative to the output scale and applies to windows only.
+`scale` (0.05 to 2) is relative to the output scale.
 
 With `--elements`, `/api/windows/{id}/elements` lists a window's UI elements (buttons, links, text fields,
 tabs, menu items, …) with role, name and rectangle relative to the window, so a script or an agent can

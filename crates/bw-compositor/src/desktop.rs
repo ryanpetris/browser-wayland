@@ -17,7 +17,7 @@ use smithay::{
             gles::{GlesRenderer, GlesTexture},
         },
     },
-    desktop::{Window, WindowSurface, space::space_render_elements, PopupManager},
+    desktop::{Window, WindowSurface, PopupManager},
     reexports::{wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState, wayland_server::Resource},
     utils::{Buffer, Physical, Rectangle, SERIAL_COUNTER, Scale, Size, Transform},
     wayland::{compositor::with_states, shell::xdg::XdgToplevelSurfaceData},
@@ -175,8 +175,8 @@ impl State {
         self.dirty = true;
     }
 
-    /// One window at `scale` × the output scale (its xdg geometry, popups included, transparent where it
-    /// doesn't paint), or the whole output at its own scale. Renders offscreen; the stream is untouched.
+    /// One window (its xdg geometry, popups included, transparent where it doesn't paint) or the whole
+    /// output, at `scale` × the output scale. Renders offscreen; the stream is untouched.
     pub fn snapshot(&mut self, id: Option<u64>, scale: f64) -> Result<Snapshot, SnapshotError> {
         let result = match id {
             Some(id) => {
@@ -188,11 +188,13 @@ impl State {
                 let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = window.render_elements(&mut self.gpu.renderer, loc, Scale::from(scale), 1.0);
                 readback(&mut self.gpu.renderer, &elements, size, scale, [0.0; 4])
             }
-            None => (|| {
-                let elements = space_render_elements::<_, Window, _>(&mut self.gpu.renderer, [&self.space], &self.output, 1.0)?;
-                let size = self.output.current_mode().context("output has no mode")?.size;
-                readback(&mut self.gpu.renderer, &elements, size, self.geometry.scale, crate::render::CLEAR)
-            })(),
+            None => {
+                // the mode is the stream's size, so scale 1 gives exactly what the viewer sees
+                let mode = self.output.current_mode().map(|m| m.size).unwrap_or_default();
+                let size = Size::from(((mode.w as f64 * scale).round() as i32, (mode.h as f64 * scale).round() as i32));
+                let elements = self.output_elements(scale * self.geometry.scale);
+                readback(&mut self.gpu.renderer, &elements, size, scale * self.geometry.scale, crate::render::CLEAR)
+            }
         };
         result.map_err(|e| {
             tracing::warn!(?id, "snapshot failed: {e:#}");

@@ -15,7 +15,7 @@ of a window, and a small desktop UI in the viewer built on the same data. Wire f
 | Where scripts talk | `/api/...` on the same axum router, bearer token. |
 | "Focused" | The compositor's intent: the window `focus_window` last activated (or that was just mapped), not the client-acknowledged xdg state, which lags a round trip and is wrong for a hung client. |
 | Update timestamps | Whole-second resolution. It is part of the diffed list, so finer resolution would turn a 60 fps client into sixty lists a second. |
-| Snapshot content | The window's xdg geometry (shadows clipped), popups included, minimized windows included, rendered offscreen at `scale` × output scale. The full screenshot uses the same path with the whole space at the output's own scale. |
+| Snapshot content | The window's xdg geometry (shadows clipped), popups included, minimized windows included, rendered offscreen at `scale` × output scale. The full screenshot builds the output's elements itself (`output_elements`) at the same kind of scale. |
 | Snapshot format | PNG, straight alpha, encoded on the server's blocking pool; the compositor only renders and reads back. JPEG/WebP later if size matters. |
 | Concurrency | One snapshot in flight; more get `429`. A queued request can't be cancelled once it is on the compositor's channel. |
 | Elements | Behind `--elements`; read live from AT-SPI per request, never cached; the compositor is not involved beyond exporting the geometry offset. |
@@ -163,6 +163,5 @@ moving it out (sessionStorage, a paste box, rotation) is future work.
 - Clipboard read/write from the browser and the API.
 - New windows are activated but don't take the keyboard until clicked; the API exposes this
   pre-existing behaviour as `focused: true` on a window without keyboard focus.
-- Screenshots at a smaller scale (the whole-output render path uses the output's own scale).
 - Elements: acting on an element through AT-SPI (activate, set text) instead of clicking its rectangle;
   element states (checked, focused, disabled); Flatpak applications, whose pid on the bus is the sandbox's.

@@ -14,7 +14,7 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `GET /api/windows` | | JSON array of **Window** |
 | `GET /api/windows/{id}/elements` | | **Elements**; `501` without `--elements`, `503` tree unreadable, `404` unknown window |
 | `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
-| `GET /api/screenshot.png` | | PNG of the whole output at its size; `429`, `500`, `503` as for a window |
+| `GET /api/screenshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the whole output; `429`, `500`, `503` as for a window |
 | `POST /api/control` | **Control** | `202`; fire-and-forget; `503` compositor gone |
 | `POST /api/input` | **Input** | `202`; `404` unknown window; `503` compositor gone |
 | `POST /mcp` | MCP Streamable HTTP | the tools below |
@@ -817,11 +817,22 @@ Resize a floating window's geometry to w h (logical px).
 
 ### `screenshot`
 
-PNG of the whole output at its size.
+PNG of the whole output (panels included, pointer excluded), scaled to fit about 1600 px unless `scale` is given.
 
 ```json
 {
-  "properties": {},
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "scale": {
+      "default": null,
+      "description": "0.05..=2 relative to the output scale; default fits the long side in about 1600 px.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  },
   "type": "object"
 }
 ```

@@ -3,9 +3,13 @@ use std::{os::fd::AsFd, time::{Duration, Instant}};
 use anyhow::{Context, Result};
 use bw_core::DmabufFrame;
 use smithay::{
+    desktop::Window,
+    utils::{Logical, Point},
     backend::allocator::Buffer as _,
-    backend::renderer::{Bind, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer},
+    backend::renderer::{Bind, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
     desktop::{layer_map_for_output, space::render_output, utils::send_frames_surface_tree},
+    utils::Scale,
+    wayland::shell::wlr_layer::Layer,
     input::pointer::CursorImageStatus,
 };
 
@@ -17,6 +21,32 @@ pub const CLEAR: [f32; 4] = [0.12, 0.12, 0.14, 1.0];
 struct SlotId(u32);
 
 impl State {
+    /// Everything on the output, front to back, at `scale` physical pixels per logical pixel: the top
+    /// and overlay layers, the windows (with their popups), then the bottom and background layers.
+    pub fn output_elements(&mut self, scale: f64) -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
+        let s = Scale::from(scale);
+        let output_loc = self.space.output_geometry(&self.output).map(|g| g.loc).unwrap_or_default();
+        let layers = layer_map_for_output(&self.output);
+        let layer_elements = |renderer: &mut GlesRenderer, pick: fn(Layer) -> bool| -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
+            layers
+                .layers()
+                .rev()
+                .filter(|l| pick(l.layer()))
+                .filter_map(|l| layers.layer_geometry(l).map(|g| (g.loc, l)))
+                .flat_map(|(loc, l)| l.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(renderer, loc.to_physical_precise_round(scale), s, 1.0))
+                .collect()
+        };
+        let mut out = layer_elements(&mut self.gpu.renderer, |l| matches!(l, Layer::Top | Layer::Overlay));
+        let windows: Vec<(Window, Point<i32, Logical>)> = self.space.elements().rev().filter_map(|w| Some((w.clone(), self.space.element_location(w)?))).collect();
+        for (w, loc) in windows {
+            // the space places the geometry; render_elements wants the surface origin
+            let origin = loc - w.geometry().loc - output_loc;
+            out.extend(w.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(&mut self.gpu.renderer, origin.to_physical_precise_round(scale), s, 1.0));
+        }
+        out.extend(layer_elements(&mut self.gpu.renderer, |l| matches!(l, Layer::Bottom | Layer::Background)));
+        out
+    }
+
     pub fn tick(&mut self) {
         if !(self.dirty || self.force_full_frame) {
             return;

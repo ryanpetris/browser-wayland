@@ -114,12 +114,13 @@ impl App {
         }
     }
 
-    /// The snapshot scale that fits a window's long side in `px` device pixels (at most 1).
-    pub fn fit_scale(&self, id: u64, px: f64) -> f64 {
-        match self.window(id) {
-            Ok((w, scale)) => (px / (w.w.max(w.h).max(1) as f64 * scale)).min(1.0),
-            Err(_) => 1.0,
-        }
+    /// The snapshot scale that fits a window's (or, with `None`, the output's) long side in `px` device pixels; at most 1.
+    pub fn fit_scale(&self, id: Option<u64>, px: f64) -> f64 {
+        let long_side = match id {
+            Some(id) => self.window(id).map(|(w, scale)| w.w.max(w.h) as f64 * scale).ok(),
+            None => self.viewer.lock().unwrap().info.as_ref().map(|i| i.width.max(i.height) as f64),
+        };
+        long_side.map_or(1.0, |side| (px / side.max(1.0)).min(1.0))
     }
 
     /// A window action or spawn. Fire-and-forget: the compositor ignores unknown ids and impossible requests.

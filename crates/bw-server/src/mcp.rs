@@ -33,6 +33,13 @@ pub struct WindowArg {
     pub window: u64,
 }
 
+#[derive(Deserialize, JsonSchema, Default)]
+pub struct ScreenshotArgs {
+    /// 0.05..=2 relative to the output scale; default fits the long side in about 1600 px.
+    #[serde(default)]
+    pub scale: Option<f64>,
+}
+
 #[derive(Deserialize, JsonSchema)]
 pub struct SnapshotArgs {
     /// Window id from `windows`.
@@ -185,14 +192,15 @@ impl Mcp {
         }
     }
 
-    #[tool(description = "PNG of the whole output at its size.")]
-    async fn screenshot(&self) -> ToolResult {
-        self.png(None, 1.0).await
+    #[tool(description = "PNG of the whole output (panels included, pointer excluded), scaled to fit about 1600 px unless `scale` is given.")]
+    async fn screenshot(&self, Parameters(ScreenshotArgs { scale }): Parameters<ScreenshotArgs>) -> ToolResult {
+        let scale = scale.unwrap_or_else(|| self.app.fit_scale(None, 1600.0));
+        self.png(None, scale).await
     }
 
     #[tool(description = "PNG of one window's own buffers (works for covered and minimized windows), popups included.")]
     async fn snapshot(&self, Parameters(SnapshotArgs { window, scale }): Parameters<SnapshotArgs>) -> ToolResult {
-        let scale = scale.unwrap_or_else(|| self.app.fit_scale(window, 1600.0));
+        let scale = scale.unwrap_or_else(|| self.app.fit_scale(Some(window), 1600.0));
         self.png(Some(window), scale).await
     }
 
