@@ -10,6 +10,8 @@ pub const POINTER_LOCK: u8 = 0x04;
 pub const AUDIO: u8 = 0x05;
 /// `[WINDOWS][JSON array of WindowInfo]`
 pub const WINDOWS: u8 = 0x06;
+/// UTF-8 text a desktop application put on the clipboard.
+pub const CLIPBOARD: u8 = 0x07;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
@@ -26,6 +28,8 @@ pub const BLUR: u8 = 0x89;
 pub const POINTER_LOCK_LOST: u8 = 0x8A;
 /// `[CONTROL][JSON ControlMsg]`
 pub const CONTROL: u8 = 0x8B;
+/// UTF-8 text the browser pasted: becomes the desktop clipboard.
+pub const SET_CLIPBOARD: u8 = 0x8C;
 
 pub fn config(info: &StreamInfo) -> Bytes {
     let json = format!(
@@ -96,6 +100,7 @@ pub enum ClientMsg {
     Blur,
     PointerLockLost,
     Control(ControlMsg),
+    SetClipboard(String),
 }
 
 /// Malformed messages decode to `None` and are ignored.
@@ -115,6 +120,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         BLUR => ClientMsg::Blur,
         POINTER_LOCK_LOST => ClientMsg::PointerLockLost,
         CONTROL => ClientMsg::Control(serde_json::from_slice(&b[1..]).ok()?),
+        SET_CLIPBOARD => ClientMsg::SetClipboard(String::from_utf8(b[1..].to_vec()).ok()?),
         _ => return None,
     })
 }

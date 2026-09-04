@@ -128,6 +128,20 @@ impl App {
         long_side.map_or(1.0, |side| (px / side.max(1.0)).min(1.0))
     }
 
+    /// The last text a desktop application copied.
+    pub fn clipboard(&self) -> Option<String> {
+        self.viewer.lock().unwrap().clipboard.clone()
+    }
+
+    /// Text becomes the desktop clipboard (and what `clipboard()` reports); fire-and-forget like control.
+    pub fn set_clipboard(&self, text: String) -> Result<(), ApiError> {
+        if text.len() > 1 << 20 {
+            return Err(ApiError::Internal("clipboard text over 1 MiB".into()));
+        }
+        self.viewer.lock().unwrap().clipboard = Some(text.clone());
+        self.send(Command::SetClipboard(text))
+    }
+
     /// A window action or spawn. Fire-and-forget: the compositor ignores unknown ids and impossible requests.
     pub fn control(&self, msg: ControlMsg) -> Result<(), ApiError> {
         self.send(Command::Control(msg))

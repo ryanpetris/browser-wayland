@@ -1,10 +1,10 @@
 // Viewer: decodes the H.264 stream with WebCodecs and forwards input.
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
-import { TOKEN, initDesktop, onWindows, renderBorders, fetchElements, control, getWindows, snapshot, elementsOf } from './desktop.js';
+import { TOKEN, api, initDesktop, onWindows, renderBorders, fetchElements, control, getWindows, snapshot, elementsOf } from './desktop.js';
 
-const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05, WINDOWS = 0x06;
-const AUTH = 0x80, HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A, CONTROL = 0x8B;
+const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05, WINDOWS = 0x06, CLIPBOARD = 0x07;
+const AUTH = 0x80, HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A, CONTROL = 0x8B, SET_CLIPBOARD = 0x8C;
 const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA
 
 const canvas = document.getElementById('c');
@@ -267,6 +267,9 @@ function onMessage(buf) {
     case WINDOWS:
       onWindows(JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1))));
       break;
+    case CLIPBOARD:
+      onClipboard(new TextDecoder().decode(new Uint8Array(buf, 1)));
+      break;
     case VIDEO: {
       if (dropNext) { dropNext = false; return; } // debug: bw.dropNext() simulates a lost message
       received++;
@@ -384,7 +387,7 @@ canvas.onpointermove = e => document.pointerLockElement
 canvas.onpointerdown = canvas.onpointerup = e => {
   const btn = BTN[e.button];
   if (btn === undefined) return;
-  if (e.type === 'pointerdown') { canvas.setPointerCapture(e.pointerId); resumeAudio(); if (wantLock) requestLock(); }
+  if (e.type === 'pointerdown') { canvas.setPointerCapture(e.pointerId); resumeAudio(); flushClipboard(); if (wantLock) requestLock(); }
   canvas.onpointermove(e);
   send(BUTTON, 3, dv => { dv.setUint16(1, btn, true); dv.setUint8(3, e.type === 'pointerdown' ? 1 : 0); });
 };
@@ -394,14 +397,54 @@ canvas.addEventListener('wheel', e => {
   send(AXIS, 9, dv => { dv.setUint8(1, e.deltaMode); dv.setFloat32(2, e.deltaX, true); dv.setFloat32(6, e.deltaY, true); });
 }, { passive: false });
 
+// --- clipboard ---------------------------------------------------------------
+// Desktop -> browser: text copied in an application arrives as CLIPBOARD; the browser clipboard takes it
+// right away when the page may write, otherwise on the next gesture. Browser -> desktop: Ctrl+V (or
+// Shift+Insert) is held back until the browser's paste event delivers the text, which goes to the
+// desktop first, so the application pastes what the browser had.
+let clipboardText = '', pendingClipboard = null, pendingPaste = null;
+function onClipboard(text) {
+  clipboardText = text;
+  pendingClipboard = text;
+  flushClipboard();
+}
+function flushClipboard() {
+  if (pendingClipboard === null || !navigator.clipboard?.writeText) return;
+  const text = pendingClipboard;
+  navigator.clipboard.writeText(text).then(() => { if (pendingClipboard === text) pendingClipboard = null; }).catch(() => {});
+}
+const isPasteKey = e => (e.ctrlKey && e.code === 'KeyV') || (e.shiftKey && e.code === 'Insert');
+function sendKey(code, pressed) { send(KEY, 3, dv => { dv.setUint16(1, code, true); dv.setUint8(3, pressed ? 1 : 0); }); }
+function flushPaste() {
+  if (!pendingPaste) return;
+  const code = pendingPaste; pendingPaste = null;
+  sendKey(code, true); sendKey(code, false);
+}
+document.onpaste = e => {
+  if (e.target instanceof HTMLInputElement) return;
+  e.preventDefault();
+  const text = e.clipboardData?.getData('text/plain');
+  if (text) { const b = new TextEncoder().encode(text); send(SET_CLIPBOARD, b.length, dv => new Uint8Array(dv.buffer, 1).set(b)); }
+  flushPaste();
+};
+
 const onKey = e => {
   if (e.target instanceof HTMLInputElement || e.target.form) return; // typing in the page's own inputs or its paste form
   const code = KEYCODES[e.code];
   if (!code || e.repeat) return; // clients repeat keys themselves (wl_keyboard.repeat_info)
+  if (e.type === 'keydown' && isPasteKey(e)) {
+    // let the browser raise its paste event (no preventDefault); forward the key after it, or soon anyway
+    pendingPaste = code;
+    setTimeout(flushPaste, 150);
+    resumeAudio();
+    return;
+  }
+  if (e.type === 'keyup' && pendingPaste === code) return; // the deferred press+release pair covers it
   e.preventDefault();
   resumeAudio();
   lastInput = performance.now();
-  send(KEY, 3, dv => { dv.setUint16(1, code, true); dv.setUint8(3, e.type === 'keydown' ? 1 : 0); });
+  flushClipboard(); // a key press is a gesture too
+  sendKey(code, e.type === 'keydown');
 };
 window.onkeydown = window.onkeyup = onKey;
 window.onblur = () => send(BLUR, 0);
@@ -425,7 +468,7 @@ function audioStats() {
   for (let i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
   return { packets: audioPackets, decoded: audioDecoded, state: audioCtx.state, peakHz: Math.round(peak * audioCtx.sampleRate / 2 / bins.length), level: bins[peak] };
 }
-window.bw = () => ({ frames, received, fps, mbps, audio: audioStats(), keyframes, decodeErrors, dropped, lost, videoSeq, audioSeq, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
-Object.assign(window.bw, { dropNext: () => { dropNext = true; }, windows: getWindows, control, snapshot, elements: elementsOf, activate: id => control({ id, op: 'activate' }), spawn: cmd => control({ op: 'spawn', cmd }) });
+window.bw = () => ({ frames, received, fps, mbps, audio: audioStats(), keyframes, decodeErrors, dropped, lost, videoSeq, audioSeq, clipboardText, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
+Object.assign(window.bw, { dropNext: () => { dropNext = true; }, clipboard: { read: () => api('/api/clipboard').then(r => r.text()), write: text => api('/api/clipboard', { method: 'PUT', body: text }) }, windows: getWindows, control, snapshot, elements: elementsOf, activate: id => control({ id, op: 'activate' }), spawn: cmd => control({ op: 'spawn', cmd }) });
 initDesktop(sendControl, () => stream && { w: stream.width / stream.scale, h: stream.height / stream.scale, scale: stream.scale }, () => send(BLUR, 0));
 initRenderer().then(connect);

@@ -502,23 +502,35 @@ impl SeatHandler for State {
 }
 
 impl SelectionHandler for State {
-    type SelectionUserData = ();
+    type SelectionUserData = crate::clipboard::Selection;
 
-    /// A Wayland client took the clipboard/primary selection: offer it to X11 clients too.
+    /// A Wayland client took the clipboard/primary selection: offer it to X11 clients too, and read a
+    /// text clipboard for the browser and the API.
     fn new_selection(&mut self, ty: SelectionTarget, source: Option<SelectionSource>, _seat: Seat<Self>) {
-        if let Some(xwm) = self.xwm.as_mut() {
-            if let Err(e) = xwm.new_selection(ty, source.map(|s| s.mime_types())) {
-                tracing::warn!("xwayland selection: {e:?}");
-            }
+        let mimes = source.map(|s| s.mime_types());
+        if let Some(xwm) = self.xwm.as_mut()
+            && let Err(e) = xwm.new_selection(ty, mimes.clone())
+        {
+            tracing::warn!("xwayland selection: {e:?}");
+        }
+        if ty == SelectionTarget::Clipboard
+            && let Some(mime) = mimes.as_deref().and_then(crate::clipboard::text_mime)
+        {
+            self.read_clipboard(mime, false);
         }
     }
 
-    /// A Wayland client wants data from a selection owned by an X11 client.
-    fn send_selection(&mut self, ty: SelectionTarget, mime_type: String, fd: OwnedFd, _seat: Seat<Self>, _user_data: &()) {
-        let handle = self.handle.clone();
-        if let Some(xwm) = self.xwm.as_mut() {
-            if let Err(e) = xwm.send_selection(ty, mime_type, fd, handle) {
-                tracing::warn!("xwayland selection transfer: {e:?}");
+    /// A Wayland client wants data from a compositor-owned selection: relayed from an X11 client, or our own text.
+    fn send_selection(&mut self, ty: SelectionTarget, mime_type: String, fd: OwnedFd, _seat: Seat<Self>, data: &crate::clipboard::Selection) {
+        match data {
+            crate::clipboard::Selection::Text(text) => crate::clipboard::serve(text.clone(), fd),
+            crate::clipboard::Selection::X11 => {
+                let handle = self.handle.clone();
+                if let Some(xwm) = self.xwm.as_mut()
+                    && let Err(e) = xwm.send_selection(ty, mime_type, fd, handle)
+                {
+                    tracing::warn!("xwayland selection transfer: {e:?}");
+                }
             }
         }
     }

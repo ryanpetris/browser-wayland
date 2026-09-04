@@ -93,6 +93,8 @@ pub(crate) struct Viewer {
     /// Per-stream message counters (every produced frame or packet, sent or dropped); wrap at u16.
     video_seq: u16,
     audio_seq: u16,
+    /// Last clipboard text a desktop application set (replayed to a new viewer, served on the API).
+    clipboard: Option<String>,
 }
 
 pub async fn run(
@@ -135,6 +137,7 @@ pub async fn run(
                 .route("/api/screenshot.png", get(api_screenshot))
                 .route("/api/windows/{id}/elements", get(api_window_elements))
                 .route("/api/token/rotate", post(api_token_rotate))
+                .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard))
                 .nest_service("/mcp", mcp_service(app.clone()))
                 .layer(middleware::from_fn_with_state(app.clone(), bearer)),
         )
@@ -167,8 +170,9 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("../../../web/index.html"))
 }
 
+/// Revalidated on every load, so an upgraded server never runs a stale page.
 fn js(src: &'static str) -> Response {
-    ([(header::CONTENT_TYPE, "text/javascript")], src).into_response()
+    ([(header::CONTENT_TYPE, "text/javascript"), (header::CACHE_CONTROL, "no-cache")], src).into_response()
 }
 
 fn markdown(src: &'static str) -> Response {
@@ -235,6 +239,22 @@ async fn api_token_rotate(headers: HeaderMap, State(app): State<Arc<App>>) -> Re
     let presented = headers.get(header::AUTHORIZATION).and_then(|a| a.to_str().ok()).and_then(|a| a.strip_prefix("Bearer ")).unwrap_or_default();
     match app.rotate_token(presented) {
         Ok(token) => (NO_STORE, Json(serde_json::json!({ "token": token }))).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// The last text a desktop application copied, or 204 if none yet.
+async fn api_clipboard(State(app): State<Arc<App>>) -> Response {
+    match app.clipboard() {
+        Some(text) => (NO_STORE, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
+        None => (StatusCode::NO_CONTENT, NO_STORE).into_response(),
+    }
+}
+
+/// The body (UTF-8 text, up to 1 MiB) becomes the desktop clipboard.
+async fn api_set_clipboard(State(app): State<Arc<App>>, body: String) -> Response {
+    match app.set_clipboard(body) {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e) => e.into_response(),
     }
 }

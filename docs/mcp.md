@@ -11,7 +11,7 @@ generated schemas.
 |---|---|
 | Protocol | MCP over Streamable HTTP at `/mcp` on the existing server, with the `rmcp` SDK. No second port or process; works remotely and from the container. Agents that only speak stdio use the standard `mcp-remote` bridge. |
 | Auth | The bearer token, through the same middleware as `/api`; `401` otherwise. rmcp's host allow-list (DNS-rebinding protection) is off because the token already gates every request. No OAuth. |
-| Shape of the tools | One tool per thing an agent wants to say, fourteen in all, each a few lines calling an `App` method. Arguments use the API's own types where they exist (`Button`, the control ops) so the vocabulary is shared. |
+| Shape of the tools | One tool per thing an agent wants to say, sixteen in all, each a few lines calling an `App` method. Arguments use the API's own types where they exist (`Button`, the control ops) so the vocabulary is shared. |
 | Results | JSON as text content for lists and elements, `image/png` content for snapshots, `ok` for fire-and-forget actions, and `isError` results carrying the API's error text so the model can react. |
 | Documentation | The manual is the server's `instructions` at `initialize` and both skill files are MCP resources, so a client gets the documentation with the connection. |
 | Screenshots for models | `snapshot` and `screenshot` default to a scale that fits the long side in about 1600 device pixels; both take an explicit `scale`. |
@@ -53,7 +53,7 @@ Two files, both compiled in with `include_str!` and served at `/skill/`:
 ## Verification
 
 - A scripted MCP handshake with curl against a test compositor: `initialize` (server info,
-  capabilities, instructions), `tools/list` (14 tools), `resources/list` and `resources/read`, and
+  capabilities, instructions), `tools/list` (16 tools), `resources/list` and `resources/read`, and
   `tools/call` for `windows`, `elements`, `click`, `type` (text appeared in the editor) and `snapshot`
   (a PNG of the window's size), plus a tool error for an unknown window and `401` without the token.
 - The input route through curl: click into an editor, type text with punctuation and capitals, `Return`,

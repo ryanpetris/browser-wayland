@@ -31,6 +31,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x03` | Cursor | `u16 w` `u16 h` `i16 hot_x` `i16 hot_y` `u16 logical_w` `u16 logical_h` then straight-alpha RGBA; `w == 0` hides the pointer. The bitmap is `w × h`; it is shown at `logical_w × logical_h` logical pixels (larger for a client's HiDPI cursor, by buffer scale or viewport), the hotspot is logical, so the page uses `image-set(… (w/logical_w)x)`. |
 | `0x04` | PointerLock | `u8 locked`: a client locked or released the pointer; the page mirrors it with the Pointer Lock API. |
 | `0x05` | Audio | `u8 0` `u16 seq` `u64 pts_us` then one 20 ms Opus packet. `seq` counts every packet, sent or not. |
+| `0x07` | Clipboard | UTF-8 text a desktop application put on the clipboard (text mime types only, at most 1 MiB). Replayed to a new viewer. |
 | `0x06` | Windows | JSON array of window objects (see below), the whole list, whenever anything in it changed. Replayed to a new viewer. |
 
 ### Client → server
@@ -49,6 +50,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x89` | Blur | none. Window blur, page hidden: releases every held key and button. |
 | `0x8A` | PointerLockLost | none. The browser lost its lock (Escape): the client's lock is released and not re-taken until the next click. |
 | `0x8B` | Control | JSON control message (below). |
+| `0x8C` | SetClipboard | UTF-8 text the browser pasted; it becomes the desktop clipboard, offered to Wayland and X11 clients. |
 
 ### Close codes
 
@@ -80,6 +82,8 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `GET /api/windows/{id}/snapshot.png?scale=` | PNG of that window. `scale` 0.05–2, relative to the output scale, default 1. `404` unknown id, `429` another snapshot is in flight, `500` the render failed (logged), `503` the compositor didn't answer within 2 s. |
 | `GET /api/screenshot.png?scale=` | PNG of the whole output (layers included, cursor excluded); `scale` as for a window; `429`, `500`, `503` as for a window. |
 | `POST /api/input` | Body: an input message (below). `202`; `404` unknown window; `503` compositor gone. |
+| `GET /api/clipboard` | The last text a desktop application copied, as `text/plain`; `204` before any. |
+| `PUT /api/clipboard` | Body: UTF-8 text (at most 1 MiB) that becomes the desktop clipboard. `202`. |
 | `POST /api/token/rotate` | Replaces the token: written to the data directory, printed as new URLs, returned as `{"token": …}`; the connected viewer is closed with `4001 token rotated` and the old token stops working. Not an MCP tool. |
 | `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` the tree couldn't be read: no D-Bus session or accessibility bus, the application went away, or 2 s passed (body: `{"error": …}`), `404` unknown id. |
 

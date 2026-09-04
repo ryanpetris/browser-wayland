@@ -224,8 +224,14 @@ impl XwmHandler for State {
     /// An X11 client took a selection: offer it to Wayland clients.
     fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
         match selection {
-            SelectionTarget::Clipboard => set_data_device_selection(&self.dh, &self.seat, mime_types, ()),
-            SelectionTarget::Primary => set_primary_selection(&self.dh, &self.seat, mime_types, ()),
+            SelectionTarget::Clipboard => {
+                let text = crate::clipboard::text_mime(&mime_types);
+                set_data_device_selection(&self.dh, &self.seat, mime_types, crate::clipboard::Selection::X11);
+                if let Some(mime) = text {
+                    self.read_clipboard(mime, true);
+                }
+            }
+            SelectionTarget::Primary => set_primary_selection(&self.dh, &self.seat, mime_types, crate::clipboard::Selection::X11),
         }
     }
 

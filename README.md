@@ -118,13 +118,16 @@ none; the container does this). GTK and Qt applications and Firefox publish thei
 the route answers `501`; `503` means the tree couldn't be read (no bus, or the application went away).
 
 `/api/input` clicks, types, presses key chords and scrolls as a user would, with coordinates relative to a
-window when you pass its id, so element rectangles can be used as they are.
+window when you pass its id, so element rectangles can be used as they are. `/api/clipboard` reads what an
+application last copied and sets what it will paste; the viewer page bridges the same clipboard to the
+browser's (copy in an application, paste locally; Ctrl+V in the page pastes the browser's clipboard).
 
 ## Agents: MCP and skill
 
 The same operations are MCP tools at `/mcp` (Streamable HTTP, same bearer token), so a coding agent can
 drive the desktop: `windows`, `elements`, `snapshot`, `screenshot`, `window_control`, `move_window`,
-`resize_window`, `spawn`, `click`, `move_pointer`, `button`, `scroll`, `key`, `type`.
+`resize_window`, `spawn`, `click`, `move_pointer`, `button`, `scroll`, `key`, `type`, `clipboard_read`,
+`clipboard_write`.
 
 ```sh
 claude mcp add --transport http bw https://host:8443/mcp --header "Authorization: Bearer $T"

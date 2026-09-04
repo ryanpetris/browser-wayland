@@ -1,6 +1,7 @@
 //! Headless Wayland compositor: composites into dmabufs handed to a [`FrameSink`]
 //! and takes input as [`Command`]s. Everything runs on one thread with one calloop loop.
 
+mod clipboard;
 mod cursor;
 mod desktop;
 mod foreign_toplevel;

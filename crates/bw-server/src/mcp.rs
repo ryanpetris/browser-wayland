@@ -142,6 +142,12 @@ pub struct TextArgs {
     pub text: String,
 }
 
+#[derive(Deserialize, JsonSchema)]
+pub struct ClipboardWriteArgs {
+    /// Becomes the desktop clipboard (text only, up to 1 MiB).
+    pub text: String,
+}
+
 type ToolResult = Result<CallToolResult, McpError>;
 
 fn json(value: impl serde::Serialize) -> ToolResult {
@@ -256,6 +262,16 @@ impl Mcp {
     #[tool(description = "Press a key chord and release it: `ctrl+s`, `ctrl+shift+t`, `alt+F4`, `Return`, `Escape`, `Tab`, `Down`, `Prior`, `F5`. Goes to the focused window.")]
     fn key(&self, Parameters(KeyArgs { keys }): Parameters<KeyArgs>) -> ToolResult {
         self.input(InputMsg::Key { keys })
+    }
+
+    #[tool(description = "The last text a desktop application copied to the clipboard (empty if none yet).")]
+    fn clipboard_read(&self) -> ToolResult {
+        Ok(CallToolResult::success(vec![ContentBlock::text(self.app.clipboard().unwrap_or_default())]))
+    }
+
+    #[tool(description = "Put text on the desktop clipboard, for pasting into an application.")]
+    fn clipboard_write(&self, Parameters(ClipboardWriteArgs { text }): Parameters<ClipboardWriteArgs>) -> ToolResult {
+        done(self.app.set_clipboard(text))
     }
 
     #[tool(name = "type", description = "Type text into the focused field through the keyboard layout (click it first). `\\n` is Return.")]

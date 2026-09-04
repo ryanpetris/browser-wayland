@@ -45,6 +45,8 @@ pub enum Command {
     ReleasePointerLock,
     /// A window action or spawn from the viewer page or the HTTP API.
     Control(ControlMsg),
+    /// Text from the browser or the API becomes the desktop clipboard.
+    SetClipboard(String),
     /// Pointer or keyboard input from the API or MCP, resolved on the compositor thread (window-relative
     /// coordinates against the live geometry, keys through the keymap) so a whole click lands as one unit.
     Input(InputMsg),
@@ -195,6 +197,8 @@ pub enum Event {
     PointerLock(bool),
     /// The window list changed (full list, bottom to top, minimized last).
     Windows(Vec<WindowInfo>),
+    /// A desktop application put text on the clipboard.
+    Clipboard(String),
 }
 
 #[derive(Debug)]

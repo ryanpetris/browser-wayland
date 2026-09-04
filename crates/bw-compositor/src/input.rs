@@ -102,6 +102,7 @@ impl State {
                 self.key(evdev, pressed);
             }
             Command::Input(msg) => self.input(msg),
+            Command::SetClipboard(text) => self.set_clipboard(text),
             Command::ReleaseAllInput => self.release_all(),
             Command::PointerMotionAbsolute { x, y } => self.pointer_motion((x, y).into()),
             Command::PointerMotionRelative { dx, dy } => self.pointer_motion(self.pointer_location + Point::<f64, Logical>::from((dx, dy))),

@@ -124,6 +124,23 @@ the mechanism.
   `--force-renderer-accessibility` (the bus's screen-reader flag does nothing for it), so that stays a
   documented requirement rather than something browser-wayland tries to inject.
 
+## Clipboard
+
+`clipboard.rs`. When a client takes the clipboard with a text mime type (`new_selection`, or the
+Xwayland path in `xwayland.rs`), the compositor asks the owner for the text through a pipe, reads it
+asynchronously on the event loop (calloop `Generic` on the non-blocking read end, 1 MiB cap) and sends
+`Event::Clipboard`; the server keeps the last text for `GET /api/clipboard` and the `Clipboard` message
+(replayed to a new viewer). `Command::SetClipboard` makes a compositor-owned selection whose user data
+carries the text; `send_selection` serves it from a thread so a slow reader never blocks the compositor,
+and X11 clients are offered it too. The selection user data distinguishes relayed X11 selections from
+our own. Text only; primary selection and images are not bridged.
+
+The page writes received text to the browser clipboard at once when it may, otherwise on the next
+gesture. Ctrl+V and Shift+Insert are not forwarded immediately: the browser's `paste` event (which
+needs no permission) delivers the text, that goes to the desktop as `SetClipboard`, and the key
+press and release follow, so the application pastes the browser's content. If no paste event comes
+within 150 ms the key goes through on its own.
+
 ## Browser UI (`web/desktop.js`)
 
 - **Window panel** (☰ button, hidden in fullscreen): one row per window, top-most first, minimized
