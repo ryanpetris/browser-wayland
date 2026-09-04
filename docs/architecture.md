@@ -168,6 +168,5 @@ directory should be persisted in containers or every start prints a new token.
 ## Known limitations
 
 - One workspace, one output, one viewer.
-- Fullscreen windows render below top-layer panels (`render_output`'s fixed layer order).
 - Per-window video streams and clipboard access from the browser are not implemented.
 - Surface cursors ignore the buffer scale; presentation feedback is not implemented.

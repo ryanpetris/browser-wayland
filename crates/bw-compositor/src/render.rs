@@ -7,7 +7,7 @@ use smithay::{
     desktop::Window,
     utils::{Logical, Point},
     backend::allocator::Buffer as _,
-    backend::renderer::{Bind, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
+    backend::renderer::{Bind, utils::with_renderer_surface_state, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
     desktop::{WindowSurface, layer_map_for_output, utils::send_frames_surface_tree},
     utils::Scale,
     wayland::shell::wlr_layer::Layer,
@@ -25,7 +25,10 @@ impl State {
     /// A mapped window is fullscreen: it covers the panels (Top layer), only the Overlay layer stays above.
     pub fn fullscreen_window_mapped(&self) -> bool {
         self.space.elements().any(|w| match w.underlying_surface() {
-            WindowSurface::Wayland(t) => t.current_state().states.contains(xdg_toplevel::State::Fullscreen),
+            // a toplevel that unmapped with a null buffer keeps its state and stays in the space until destroyed
+            WindowSurface::Wayland(t) => {
+                t.current_state().states.contains(xdg_toplevel::State::Fullscreen) && with_renderer_surface_state(t.wl_surface(), |s| s.buffer().is_some()).unwrap_or(false)
+            }
             WindowSurface::X11(x) => x.is_fullscreen(),
         })
     }

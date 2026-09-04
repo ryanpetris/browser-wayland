@@ -131,6 +131,8 @@ pub struct State {
     pub last_render: Instant,
     /// Something changed since the last render.
     pub dirty: bool,
+    /// Whether the last frame hid the Top layer under a fullscreen window (pointer focus is refreshed when it flips).
+    pub panels_hidden: bool,
     /// Next render redraws everything (age 0), e.g. after a viewer connects.
     pub force_full_frame: bool,
     pub viewer_connected: bool,
@@ -266,6 +268,7 @@ impl State {
             space,
             popups: PopupManager::default(),
             minimized: Vec::new(),
+            panels_hidden: false,
             foreign: Default::default(),
             active: None,
             last_windows: Vec::new(),
@@ -358,6 +361,13 @@ impl State {
                     state.forget_window(&w); // before refresh drops it from the space, while its position is known
                 }
                 state.space.refresh();
+                // Smithay only re-evaluates pointer focus on motion: when the panel hides or returns under a
+                // resting pointer, replay the position so enter/leave go to the right surface
+                let hidden = state.fullscreen_window_mapped();
+                if hidden != state.panels_hidden {
+                    state.panels_hidden = hidden;
+                    state.pointer_motion(state.pointer_location);
+                }
                 if state.active.as_ref().is_some_and(|w| !w.alive()) {
                     state.active = None;
                 }
@@ -500,7 +510,9 @@ impl State {
             // popup is placed relative to its parent's position
             let popups: Vec<_> = PopupManager::popups_for_surface(&root).collect();
             for (popup, _) in popups.into_iter().rev() {
-                if let PopupKind::Xdg(p) = popup {
+                if let PopupKind::Xdg(p) = popup
+                    && p.is_initial_configure_sent()
+                {
                     let before = p.with_pending_state(|s| s.geometry);
                     self.unconstrain_popup(&p);
                     let after = p.with_pending_state(|s| s.geometry);

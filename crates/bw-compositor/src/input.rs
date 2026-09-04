@@ -243,7 +243,7 @@ impl State {
         pointer.frame(self);
     }
 
-    fn pointer_motion(&mut self, location: Point<f64, Logical>) {
+    pub(crate) fn pointer_motion(&mut self, location: Point<f64, Logical>) {
         let pointer = self.seat.get_pointer().unwrap();
         let delta = location - self.pointer_location;
         let relative = RelativeMotionEvent { delta, delta_unaccel: delta, utime: self.clock.now().as_micros() };

@@ -36,15 +36,18 @@ browser-wayland --exec 'dbus-run-session -- sh -c "xfce4-panel & exec foot"'
   floating ones clamped.
 - **Hit-testing.** Overlay and top layers before windows, bottom and background after; every surface of
   a layer is tried so an input-transparent overlay (an OSD) lets the pointer fall through to the panel
-  below it.
+  below it. While a mapped window is fullscreen the top layer is skipped, in rendering and hit-testing
+  alike, so the window covers the panel and clicks reach it; the overlay layer stays above everything.
+  A launcher that should still appear over a fullscreen window belongs on the overlay layer.
 - **Keyboard.** A click on an on-demand layer focuses it (and deactivates the windows); an exclusive
   top/overlay layer takes the keyboard when it commits (launchers). Bottom/background layers get focus
   only from a click on an empty desktop.
 - **Popups.** Layer-shell popups arrive parentless and are adopted by `PopupManager` on commit; they
   are unconstrained against the layer's geometry the same way window popups are against the window's.
   Grabs work through the existing xdg grab path.
-- Frame callbacks and dmabuf feedback are sent to layer surfaces after every frame; `render_output`
-  already draws layers in the right order.
+- Frame callbacks and dmabuf feedback are sent to layer surfaces after every frame. The frame's
+  elements come from `output_elements` in `render.rs` (overlay, top unless a window is fullscreen,
+  windows, bottom, background), the same builder the screenshot uses.
 
 ## Foreign toplevel management
 
@@ -84,9 +87,6 @@ desktop has nowhere to come back from.
 
 ## Deferred
 
-- Fullscreen windows above the top layer (a top-layer panel is drawn over a fullscreen video). Fix when
-  it bites: replace `render_output` with `space_render_elements` plus our own layer order, skipping the
-  top layer while a window is fullscreen, and mirror it in hit-testing.
 - ext-workspace with a single workspace, if someone wants the pager.
 - Restoring several minimized windows (show-desktop) maps them in list order, not the original
   stacking order.
