@@ -122,8 +122,9 @@ the mechanism.
   first).
 - **Elements** (⌖ button, remembered in `localStorage`): the focused window's elements as thin
   rectangles coloured by role, positioned like the borders from the window's current geometry, so a
-  moving window needs no refetch. Fetched when the focused window's id, title or `updated_ms` changes,
-  300 ms after the last change, one request at a time with a superseded answer dropped. A note under
+  moving window needs no refetch. Fetched when the focused window's id, title, `updated_ms`, geometry
+  or the stream scale changes, 300 ms after the last change; an answer that no longer matches the current
+  state is dropped, a failed request is retried on the next list update. A note under
   the window says why there are none (`501`, `503`, or the `level`).
 - `window.bw` gains `windows()`, `control()`, `activate()`, `spawn()`, `snapshot()`, `elements()`.
 

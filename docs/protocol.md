@@ -77,7 +77,7 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `POST /api/control` | Body: a control message. `202 Accepted`; fire-and-forget. |
 | `GET /api/windows/{id}/snapshot.png?scale=` | PNG of that window. `scale` 0.05–2, relative to the output scale, default 1. `404` unknown id, `429` another snapshot is in flight, `503` the compositor didn't answer within 2 s. |
 | `GET /api/screenshot.png` | PNG of the whole output at its own scale (layers included, cursor excluded). |
-| `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` no D-Bus session or accessibility bus (body: `{"error": …}`), `404` unknown id. |
+| `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` the tree couldn't be read: no D-Bus session or accessibility bus, the application went away, or 2 s passed (body: `{"error": …}`), `404` unknown id. |
 
 Status codes: `401` missing or wrong bearer token; the JSON body is limited to 2 MiB by axum.
 
@@ -135,4 +135,4 @@ is the boundary.
 ## Browser console
 
 `window.bw()` returns viewer statistics. `bw.windows()`, `bw.activate(id)`, `bw.control({...})`,
-`bw.spawn(cmd)` and `bw.snapshot(id, scale)` (a `Blob`) wrap the same messages and routes.
+`bw.spawn(cmd)`, `bw.snapshot(id, scale)` (a `Blob`) and `bw.elements(id)` wrap the same messages and routes.

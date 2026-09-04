@@ -110,7 +110,7 @@ target a control instead of interpreting pixels. It reads the toolkits' accessib
 session browser-wayland was started in (`dbus-run-session -- browser-wayland --elements …` if there is
 none; the container does this). GTK and Qt applications and Firefox publish their trees when started from
 `--exec` or `spawn`; Chromium and Electron apps need `--force-renderer-accessibility`. Without the flag
-the route answers `501`, without a bus `503`.
+the route answers `501`; `503` means the tree couldn't be read (no bus, or the application went away).
 
 The viewer page uses the same data over its WebSocket: the ☰ button opens a window list with thumbnails
 and maximize/minimize/close buttons (click a row to bring the window forward, type in the box to start a

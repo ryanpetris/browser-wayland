@@ -217,10 +217,11 @@ async fn api_window_elements(UrlPath(id): UrlPath<u64>, headers: HeaderMap, Stat
         (list, v.info.as_ref().map_or(1.0, |i| i.scale))
     };
     let Some(win) = list.into_iter().find(|w| w.id == id) else { return StatusCode::NOT_FOUND.into_response() };
+    let no_store = [(header::CACHE_CONTROL, "no-store")];
     match tokio::time::timeout(std::time::Duration::from_secs(2), elements::elements(&win, scale)).await {
-        Ok(Ok(page)) => Json(page).into_response(),
-        Ok(Err(e)) => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": format!("{e:#}") }))).into_response(),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": "timed out reading the tree" }))).into_response(),
+        Ok(Ok(page)) => (no_store, Json(page)).into_response(),
+        Ok(Err(e)) => (StatusCode::SERVICE_UNAVAILABLE, no_store, Json(serde_json::json!({ "error": format!("{e:#}") }))).into_response(),
+        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, no_store, Json(serde_json::json!({ "error": "timed out reading the tree" }))).into_response(),
     }
 }
 

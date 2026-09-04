@@ -66,32 +66,34 @@ pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
     let conn = a11y_bus().await?;
     let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
     let registry = ("org.a11y.atspi.Registry".to_string(), OwnedObjectPath::try_from("/org/a11y/atspi/accessible/root")?);
-    let apps = accessible(&conn, &registry).await?.get_children().await.context("accessibility registry not running")?;
+    let apps = proxy::<AccessibleProxy>(&conn, &registry).await?.get_children().await.context("accessibility registry not running")?;
+    let none = Page { level: "none", toolkit: None, elements: vec![] };
+    let Some(pid) = win.pid else { return Ok(none) };
     let mut app = None;
     for r in apps {
         let Ok(name) = BusName::try_from(r.0.as_str()) else { continue };
-        if dbus.get_connection_unix_process_id(name).await.ok() == win.pid {
+        if dbus.get_connection_unix_process_id(name).await.ok() == Some(pid) {
             app = Some(r);
             break;
         }
     }
-    let Some(app) = app else { return Ok(Page { level: "none", toolkit: None, elements: vec![] }) };
-    let toolkit = application(&conn, &app).await?.toolkit_name().await.ok();
+    let Some(app) = app else { return Ok(none) };
+    let toolkit = proxy::<ApplicationProxy>(&conn, &app).await?.toolkit_name().await.ok();
     let mut frame = None;
-    let frames: Vec<Ref> = accessible(&conn, &app).await?.get_children().await?.into_iter().filter(|r| !is_null(r)).collect();
+    let frames: Vec<Ref> = proxy::<AccessibleProxy>(&conn, &app).await?.get_children().await?.into_iter().filter(|r| !is_null(r)).collect();
     if frames.len() == 1 {
         frame = frames.into_iter().next();
     } else {
         for f in frames {
-            if accessible(&conn, &f).await?.name().await.ok().as_deref() == Some(win.title.as_str()) {
+            if proxy::<AccessibleProxy>(&conn, &f).await?.name().await.ok().as_deref() == Some(win.title.as_str()) {
                 frame = Some(f);
                 break;
             }
         }
     }
     let Some(frame) = frame else { return Ok(Page { level: "app", toolkit, elements: vec![] }) };
-    let (dx, dy) = origin(component(&conn, &frame).await?.get_extents(COORD_WINDOW).await?, win);
-    let children = accessible(&conn, &frame).await?.get_children().await?;
+    let (dx, dy) = origin(proxy::<ComponentProxy>(&conn, &frame).await?.get_extents(COORD_WINDOW).await?, win);
+    let children = proxy::<AccessibleProxy>(&conn, &frame).await?.get_children().await?;
     let level = if children.is_empty() { "frame" } else { "full" };
 
     // depth-first in document order; a subtree that isn't showing is skipped whole. The flag marks
@@ -102,17 +104,20 @@ pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
     let mut visited = 0;
     while let Some((r, device)) = stack.pop() {
         visited += 1;
-        if visited > MAX_VISITED || out.len() >= MAX_ELEMENTS || is_null(&r) {
+        if visited > MAX_VISITED || out.len() >= MAX_ELEMENTS {
+            break;
+        }
+        if is_null(&r) {
             continue;
         }
-        let acc = accessible(&conn, &r).await?;
+        let acc = proxy::<AccessibleProxy>(&conn, &r).await?;
         let Ok(state) = acc.get_state().await else { continue };
         if state.first().is_none_or(|s| s & (1 << STATE_SHOWING) == 0) {
             continue;
         }
         let role = acc.get_role().await.unwrap_or(0);
         if let Some(role) = role_name(role)
-            && let Ok((x, y, w, h)) = component(&conn, &r).await?.get_extents(COORD_WINDOW).await
+            && let Ok((x, y, w, h)) = proxy::<ComponentProxy>(&conn, &r).await?.get_extents(COORD_WINDOW).await
             && w > 0
             && h > 0
         {
@@ -177,16 +182,9 @@ async fn a11y_bus() -> Result<Connection> {
     zbus::connection::Builder::address(addr.as_str())?.build().await.context("accessibility bus")
 }
 
-async fn accessible(conn: &Connection, r: &Ref) -> Result<AccessibleProxy<'static>> {
-    Ok(AccessibleProxy::builder(conn).destination(r.0.clone())?.path(r.1.clone())?.cache_properties(CacheProperties::No).build().await?)
-}
-
-async fn component(conn: &Connection, r: &Ref) -> Result<ComponentProxy<'static>> {
-    Ok(ComponentProxy::builder(conn).destination(r.0.clone())?.path(r.1.clone())?.cache_properties(CacheProperties::No).build().await?)
-}
-
-async fn application(conn: &Connection, r: &Ref) -> Result<ApplicationProxy<'static>> {
-    Ok(ApplicationProxy::builder(conn).destination(r.0.clone())?.path(r.1.clone())?.cache_properties(CacheProperties::No).build().await?)
+/// A proxy for one object; no property cache, so hundreds of short-lived proxies don't each subscribe to signals.
+async fn proxy<P: zbus::proxy::ProxyImpl<'static> + zbus::proxy::Defaults + From<zbus::Proxy<'static>>>(conn: &Connection, r: &Ref) -> Result<P> {
+    Ok(zbus::proxy::Builder::<P>::new(conn).destination(r.0.clone())?.path(r.1.clone())?.cache_properties(CacheProperties::No).build().await?)
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 // Fed by the WINDOWS message; talks back with CONTROL (see crates/bw-server/src/protocol.rs).
 
 let windows = [];
-let sendControl = () => {}, streamSize = () => null, releaseInput = () => {}; // streamSize(): logical {w, h} of the video, or null before Config
+let sendControl = () => {}, streamSize = () => null, releaseInput = () => {}; // streamSize(): logical {w, h, scale} of the video, or null before Config
 const rows = new Map(); // window id -> its panel row, kept across list updates so thumbnails only reload when their URL changes
 let thumbQueue = Promise.resolve(); // the server renders one snapshot at a time (429 otherwise), so fetch them one by one
 let bordersOn = false, elementsOn = false;
@@ -55,20 +55,21 @@ export function onWindows(list) {
 
 const focusedWindow = () => windows.find(w => w.focused && !w.minimized);
 
-// The focused window's elements, fetched again when the focus, the title or the content (updated_ms,
-// whole seconds) changed; the 300 ms delay merges a burst of list updates into one request.
-function fetchElements() {
+// The focused window's elements, fetched again when anything the answer depends on changed: the focus,
+// the title, the content (updated_ms, whole seconds), the geometry or the stream scale (Chromium's web
+// content is scaled by it). The 300 ms delay merges a burst of list updates into one request.
+export function fetchElements() {
   const f = focusedWindow();
-  const key = elementsOn && f ? `${f.id}/${f.title}/${f.updated_ms}` : '';
+  const key = elementsOn && f ? `${f.id}/${f.title}/${f.updated_ms}/${f.w}x${f.h}+${f.geo_x}+${f.geo_y}@${streamSize()?.scale}` : '';
   if (key === elementsKey) return;
   elementsKey = key;
   clearTimeout(elementsTimer);
   if (!key) { elements = null; return; }
   elementsTimer = setTimeout(async () => {
-    const res = await api(`/api/windows/${f.id}/elements`);
-    const page = await res.json().catch(() => ({}));
+    const res = await api(`/api/windows/${f.id}/elements`).catch(() => null);
     if (elementsKey !== key) return; // superseded while in flight; the newer request is on its way
-    elements = { id: f.id, status: res.status, page };
+    if (!res) { elementsKey = ''; return; } // network failure: the next list update retries
+    elements = { id: f.id, status: res.status, page: await res.json().catch(() => ({})) };
     renderBorders();
   }, 300);
 }
