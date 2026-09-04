@@ -7,7 +7,7 @@ use std::{os::fd::OwnedFd, sync::Arc};
 use bw_core::Event;
 use smithay::{
     reexports::{
-        calloop::{Interest, Mode, PostAction, RegistrationToken, generic::Generic},
+        calloop::{Interest, Mode, PostAction, RegistrationToken, generic::Generic, timer::{TimeoutAction, Timer}},
         rustix,
     },
     wayland::selection::{SelectionTarget, data_device::{request_data_device_client_selection, set_data_device_selection}},
@@ -25,6 +25,8 @@ pub enum Selection {
 
 pub const TEXT_MIMES: [&str; 5] = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "TEXT", "STRING"];
 const LIMIT: usize = 1 << 20;
+/// A pipe nobody reads or writes for this long is closed, so a stalled peer costs nothing for good.
+const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The mime type to read a selection as text, if it offers one.
 pub fn text_mime(mimes: &[String]) -> Option<String> {
@@ -45,12 +47,25 @@ impl State {
     /// loop turn so the selection this is called about is installed by then; a previous read still in
     /// flight is dropped.
     pub fn read_clipboard(&mut self, mime: String, x11: bool) {
+        let generation = self.cancel_clipboard_read();
+        self.handle.insert_idle(move |state| state.start_clipboard_read(mime, x11, generation));
+    }
+
+    /// Drop the read in flight; whatever it still delivers is ignored. Returns the new generation.
+    fn cancel_clipboard_read(&mut self) -> u64 {
         if let Some(token) = self.reading.token.take() {
             self.handle.remove(token);
         }
         self.reading.generation += 1;
-        let generation = self.reading.generation;
-        self.handle.insert_idle(move |state| state.start_clipboard_read(mime, x11, generation));
+        self.reading.generation
+    }
+
+    /// Remove `token`'s source after `DEADLINE` (a no-op if it removed itself by then).
+    fn expire(&self, token: RegistrationToken) {
+        let _ = self.handle.insert_source(Timer::from_duration(DEADLINE), move |_, _, state| {
+            state.handle.remove(token);
+            TimeoutAction::Drop
+        });
     }
 
     fn start_clipboard_read(&mut self, mime: String, x11: bool, generation: u64) {
@@ -98,11 +113,15 @@ impl State {
                 }
             }
         });
-        self.reading.token = token.ok();
+        if let Ok(token) = token {
+            self.reading.token = Some(token);
+            self.expire(token);
+        }
     }
 
     /// Text from the browser or the API becomes the clipboard, offered to Wayland and X11 clients.
     pub fn set_clipboard(&mut self, text: String) {
+        self.cancel_clipboard_read(); // an application's older text must not land after this one
         let mimes: Vec<String> = TEXT_MIMES.iter().map(|m| m.to_string()).collect();
         set_data_device_selection(&self.dh, &self.seat, mimes.clone(), Selection::Text(Arc::new(text)));
         if let Some(xwm) = self.xwm.as_mut()
@@ -117,7 +136,7 @@ impl State {
     pub fn serve_clipboard(&mut self, text: Arc<String>, fd: OwnedFd) {
         let _ = rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK);
         let mut written = 0;
-        let _ = self.handle.insert_source(Generic::new(fd, Interest::WRITE, Mode::Level), move |_, fd, _| {
+        let token = self.handle.insert_source(Generic::new(fd, Interest::WRITE, Mode::Level), move |_, fd, _| {
             loop {
                 if written >= text.len() {
                     return Ok(PostAction::Remove); // closes the pipe: end of text
@@ -129,5 +148,8 @@ impl State {
                 }
             }
         });
+        if let Ok(token) = token {
+            self.expire(token);
+        }
     }
 }

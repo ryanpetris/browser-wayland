@@ -449,8 +449,9 @@ const onKey = e => {
   sendKey(code, e.type === 'keydown');
 };
 window.onkeydown = window.onkeyup = onKey;
-window.onblur = () => { pendingPaste = null; send(BLUR, 0); };
-document.onvisibilitychange = () => { if (document.hidden) send(BLUR, 0); };
+const blur = () => { pendingPaste = null; send(BLUR, 0); }; // a deferred paste chord must not fire after its modifier was released
+window.onblur = blur;
+document.onvisibilitychange = () => { if (document.hidden) blur(); };
 
 let resizeTimer;
 window.onresize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(sendResize, 150); };

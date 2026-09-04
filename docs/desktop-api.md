@@ -134,8 +134,10 @@ sends `Event::Clipboard`; the server keeps the last text for `GET /api/clipboard
 message (replayed to a new viewer). `Command::SetClipboard` makes a compositor-owned selection whose
 user data carries the text; `send_selection` writes it from a calloop source on the non-blocking pipe,
 so a slow reader never blocks the compositor, and X11 clients are offered it too. The selection user
-data distinguishes relayed X11 selections from our own. Text only; primary selection and images are not
-bridged; a write over 1 MiB gets 413.
+data distinguishes relayed X11 selections from our own. Setting the clipboard drops a read still in
+flight, so an application's older text can't land after the new one. Either pipe is closed after ten
+seconds if its peer stalls. Text only; primary selection and images are not bridged; a write over 1 MiB
+gets 413.
 
 The page writes received text to the browser clipboard at once when it may, otherwise on the next
 gesture. Ctrl+V and Shift+Insert are not forwarded immediately: the browser's `paste` event (which
