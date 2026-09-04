@@ -32,7 +32,34 @@ function paint() {
 function paintNow(frame) {
   try { draw(frame); frames++; windowFrames++; } catch (e) { console.error(e); frame.close(); }
   if (lastInput) { latencyMs = performance.now() - lastInput; lastInput = 0; } // input -> next painted frame
+  const t = performance.now();
+  if (frame.timestamp === lastReceived.pts) { stage.decode.push(lastReceived.output - lastReceived.at); stage.paint.push(t - lastReceived.output); }
+  if (lastPaint) stage.interval.push(t - lastPaint);
+  lastPaint = t;
 }
+
+// --- stats overlay -----------------------------------------------------------
+// Per-stage timings of the last second (ms): receive→decoder output, output→paint, paint→paint.
+const stage = { decode: [], paint: [], interval: [] };
+let lastReceived = { pts: -1, at: 0, output: 0 }, lastPaint = 0, sinceKey = 0, audioUnderruns = 0;
+const stats = document.getElementById('stats');
+const pct = (a, p) => a.length ? a.slice().sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))].toFixed(1) : '-';
+function renderStats() {
+  if (stats.hidden) return;
+  const s = window.bw(), au = s.audio;
+  stats.textContent = [
+    `${stream?.codec ?? '-'} ${stream?.width ?? 0}×${stream?.height ?? 0} @${stream?.scale?.toFixed(2)} ${renderer}`,
+    `fps ${fps}  ${mbps.toFixed(1)} Mbit/s  input→paint ${latencyMs.toFixed(0)} ms`,
+    `recv→decoded p50/p95 ${pct(stage.decode, .5)}/${pct(stage.decode, .95)} ms   decoded→paint ${pct(stage.paint, .5)}/${pct(stage.paint, .95)} ms`,
+    `paint interval p50/p95 ${pct(stage.interval, .5)}/${pct(stage.interval, .95)} ms   decode queue ${s.queue ?? '-'}`,
+    `frames ${frames}  received ${received}  keyframes ${keyframes} (${sinceKey} since last)  lost ${lost}  dropped ${dropped}  errors ${decodeErrors}`,
+    `audio ${au ? `${au.state} packets ${au.packets} decoded ${au.decoded} lead ${((nextPlay - (audioCtx?.currentTime ?? 0)) * 1000).toFixed(0)} ms underruns ${audioUnderruns}` : 'off'}`,
+    `ws connects ${connects}  closes ${closes.length}  pointer lock ${s.locked} (${lockRequests} requests${lockError ? ', ' + lockError : ''})`,
+  ].join('\n');
+  stage.decode.length = stage.paint.length = stage.interval.length = 0;
+}
+document.getElementById('stats-btn').onclick = () => { stats.hidden = !stats.hidden; try { localStorage.setItem('bw.stats', stats.hidden ? '0' : '1'); } catch {} renderStats(); };
+try { stats.hidden = localStorage.getItem('bw.stats') !== '1'; } catch {}
 
 // --- rendering -------------------------------------------------------------
 
@@ -97,6 +124,7 @@ let ws, decoder, stream, awaitingKey = true, frames = 0, received = 0, fps = 0, 
 let videoSeq = -1, audioSeq = -1, lost = 0, dropNext = false; // seq: last message seen per stream; lost: gaps in either
 
 function connect() {
+  audioSeq = -1; // the server kept counting while we were away
   connects++;
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.binaryType = 'arraybuffer';
@@ -154,7 +182,7 @@ function sendResize() {
 function newDecoder() {
   if (decoder && decoder.state !== 'closed') decoder.close(); // a decode error closes it already
   const d = new VideoDecoder({
-    output: renderer === 'webgpu' ? schedule : paintNow,
+    output: f => { if (f.timestamp === lastReceived.pts) lastReceived.output = performance.now(); (renderer === 'webgpu' ? schedule : paintNow)(f); },
     error: e => { console.error(e); decodeErrors++; if (d === decoder) resync(); },
   });
   d.configure({ codec: stream.codec, optimizeForLatency: true });
@@ -218,20 +246,22 @@ function onMessage(buf) {
       received++;
       if (!decoder) return;
       const key = (dv.getUint8(1) & 1) !== 0, seq = dv.getUint16(2, true);
-      if (key) keyframes++;
+      if (key) { keyframes++; sinceKey = 0; } else sinceKey++;
       // A gap in seq means the server dropped frames for us; a delta after a gap can't be decoded.
-      const gap = videoSeq >= 0 && seq !== ((videoSeq + 1) & 0xffff);
+      const gap = videoSeq >= 0 ? (seq - videoSeq - 1) & 0xffff : 0;
       videoSeq = seq;
-      if (gap) lost++;
+      if (!awaitingKey) lost += gap; // while we wait for a keyframe we asked for, the skipped deltas are expected
       if (!key && (gap || awaitingKey || decoder.decodeQueueSize > 4)) {
         dropped++;
         if (!awaitingKey) { awaitingKey = true; send(REQUEST_KEYFRAME, 0); }
         return;
       }
       try {
+        const pts = Number(dv.getBigUint64(4, true));
+        lastReceived = { pts, at: performance.now(), output: 0 };
         decoder.decode(new EncodedVideoChunk({
           type: key ? 'key' : 'delta',
-          timestamp: Number(dv.getBigUint64(4, true)),
+          timestamp: pts,
           data: new Uint8Array(buf, 12),
           transfer: [buf],
         }));
@@ -253,6 +283,7 @@ setInterval(() => {
   fps = windowFrames; mbps = windowBytes * 8 / 1e6;
   windowFrames = 0; windowBytes = 0;
   updateStatus();
+  renderStats();
 }, 1000);
 
 // Needs a user gesture: called on the lock event (usually right after the click that caused it) and retried on clicks.
@@ -280,6 +311,7 @@ function onAudioData(data) {
   const now = audioCtx.currentTime;
   // Not running (no user gesture yet) or too far ahead (capture clock faster than ours): drop 20 ms.
   if (audioCtx.state !== 'running' || nextPlay > now + 3 * AUDIO_LEAD) { data.close(); return; }
+  if (nextPlay && nextPlay < now) audioUnderruns++; // the lead ran out: the next packet starts late
   const ab = audioCtx.createBuffer(data.numberOfChannels, data.numberOfFrames, data.sampleRate);
   for (let ch = 0; ch < data.numberOfChannels; ch++) {
     const plane = new Float32Array(data.numberOfFrames);
@@ -309,7 +341,7 @@ function onAudio(buf) {
   audioPackets++;
   const dv = new DataView(buf);
   const seq = dv.getUint16(2, true);
-  if (audioSeq >= 0 && seq !== ((audioSeq + 1) & 0xffff)) { lost++; nextPlay = 0; } // a gap: restart the lead from now
+  if (audioSeq >= 0 && seq !== ((audioSeq + 1) & 0xffff)) { lost += (seq - audioSeq - 1) & 0xffff; nextPlay = 0; } // a gap: restart the lead from now
   audioSeq = seq;
   audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: Number(dv.getBigUint64(4, true)), data: new Uint8Array(buf, 12) }));
 }
