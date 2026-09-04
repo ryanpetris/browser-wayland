@@ -1,11 +1,12 @@
 # browser-wayland
 
 A headless Wayland compositor whose screen is a browser tab. Clients render on the GPU, the
-composited frame is hardware-encoded to H.264 (VA-API) and streamed over a WebSocket, and the
-browser decodes it with WebCodecs. Mouse and keyboard input flow back the same way.
+composited frame is hardware-encoded with VA-API (HEVC, VP9 or H.264, whichever the browser decodes
+best) and streamed over a WebSocket, and the browser decodes it with WebCodecs. Mouse, keyboard,
+audio and the clipboard travel the same way.
 
 Design notes: [docs/architecture.md](docs/architecture.md), [docs/protocol.md](docs/protocol.md),
-[docs/panels.md](docs/panels.md), [docs/desktop-api.md](docs/desktop-api.md).
+[docs/panels.md](docs/panels.md), [docs/desktop-api.md](docs/desktop-api.md), [docs/mcp.md](docs/mcp.md).
 
 ## Install
 
@@ -44,7 +45,7 @@ resize from the edges, close, maximize and minimize with its buttons.
 
 Other clients can join later: `WAYLAND_DISPLAY=wayland-browser some-app`. X11 apps work too: an
 Xwayland is started automatically and the log prints its `DISPLAY`. Super (or Alt) + left drag moves
-any window, which is how undecorated X11 windows get moved.
+any window from anywhere in it.
 
 Audio from clients goes to the browser instead of the host speakers: the server creates a private
 `browser-wayland-<pid>` sink (printed in the log) and captures it as Opus. Clients started with
@@ -84,9 +85,9 @@ Firefox and Chromium, with PipeWire for audio and Mesa's OpenGL and Vulkan drive
 panel, whose menu launches the rest. `make docker-run` builds the image and runs it; the details are
 in the Dockerfile's header.
 
-The page tells you when the server closed its socket: "wrong token" (the token changes with the data
-directory, e.g. a fresh container without a volume) or "replaced by another viewer" (one at a time, the
-newest wins).
+The page says when the server closed its socket: a token dialog ("wrong token" or "token rotated";
+the token changes with the data directory, e.g. a fresh container without a volume), or "Another
+viewer took over" with a button to take it back (one at a time, the newest wins).
 
 ## Window streams
 
@@ -118,8 +119,9 @@ curl -X POST ... /api/input -d '{"type":"text","text":"hello"}'                 
 
 Each window reports `id`, `title`, `app_id`, `x11`, `pid`, its geometry `x y w h` in logical pixels, where
 that geometry sits in the client's surface (`geo_x geo_y`), its open `popups` (`[x, y, w, h]` relative to
-the geometry), its stacking index `z` (`null` while minimized), `maximized`, `fullscreen`, `minimized`, `focused`, and
-`updated_ms`, the time of its last commit to the second. Ops: `activate`, `close`, `minimize`, `unminimize`, `maximize`,
+the geometry), the height of the title bar the compositor draws above it (`decoration`, 0 when the
+application draws its own), its stacking index `z` (`null` while minimized), `maximized`, `fullscreen`,
+`minimized`, `focused`, and `updated_ms`, the time of its last commit to the second. Ops: `activate`, `close`, `minimize`, `unminimize`, `maximize`,
 `unmaximize`, `fullscreen`, `unfullscreen`, `move` (`x`, `y`), `resize` (`w`, `h`), `spawn` (`cmd`, run
 with `sh -c` in the same environment as `--exec`). Requests are fire-and-forget; unknown ids are ignored.
 Snapshots are lossless PNGs of a window's own buffers, so they include covered and minimized windows;
@@ -170,7 +172,8 @@ page with hot reload, proxying `/ws` and `/api` to a server started with `--no-t
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,
-then H.264), `--fake-source` (a test pattern instead of the compositor), `--socket-name`, `--render-node`.
+then H.264), `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--fake-source` (a test pattern instead of
+the compositor), `--socket-name`, `--render-node`. `--help` lists them all.
 
 Games and other clients that lock the pointer get raw mouse deltas: the page mirrors the lock with the
 Pointer Lock API; Escape releases it.

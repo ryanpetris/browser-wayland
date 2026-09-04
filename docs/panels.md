@@ -62,11 +62,12 @@ class as the app id.
 
 ## Minimize
 
-`State::minimized: Vec<(Window, Point)>`. `minimize` unmaps the window from the space, clears its
-activated state (it can no longer be reached by `focus_window`, which only walks the space), and hands
-focus to the top-most remaining window that isn't an override-redirect menu. `unminimize` maps the
-window back and runs `relayout`, so a maximized or fullscreen window that was minimized across a
-resize or a panel change comes back fitted. Minimized windows keep their last buffer attached, so
+`State::minimized: Vec<(Window, Point, usize)>`: the window, where it comes back, and its stacking
+index at the time. `minimize` unmaps the window from the space, clears its activated state (it can no
+longer be reached by `focus_window`, which only walks the space), and hands focus to the top-most
+remaining window that isn't an override-redirect menu. `unminimize` maps the window back at its old
+place in the stack (the windows above it are re-mapped over it) and runs `relayout`, so a maximized or
+fullscreen window that was minimized across a resize or a panel change comes back fitted. Minimized windows keep their last buffer attached, so
 snapshots of them still work. In `--kiosk` mode the minimize capability isn't advertised: a nested
 desktop has nowhere to come back from.
 
@@ -85,7 +86,3 @@ desktop has nowhere to come back from.
   font they render as hex boxes. Add `"wlr/taskbar"` to `modules-left` for a taskbar.
 - **GTK 3 is fine.** The `GSK_RENDERER=ngl` workaround is for GTK 4's Vulkan renderer; panels aren't affected.
 
-## Deferred
-
-- Restoring several minimized windows (show-desktop) maps them in list order, not the original
-  stacking order.

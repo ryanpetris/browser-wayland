@@ -61,7 +61,8 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | 4002 | replaced by another viewer (one at a time; the newest wins) |
 | 4003 | a window stream that can't run: no such window, the window closed, no encoder could be made, or no window streams (`--fake-source`) |
 
-The page shows these as plain text and stops retrying; on any other close it reconnects after a second.
+The page shows these (a token dialog for 4001, a card for the other two) and stops retrying; on any
+other close it reconnects after a second.
 
 ### Window streams (`/ws/window/{id}`)
 

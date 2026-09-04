@@ -16,7 +16,7 @@ snapshots, browser UI).
 |---|---|
 | Stack | Rust + Smithay 0.7; no wlroots, no C. GStreamer (via gstreamer-rs) for encoding. axum for HTTP/WebSocket. |
 | Transport | WebSocket + WebCodecs. WebCodecs needs a secure context, so the server speaks HTTPS with a self-signed certificate unless `--no-tls` (localhost development). |
-| Windowing | Floating desktop: stacking, click-to-focus, client-side decorations, xdg move/resize, maximize/fullscreen, minimize, layer-shell panels. `--kiosk` fullscreens every window for nested desktops. |
+| Windowing | Floating desktop: stacking, click-to-focus, decorations by the client or, for those that draw none, by the compositor, xdg move/resize, maximize/fullscreen, minimize, layer-shell panels. `--kiosk` fullscreens every window for nested desktops. |
 | Viewers | One at a time; a new connection takes over and the old one is told so. |
 | Cursor | Drawn by the browser (CSS cursor from the compositor's image), never composited: pointer motion costs no frames. |
 | Rendering cadence | Damage-driven. No commit, no frame, no bandwidth. |
@@ -39,11 +39,11 @@ One process, three thread domains joined by channels:
   └──────────────▲───────────────────────────────┘                                             ▼
                  │ Command (calloop channel)   Event (tokio mpsc) ▲
   ┌──────────────┴──────────────────────────────────────────────┴──────────────────────────────────────────┐
-  │ tokio thread: axum · HTTPS (rustls, rcgen self-signed) · /ws · /api · embedded web/                     │
+  │ tokio thread: axum · HTTPS (rustls, rcgen self-signed) · /ws · /ws/window · /api · /mcp · web/dist      │
   └──────────────────────────────────────────────────────────────▲──────────────────────────────────────────┘
                                                                  │ wss (binary frames both ways)
   ┌──────────────────────────────────────────────────────────────┴──────────────────────────────────────────┐
-  │ browser: VideoDecoder → canvas · AudioDecoder → Web Audio · input → binary messages · desktop UI (JS)    │
+  │ browser: VideoDecoder → canvas · AudioDecoder → Web Audio · input → binary messages · React UI around it │
   └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,10 +59,10 @@ small shared-types crate. That boundary keeps encoders and transports pluggable 
 
 | Crate | Role |
 |---|---|
-| `bw-core` | Plain types shared by everything: `Command` (server → compositor), `Event` (compositor → server), `DmabufFrame`, `FrameSink`, `StreamMsg`, `WindowInfo`, `ControlMsg`, `Snapshot`. Serde on the API types. |
-| `bw-compositor` | Smithay. `lib.rs` (state, loop, output, resize, spawn), `handlers.rs` (protocol delegates), `input.rs` (browser input → seat, focus), `render.rs` (frame), `gpu.rs` (render node, GBM, EGL, swapchain), `grabs.rs` (move/resize), `xwayland.rs`, `foreign_toplevel.rs`, `desktop.rs` (window list, control, snapshots), `cursor.rs`. |
+| `bw-core` | Plain types shared by everything: `Command` (server → compositor), `Event` (compositor → server), `DmabufFrame`, `FrameSink`, `StreamMsg`, `WindowInfo`, `ControlMsg`, `InputMsg`, `Snapshot`, the decoration layout. Serde and JSON schemas on the API types. |
+| `bw-compositor` | Smithay. `lib.rs` (state, loop, output, resize, spawn), `handlers.rs` (protocol delegates), `input.rs` (browser and API input → seat, focus, decorations), `render.rs` (frame), `gpu.rs` (render node, GBM, EGL, swapchains), `grabs.rs` (move/resize), `decor.rs` (title bars), `xwayland.rs`, `foreign_toplevel.rs`, `workspace.rs`, `desktop.rs` (window list, control, snapshots), `window_stream.rs`, `clipboard.rs`, `cursor.rs`. |
 | `bw-stream` | GStreamer. `GstSink: FrameSink` (dmabuf import, pipeline build/rebuild, keyframes, codec switch), `lease.rs` (a custom `GstMeta` whose `free` drops the swapchain lease), the Opus audio source, and a `videotestsrc` fake source for `--fake-source`. |
-| `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`; its build script insists on a web build first), `/ws` sessions, `/api`, frame/audio/event distribution to the current viewer. |
+| `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`; its build script insists on a web build first), `/ws` and `/ws/window/{id}` sessions, `/api` (`api.rs` holds the operations, `elements.rs` the accessibility walk), `/mcp` (`mcp.rs`), frame/audio/event distribution. |
 | `bw` | The `browser-wayland` binary: clap CLI, thread spawning, channel wiring, the audio null sink. |
 
 `web/` is the viewer: React 19 and Tailwind CSS 4, built by Vite into `web/dist` by `make web` (the

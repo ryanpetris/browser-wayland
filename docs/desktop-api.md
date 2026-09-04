@@ -18,7 +18,7 @@ of a window, and a small desktop UI in the viewer built on the same data. Wire f
 | Snapshot content | The window's xdg geometry (shadows clipped), popups included, minimized windows included, rendered offscreen at `scale` × output scale. The full screenshot builds the output's elements itself (`output_elements`) at the same kind of scale. |
 | Snapshot format | PNG, straight alpha, encoded on the server's blocking pool; the compositor only renders and reads back. JPEG/WebP later if size matters. |
 | Concurrency | One snapshot in flight; more get `429`. A queued request can't be cancelled once it is on the compositor's channel. |
-| Elements | Behind `--elements`; read live from AT-SPI per request, never cached; the compositor is not involved beyond exporting the geometry offset. |
+| Elements | Behind `--elements`; read live from AT-SPI per request, never cached; the compositor is not involved beyond exporting the geometry offset, the open popups and its own decorations. |
 
 ## One implementation, several fronts
 
@@ -244,7 +244,7 @@ bearer token and the WebSocket authenticates with its first message. `spawn` is 
 for whoever holds the token, which the viewer already implied (it can type into a terminal). Snapshot
 rendering is bounded by the one-in-flight rule and the pixel cap. The viewer receives the token once in
 its URL fragment (so it never reaches the server's or a proxy's log), moves it into `sessionStorage` (this
-tab only) and strips it from the address bar, so the URL can be shared or bookmarked without it; a tab with no token shows a paste box. `POST /api/token/rotate`
+tab only) and strips it from the address bar, so the URL can be shared or bookmarked without it; a tab with no token shows a dialog asking for one. `POST /api/token/rotate`
 replaces the token everywhere at once and closes the connected viewer with `4001 token rotated`; the
 server prints the new URLs. Per-viewer tokens with individual revocation are not implemented. Window streams (`/ws/window/{id}`)
 cost an encoder and a swapchain each and are not limited: the token holder is trusted with that.

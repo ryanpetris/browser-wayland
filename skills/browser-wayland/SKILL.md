@@ -27,8 +27,9 @@ curl -s -H "$H" https://host:8443/api/windows | jq
    each with `role`, `name` and a rectangle `x y w h` **relative to the window's own `x y`**. The
    answer's `level` tells you how much the application exposes: `full` is the normal case; `none`
    means the toolkit publishes nothing (terminals, games); `frame` means Chromium or Electron running
-   without `--force-renderer-accessibility`. Below `full` the list is empty and a snapshot is your
-   only view.
+   without `--force-renderer-accessibility`. Below `full` the application's part of the list is empty
+   (the compositor's title bar and buttons, when it draws them, are still there) and a snapshot is
+   your only view of the content.
 3. **Act on an element** with the input operations (`POST /api/input`, tools `click`, `type`, `key`,
    `scroll`, `move_pointer`). Pass the window id together with element-relative coordinates, for
    example the centre of the element's rectangle, and the server adds the window position for you.
