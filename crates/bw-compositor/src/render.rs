@@ -8,7 +8,12 @@ use smithay::{
     utils::{Logical, Point},
     backend::allocator::Buffer as _,
     backend::renderer::{Bind, utils::with_renderer_surface_state, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
-    desktop::{WindowSurface, layer_map_for_output, utils::send_frames_surface_tree},
+    desktop::{
+        WindowSurface, layer_map_for_output,
+        utils::{OutputPresentationFeedback, send_frames_surface_tree, surface_presentation_feedback_flags_from_states},
+    },
+    reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback,
+    wayland::presentation::Refresh,
     utils::Scale,
     wayland::shell::wlr_layer::Layer,
     input::pointer::CursorImageStatus,
@@ -93,14 +98,22 @@ impl State {
         }
         // The pointer is drawn by the browser, so there are no custom elements.
         let elements = self.output_elements(self.geometry.scale);
-        let (sync, damaged) = {
+        let (sync, damaged, states) = {
             let mut fb = self.gpu.renderer.bind(&mut dmabuf)?;
             let res = self.damage_tracker.render_output(&mut self.gpu.renderer, &mut fb, age, &elements, CLEAR)?;
-            (res.sync, res.damage.is_some())
+            (res.sync, res.damage.is_some(), res.states)
         };
         self.last_render = Instant::now();
 
         let now = self.clock.now();
+        // wp_presentation: clients that asked learn when this frame went out (or that it didn't)
+        let mut feedback = OutputPresentationFeedback::new(&self.output);
+        for window in self.space.elements() {
+            window.take_presentation_feedback(&mut feedback, |_, _| Some(self.output.clone()), |s, _| surface_presentation_feedback_flags_from_states(s, &states));
+        }
+        for layer in layer_map_for_output(&self.output).layers() {
+            layer.take_presentation_feedback(&mut feedback, |_, _| Some(self.output.clone()), |s, _| surface_presentation_feedback_flags_from_states(s, &states));
+        }
         for window in self.space.elements() {
             window.send_frame(&self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
             window.send_dmabuf_feedback(&self.output, |_, _| Some(self.output.clone()), |_, _| &self.dmabuf_feedback);
@@ -119,8 +132,11 @@ impl State {
         if !damaged || !self.viewer_connected {
             self.dirty = false;
             self.force_full_frame = false;
+            feedback.discarded(); // rendered, but nothing went out
             return Ok(()); // nothing new to show (or nobody watching): don't encode
         }
+        // handed to the encoder: the closest thing to "presented" there is without a display
+        feedback.presented(now, Refresh::Fixed(self.frame_interval), self.frame_seq, wp_presentation_feedback::Kind::empty());
         self.gpu.swapchain.submitted(&slot);
         slot.userdata().insert_if_missing_threadsafe(|| SlotId(self.frame_seq as u32));
         let slot_id = slot.userdata().get::<SlotId>().unwrap().0;

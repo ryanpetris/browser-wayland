@@ -610,3 +610,4 @@ impl smithay::wayland::idle_inhibit::IdleInhibitHandler for State {
     fn uninhibit(&mut self, _surface: WlSurface) {}
 }
 smithay::delegate_idle_inhibit!(State);
+smithay::delegate_presentation!(State);
