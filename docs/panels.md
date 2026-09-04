@@ -17,7 +17,7 @@ browser-wayland --exec 'dbus-run-session -- sh -c "xfce4-panel & exec foot"'
 | wlr-foreign-toplevel-management: waybar's `wlr/taskbar`, xfce's tasklist, windowmenu, show-desktop | Hand-written server side, protocol version 2 (v3 only adds `parent`, which we don't track). Smithay 0.7 only has the list-only ext protocol. |
 | Minimize: tasklists click the active task to minimize, show-desktop minimizes everything | Unmap from the space into a list, restore on activate. Also wired to xdg `set_minimized` and X11 `WM_CHANGE_STATE`. |
 | ext-workspace (xfce pager, waybar `ext/workspaces`) | Skipped: one workspace. The pager plugin stays empty. |
-| idle-inhibit (waybar `idle_inhibitor`) | Skipped: the module disables itself when the global is missing. |
+| idle-inhibit (waybar `idle_inhibitor`) | Accepted and ignored: Smithay `IdleInhibitManagerState` with a no-op handler; there is no screen to blank. |
 | Xfce's private protocols | Skipped; labwc runs Xfce without them. |
 
 ## Layer shell

@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use bw_core::{SnapshotError, ControlMsg, ControlOp, Event, Snapshot, WindowInfo};
+use bw_core::{ControlMsg, ControlOp, Event, Snapshot, SnapshotError, WindowInfo};
 use smithay::{
     backend::{
         allocator::Fourcc,
