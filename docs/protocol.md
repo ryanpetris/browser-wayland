@@ -77,10 +77,12 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `POST /api/control` | Body: a control message. `202 Accepted`; fire-and-forget. |
 | `GET /api/windows/{id}/snapshot.png?scale=` | PNG of that window. `scale` 0.05–2, relative to the output scale, default 1. `404` unknown id, `429` another snapshot is in flight, `503` the compositor didn't answer within 2 s. |
 | `GET /api/screenshot.png` | PNG of the whole output at its own scale (layers included, cursor excluded). |
-| `POST /api/input` | Body: an input message (below). `202`; `404` unknown window. |
+| `POST /api/input` | Body: an input message (below). `202`; `404` unknown window; `503` compositor gone. |
 | `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` the tree couldn't be read: no D-Bus session or accessibility bus, the application went away, or 2 s passed (body: `{"error": …}`), `404` unknown id. |
 
-Status codes: `401` missing or wrong bearer token; the JSON body is limited to 2 MiB by axum.
+Status codes: `401` (empty body) missing or wrong bearer token; the statuses above come with
+`{"error": "..."}`. A body axum can't read is rejected with a plain-text message: `400` invalid JSON,
+`415` missing `Content-Type: application/json`, `422` wrong shape; bodies are limited to 2 MiB.
 
 Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; see [mcp.md](mcp.md)) and
 `GET /skill/SKILL.md`, `GET /skill/reference.md` (the agent documentation, no token). The generated
@@ -116,8 +118,10 @@ Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; se
 - Coordinates are output logical pixels, or relative to the window's geometry when `window` is given
   (the same origin as element rectangles). `click` moves the pointer first; `count` is 1 to 3.
 - `key` is a `+`-separated chord: `ctrl`, `shift`, `alt`, `super`, then any xkb keysym name (`Return`,
-  `Escape`, `F5`, `Prior`) or a single character. Pressed in order, released in reverse.
-- `text` is typed through the compositor's keyboard layout, Shift where the layout needs it; `\n` is Return.
+  `Escape`, `F5`, `Prior`) or a single character (letters are case-insensitive). Pressed in order,
+  released in reverse; keys a viewer already holds stay held; a chord with a key the layout lacks does nothing.
+- `text` is typed through the compositor's keyboard layout, Shift or AltGr where the layout needs it;
+  `\n` is Return; characters the layout can't produce are skipped with a warning in the log.
 - `scroll` is in wheel lines (positive `dy` down), sent like the viewer's wheel.
 
 ### Elements object

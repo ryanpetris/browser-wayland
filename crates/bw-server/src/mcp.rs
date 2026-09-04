@@ -8,7 +8,7 @@ use base64::Engine;
 use bw_core::{Button, ControlMsg, ControlOp, InputMsg};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
-    handler::server::wrapper::Parameters,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -24,6 +24,7 @@ pub const REFERENCE: &str = include_str!("../../../skills/browser-wayland/refere
 #[derive(Clone)]
 pub struct Mcp {
     app: Arc<App>,
+    tool_router: ToolRouter<Self>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -150,7 +151,7 @@ fn done(result: Result<(), ApiError>) -> ToolResult {
 
 impl Mcp {
     pub fn new(app: Arc<App>) -> Self {
-        Mcp { app }
+        Mcp { app, tool_router: Self::tool_router() }
     }
 
     fn control(&self, id: u64, op: ControlOp) -> ToolResult {
@@ -256,19 +257,21 @@ impl Mcp {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for Mcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
-            .with_server_info(Implementation::new("browser-wayland", option_env!("BW_VERSION").unwrap_or("dev")))
+            .with_server_info(Implementation::new("browser-wayland", self.app.version))
             .with_instructions(SKILL)
     }
 
     async fn list_resources(&self, _: Option<PaginatedRequestParams>, _: RequestContext<RoleServer>) -> Result<ListResourcesResult, McpError> {
-        Ok(ListResourcesResult::with_all_items(vec![
-            Resource::new("skill://browser-wayland/SKILL.md", "SKILL.md"),
-            Resource::new("skill://browser-wayland/reference.md", "reference.md"),
-        ]))
+        let doc = |uri, name| {
+            let mut r = Resource::new(uri, name);
+            r.mime_type = Some("text/markdown".into());
+            r
+        };
+        Ok(ListResourcesResult::with_all_items(vec![doc("skill://browser-wayland/SKILL.md", "SKILL.md"), doc("skill://browser-wayland/reference.md", "reference.md")]))
     }
 
     async fn read_resource(&self, request: ReadResourceRequestParams, _: RequestContext<RoleServer>) -> Result<ReadResourceResponse, McpError> {
@@ -277,6 +280,6 @@ impl ServerHandler for Mcp {
             "skill://browser-wayland/reference.md" => REFERENCE,
             _ => return Err(McpError::resource_not_found(request.uri.clone(), None)),
         };
-        Ok(ReadResourceResponse::Complete(ReadResourceResult::new(vec![ResourceContents::text(text, request.uri)])))
+        Ok(ReadResourceResponse::Complete(ReadResourceResult::new(vec![ResourceContents::text(text, request.uri).with_mime_type("text/markdown")])))
     }
 }

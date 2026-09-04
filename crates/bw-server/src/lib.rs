@@ -44,6 +44,8 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// Serve /api/windows/{id}/elements (see `elements.rs`).
     pub elements: bool,
+    /// Reported to MCP clients.
+    pub version: &'static str,
 }
 
 impl Config {
@@ -64,6 +66,7 @@ pub struct App {
     viewer: Mutex<Viewer>,
     snapshot_lock: tokio::sync::Semaphore,
     elements: bool,
+    version: &'static str,
 }
 
 #[derive(Default)]
@@ -103,6 +106,7 @@ pub async fn run(
         viewer: Mutex::default(),
         snapshot_lock: tokio::sync::Semaphore::new(1),
         elements: cfg.elements,
+        version: cfg.version,
     });
     tokio::spawn(ws::distribute(app.clone(), stream_rx));
     tokio::spawn(ws::forward_events(app.clone(), events_rx));

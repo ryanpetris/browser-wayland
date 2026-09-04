@@ -49,7 +49,8 @@ curl -s -H "$H" https://host:8443/api/windows | jq
   Return. Click into the field first so it has focus. There is no clipboard operation yet.
 - `key` presses a chord and releases it: `ctrl+s`, `ctrl+shift+t`, `alt+F4`, `Return`, `Escape`,
   `Tab`, `Down`, `Prior` (Page Up), `F5`. Modifier names: `ctrl`, `shift`, `alt`, `super`. Anything
-  else is an X keysym name or a single character.
+  else is an X keysym name or a single character; `ctrl+T` is the same as `ctrl+t` (write `shift` when
+  you mean it). A chord with a key the layout doesn't have does nothing.
 - `scroll` takes wheel lines; positive `dy` scrolls down.
 - Input goes to whatever is under the pointer or has keyboard focus, exactly as a user's would. Click a
   window (or `activate` it) before typing into it. A human viewer may be connected at the same time;
@@ -76,7 +77,7 @@ curl -s -H "$H" https://host:8443/api/windows | jq
 | 429 | another snapshot is in flight | one at a time; retry after it returns |
 | 501 | the server runs without `--elements` | use snapshots instead |
 | 503 | the compositor or the accessibility bus didn't answer | retry once; if the body says there is no D-Bus session, elements are not available on this server |
-| 422 | malformed JSON body | see `reference.md` for the shape |
+| 400, 415, 422 | the body wasn't JSON, lacked `Content-Type: application/json`, or had the wrong shape (plain-text message) | see `reference.md` for the shape |
 
 MCP tools return the same failures as tool errors with the same text.
 

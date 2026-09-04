@@ -249,12 +249,7 @@ impl App {
             ClientMsg::MotionAbs { x, y } => Command::PointerMotionAbsolute { x: x as f64, y: y as f64 },
             ClientMsg::MotionRel { dx, dy } => Command::PointerMotionRelative { dx: dx as f64, dy: dy as f64 },
             ClientMsg::Button { button, pressed } => Command::PointerButton { button: button as u32, pressed },
-            ClientMsg::Axis { mode: 1, dx, dy } => Command::PointerAxis {
-                source: AxisSource::Wheel,
-                dx: dx as f64 * 15.0,
-                dy: dy as f64 * 15.0,
-                v120: Some(((dx * 120.0) as i32, (dy * 120.0) as i32)),
-            },
+            ClientMsg::Axis { mode: 1, dx, dy } => Command::wheel(dx as f64, dy as f64),
             // ponytail: pixel (and page) deltas go out as finger scroll with no axis_stop;
             // add a stop timer if clients need kinetic scrolling.
             ClientMsg::Axis { dx, dy, .. } => Command::PointerAxis {

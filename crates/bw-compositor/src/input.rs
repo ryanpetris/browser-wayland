@@ -1,6 +1,6 @@
 //! Browser input (`Command`) → seat events.
 
-use bw_core::{AxisSource as Src, Command, Event, OutputGeometry};
+use bw_core::{AxisSource as Src, Command, Event, InputMsg, OutputGeometry};
 use smithay::{
     backend::input::{Axis, AxisSource, ButtonState, KeyState, Keycode},
     desktop::{LayerSurface, Window, WindowSurface, WindowSurfaceType, layer_map_for_output},
@@ -21,14 +21,24 @@ use crate::State;
 
 const BTN_LEFT: u32 = 0x110;
 
-/// The keycode producing `sym` in `layout`, and whether it needs Shift (level 1); unshifted keys win.
-fn key_for(keymap: &xkb::Keymap, layout: u32, sym: Keysym) -> Option<(Keycode, bool)> {
-    (0..2u32).find_map(|level| {
+/// The keycode producing `sym` in `layout` and the shift level it sits on; lower levels win.
+fn key_for(keymap: &xkb::Keymap, layout: u32, sym: Keysym) -> Option<(Keycode, u32)> {
+    (0..4u32).find_map(|level| {
         (keymap.min_keycode().raw()..=keymap.max_keycode().raw())
             .map(Keycode::new)
             .find(|kc| keymap.key_get_syms_by_level(*kc, layout, level).contains(&sym))
-            .map(|kc| (kc, level == 1))
+            .map(|kc| (kc, level))
     })
+}
+
+/// The modifiers that select a level in the usual four-level layouts: Shift, AltGr, both.
+fn level_mods(level: u32) -> &'static [Keysym] {
+    match level {
+        1 => &[Keysym::Shift_L],
+        2 => &[Keysym::ISO_Level3_Shift],
+        3 => &[Keysym::Shift_L, Keysym::ISO_Level3_Shift],
+        _ => &[],
+    }
 }
 
 /// `ctrl`, `Return`, `F5`, `plus`, `a`, `é`: friendly modifier names, then xkb keysym names, then single characters.
@@ -64,24 +74,34 @@ mod tests {
     fn keys_resolve_in_us_layout() {
         let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
         let keymap = xkb::Keymap::new_from_names(&ctx, "", "", "us", "", None, xkb::KEYMAP_COMPILE_NO_FLAGS).unwrap();
-        let (a, shift) = key_for(&keymap, 0, keysym("a").unwrap()).unwrap();
-        assert_eq!((a.raw() - 8, shift), (30, false)); // KEY_A
-        let (big_a, shift) = key_for(&keymap, 0, keysym("A").unwrap()).unwrap();
-        assert_eq!((big_a, shift), (a, true));
+        let (a, level) = key_for(&keymap, 0, keysym("a").unwrap()).unwrap();
+        assert_eq!((a.raw() - 8, level), (30, 0)); // KEY_A
+        assert_eq!(key_for(&keymap, 0, keysym("A").unwrap()).unwrap(), (a, 1));
         assert_eq!(key_for(&keymap, 0, keysym("ctrl").unwrap()).unwrap().0.raw() - 8, 29); // KEY_LEFTCTRL
         assert_eq!(key_for(&keymap, 0, keysym("Return").unwrap()).unwrap().0.raw() - 8, 28);
         assert_eq!(key_for(&keymap, 0, keysym("F5").unwrap()).unwrap().0.raw() - 8, 63);
-        assert!(key_for(&keymap, 0, keysym("plus").unwrap()).unwrap().1); // Shift+=
+        assert_eq!(key_for(&keymap, 0, keysym("plus").unwrap()).unwrap().1, 1); // Shift+=
+        assert!(key_for(&keymap, 0, keysym("é").unwrap()).is_none()); // not on a US keyboard
         assert!(keysym("nonsense_key").is_none());
+    }
+
+    #[test]
+    fn altgr_level_in_german_layout() {
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap = xkb::Keymap::new_from_names(&ctx, "", "", "de", "", None, xkb::KEYMAP_COMPILE_NO_FLAGS).unwrap();
+        let (q, _) = key_for(&keymap, 0, keysym("q").unwrap()).unwrap();
+        assert_eq!(key_for(&keymap, 0, keysym("@").unwrap()).unwrap(), (q, 2)); // AltGr+q
+        assert_eq!(level_mods(2), &[Keysym::ISO_Level3_Shift]);
     }
 }
 
 impl State {
     pub fn handle_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Key { evdev, pressed } => self.key(evdev, pressed),
-            Command::Text(text) => self.type_text(&text),
-            Command::Chord(keys) => self.chord(&keys),
+            Command::Key { evdev, pressed } => {
+                self.key(evdev, pressed);
+            }
+            Command::Input(msg) => self.input(msg),
             Command::ReleaseAllInput => self.release_all(),
             Command::PointerMotionAbsolute { x, y } => self.pointer_motion((x, y).into()),
             Command::PointerMotionRelative { dx, dy } => self.pointer_motion(self.pointer_location + Point::<f64, Logical>::from((dx, dy))),
@@ -105,14 +125,50 @@ impl State {
         self.clock.now().as_millis()
     }
 
-    fn key(&mut self, evdev: u32, pressed: bool) {
+    /// Returns whether the event was sent: a press for a held key (browser auto-repeat) or a stray release is dropped.
+    fn key(&mut self, evdev: u32, pressed: bool) -> bool {
         let keyboard = self.seat.get_keyboard().unwrap();
         let keycode = Keycode::new(evdev + 8); // xkb keycodes are evdev + 8
         if pressed == keyboard.pressed_keys().contains(&keycode) {
-            return; // browser auto-repeat or a stray release; clients repeat keys themselves
+            return false; // clients repeat keys themselves
         }
         let state = if pressed { KeyState::Pressed } else { KeyState::Released };
         keyboard.input::<(), _>(self, keycode, state, SERIAL_COUNTER.next_serial(), self.now(), |_, _, _| FilterResult::Forward);
+        true
+    }
+
+    /// API/MCP input. Window-relative coordinates use the window's geometry as it is now, and a click's
+    /// motion and buttons go out together, so nothing can slip in between.
+    fn input(&mut self, msg: InputMsg) {
+        let at = |st: &Self, x: f64, y: f64, window: Option<u64>| -> Option<Point<f64, Logical>> {
+            match window {
+                Some(id) => {
+                    let geo = st.space.element_geometry(&st.window_by_id(id)?)?; // None while minimized
+                    Some((geo.loc.x as f64 + x, geo.loc.y as f64 + y).into())
+                }
+                None => Some((x, y).into()),
+            }
+        };
+        match msg {
+            InputMsg::Move { x, y, window } => {
+                if let Some(p) = at(self, x, y, window) {
+                    self.pointer_motion(p);
+                }
+            }
+            InputMsg::Click { x, y, window, button, count } => {
+                if let Some(p) = at(self, x, y, window) {
+                    self.pointer_motion(p);
+                    for _ in 0..count.unwrap_or(1).clamp(1, 3) {
+                        self.pointer_button(button.code(), true);
+                        self.pointer_button(button.code(), false);
+                    }
+                }
+            }
+            InputMsg::Button { button, pressed } => self.pointer_button(button.code(), pressed),
+            InputMsg::Scroll { dx, dy } => self.handle_command(Command::wheel(dx, dy)),
+            InputMsg::Key { keys } => self.chord(keys.split('+').map(str::trim).filter(|k| !k.is_empty())),
+            InputMsg::Text { text } => self.type_text(&text),
+        }
     }
 
     fn type_text(&mut self, text: &str) {
@@ -122,43 +178,57 @@ impl State {
                 '\t' => Keysym::Tab,
                 c => xkb::utf32_to_keysym(c as u32),
             };
-            self.tap(&[sym]);
+            if !self.tap(&[sym]) {
+                tracing::warn!(%ch, "the keyboard layout can't type this character");
+            }
         }
     }
 
-    fn chord(&mut self, keys: &[String]) {
-        let syms: Vec<Keysym> = keys.iter().filter_map(|k| keysym(k)).collect();
-        if syms.len() == keys.len() {
-            self.tap(&syms);
-        } else {
-            tracing::warn!(?keys, "chord has an unknown key name");
+    /// `ctrl+shift+t`: friendly modifier names, keysym names, single characters. A lone letter means the
+    /// key, not Shift+key, whatever its case.
+    fn chord<'a>(&mut self, keys: impl Iterator<Item = &'a str>) {
+        let mut syms = Vec::new();
+        for k in keys {
+            let k = if k.len() == 1 && k.is_ascii() { k.to_ascii_lowercase() } else { k.to_string() };
+            match keysym(&k) {
+                Some(s) => syms.push(s),
+                None => {
+                    tracing::warn!(key = k, "unknown key name");
+                    return;
+                }
+            }
+        }
+        if !self.tap(&syms) {
+            tracing::warn!("the keyboard layout has no key for part of the chord");
         }
     }
 
-    /// Press `syms` in order (Shift first when one of them needs it) and release them in reverse.
-    fn tap(&mut self, syms: &[Keysym]) {
+    /// Press `syms` together (the modifiers their levels need first) and release them in reverse; keys a
+    /// viewer already holds stay held. False if some keysym has no key in the active layout.
+    fn tap(&mut self, syms: &[Keysym]) -> bool {
         let keyboard = self.seat.get_keyboard().unwrap();
-        let keys: Vec<Keycode> = keyboard.with_xkb_state(self, |ctx| {
+        let keys: Option<Vec<Keycode>> = keyboard.with_xkb_state(self, |ctx| {
             let xkb = ctx.xkb().lock().unwrap();
             // Safety: the keymap reference doesn't outlive the lock.
             let keymap = unsafe { xkb.keymap() };
             let layout = xkb.active_layout().0;
-            let resolved: Vec<(Keycode, bool)> = syms.iter().filter_map(|s| key_for(keymap, layout, *s)).collect();
+            let resolved = syms.iter().map(|s| key_for(keymap, layout, *s)).collect::<Option<Vec<_>>>()?;
             let mut keys = Vec::new();
-            if resolved.iter().any(|(_, shift)| *shift)
-                && let Some((shift, _)) = key_for(keymap, layout, Keysym::Shift_L)
-            {
-                keys.push(shift);
+            for m in resolved.iter().flat_map(|(_, level)| level_mods(*level)) {
+                let (k, _) = key_for(keymap, layout, *m)?;
+                if !keys.contains(&k) {
+                    keys.push(k);
+                }
             }
             keys.extend(resolved.into_iter().map(|(k, _)| k));
-            keys
+            Some(keys)
         });
-        for k in &keys {
-            self.key(k.raw() - 8, true);
-        }
-        for k in keys.iter().rev() {
+        let Some(keys) = keys else { return false };
+        let pressed: Vec<Keycode> = keys.iter().copied().filter(|k| self.key(k.raw() - 8, true)).collect();
+        for k in pressed.iter().rev() {
             self.key(k.raw() - 8, false);
         }
+        true
     }
 
     fn release_all(&mut self) {

@@ -148,7 +148,7 @@ fn main() -> Result<()> {
 
     // the fake source can't switch codecs, so its policy is whatever it was built with
     let codec = if cli.fake_source { Some(codec.unwrap_or(Codec::H264)) } else { codec };
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements };
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, version: env!("BW_VERSION") };
     // Ctrl+C returns here so the audio sink gets unloaded and the pipelines stopped.
     let result = tokio::runtime::Runtime::new()?.block_on(async {
         tokio::select! {

@@ -22,17 +22,21 @@ The compositor could always move the pointer, click and press keys: that is how 
 was missing was a way in other than the viewer's binary WebSocket. `InputMsg` in `bw-core` is that way:
 `move`, `click`, `button`, `scroll`, `key`, `text`, served as `POST /api/input` and as tools.
 
-- Pointer actions map onto the existing commands. `click` sends a motion then press/release pairs, so
-  it lands where the caller said even if a human moved the pointer. Coordinates are output logical
-  pixels or, with a window id, relative to that window's geometry, the origin element rectangles use.
-- Keys are resolved in the compositor, where the keymap is: `Command::Text` types a string,
-  `Command::Chord` presses keysym names together. `key_for` in `input.rs` scans the active layout for
-  the keycode producing a keysym at level 0 or 1 and adds Shift for level 1, so `text` types any
-  character the layout has and `key` accepts every xkb keysym name plus friendly modifier names.
-  Deeper levels (AltGr) are not handled. Press and release go out back to back; GTK, Firefox and
-  Chromium process them in order, so no pacing was needed.
-- The `key()` guard that ignores a press for an already pressed key (the viewer's auto-repeat) also
-  makes repeated characters safe: each is released before the next press.
+- The server only checks that a named window exists (for the `404`) and forwards the message as one
+  `Command::Input`. The compositor resolves window-relative coordinates against the geometry it has at
+  that moment and emits a click's motion and button events in one go, so neither a moving window nor a
+  human's pointer motion arriving in between can redirect it. Coordinates are output logical pixels or,
+  with a window id, relative to that window's geometry, the origin element rectangles use.
+- Keys are resolved where the keymap is. `key_for` in `input.rs` scans the active layout for the
+  keycode producing a keysym at levels 0 to 3 and `level_mods` adds Shift, AltGr or both for the level,
+  the convention of four-level layouts, so `text` types any character the layout has (`@` on a German
+  layout is AltGr+q) and `key` accepts every xkb keysym name plus friendly modifier names. A lone letter
+  in a chord is lowercased first, so `ctrl+T` is Ctrl+T, not Ctrl+Shift+T.
+- A chord aborts as a whole when a keysym has no key in the layout, rather than pressing the modifiers
+  alone; a character `text` can't produce is skipped with a warning. Press and release go out back to
+  back; GTK, Firefox and Chromium process them in order, so no pacing was needed.
+- `tap` releases only the keys it pressed itself: the `key()` guard drops a press for a key a viewer is
+  already holding, and that key stays held for the viewer afterwards.
 
 ## Skill documents
 

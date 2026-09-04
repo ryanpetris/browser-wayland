@@ -9,7 +9,7 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use bw_core::{AxisSource, Command, ControlMsg, InputMsg, Snapshot, SnapshotReply, WindowInfo};
+use bw_core::{Command, ControlMsg, InputMsg, Snapshot, SnapshotReply, WindowInfo};
 
 use crate::{App, elements::Page};
 
@@ -23,6 +23,8 @@ pub enum ApiError {
     Busy,
     /// The compositor or the accessibility bus didn't answer.
     Unavailable(String),
+    /// Something on our side broke (PNG encoding).
+    Internal(String),
 }
 
 impl ApiError {
@@ -32,6 +34,7 @@ impl ApiError {
             ApiError::NotFound => StatusCode::NOT_FOUND,
             ApiError::Busy => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -42,7 +45,7 @@ impl std::fmt::Display for ApiError {
             ApiError::Disabled(what) => f.write_str(what),
             ApiError::NotFound => f.write_str("no such window"),
             ApiError::Busy => f.write_str("another snapshot is in flight"),
-            ApiError::Unavailable(why) => f.write_str(why),
+            ApiError::Unavailable(why) | ApiError::Internal(why) => f.write_str(why),
         }
     }
 }
@@ -105,8 +108,8 @@ impl App {
         .await;
         match png {
             Ok(Ok(bytes)) => Ok(bytes),
-            Ok(Err(e)) => Err(ApiError::Unavailable(format!("png: {e}"))),
-            Err(e) => Err(ApiError::Unavailable(format!("png: {e}"))),
+            Ok(Err(e)) => Err(ApiError::Internal(format!("png: {e}"))),
+            Err(e) => Err(ApiError::Internal(format!("png: {e}"))),
         }
     }
 
@@ -123,40 +126,13 @@ impl App {
         self.send(Command::Control(msg))
     }
 
-    /// Pointer and keyboard input; `window` makes coordinates relative to that window's geometry.
+    /// Pointer and keyboard input. `window` makes coordinates relative to that window's geometry; the
+    /// compositor resolves it against the live geometry, this only answers 404 for an unknown id.
     pub fn input(&self, msg: InputMsg) -> Result<(), ApiError> {
-        let at = |x: f64, y: f64, window: Option<u64>| -> Result<(f64, f64), ApiError> {
-            match window {
-                Some(id) => self.window(id).map(|(w, _)| (w.x as f64 + x, w.y as f64 + y)),
-                None => Ok((x, y)),
-            }
-        };
-        let mut cmds = Vec::new();
-        match msg {
-            InputMsg::Move { x, y, window } => {
-                let (x, y) = at(x, y, window)?;
-                cmds.push(Command::PointerMotionAbsolute { x, y });
-            }
-            InputMsg::Click { x, y, window, button, count } => {
-                let (x, y) = at(x, y, window)?;
-                cmds.push(Command::PointerMotionAbsolute { x, y });
-                for _ in 0..count.unwrap_or(1).clamp(1, 3) {
-                    cmds.push(Command::PointerButton { button: button.code(), pressed: true });
-                    cmds.push(Command::PointerButton { button: button.code(), pressed: false });
-                }
-            }
-            InputMsg::Button { button, pressed } => cmds.push(Command::PointerButton { button: button.code(), pressed }),
-            // the same units as the viewer's wheel: 15 logical px and 120 "v120" per line
-            InputMsg::Scroll { dx, dy } => cmds.push(Command::PointerAxis {
-                source: AxisSource::Wheel,
-                dx: dx * 15.0,
-                dy: dy * 15.0,
-                v120: Some(((dx * 120.0) as i32, (dy * 120.0) as i32)),
-            }),
-            InputMsg::Key { keys } => cmds.push(Command::Chord(keys.split('+').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect())),
-            InputMsg::Text { text } => cmds.push(Command::Text(text)),
+        if let InputMsg::Move { window: Some(id), .. } | InputMsg::Click { window: Some(id), .. } = &msg {
+            self.window(*id)?;
         }
-        cmds.into_iter().try_for_each(|c| self.send(c))
+        self.send(Command::Input(msg))
     }
 
     fn send(&self, cmd: Command) -> Result<(), ApiError> {

@@ -42,10 +42,9 @@ pub enum Command {
     ReleasePointerLock,
     /// A window action or spawn from the viewer page or the HTTP API.
     Control(ControlMsg),
-    /// Type a string through the keyboard layout: each character pressed and released, Shift as needed.
-    Text(String),
-    /// Press these keys together (xkb keysym names, e.g. `Control_L`, `t`), then release them in reverse.
-    Chord(Vec<String>),
+    /// Pointer or keyboard input from the API or MCP, resolved on the compositor thread (window-relative
+    /// coordinates against the live geometry, keys through the keymap) so a whole click lands as one unit.
+    Input(InputMsg),
     /// Render one window (or the whole output) to pixels and hand them to `reply`.
     /// `scale` is relative to the output scale and only applies to windows.
     Snapshot { id: Option<u64>, scale: f64, reply: SnapshotReply },
@@ -121,6 +120,13 @@ pub enum ControlOp {
     Spawn { cmd: String },
 }
 
+impl Command {
+    /// Wheel scroll by lines in the viewer's units: 15 logical px and 120 "v120" per line.
+    pub fn wheel(dx: f64, dy: f64) -> Command {
+        Command::PointerAxis { source: AxisSource::Wheel, dx: dx * 15.0, dy: dy * 15.0, v120: Some(((dx * 120.0) as i32, (dy * 120.0) as i32)) }
+    }
+}
+
 /// One input action (`POST /api/input`, MCP tools). Coordinates are logical pixels on the output, or
 /// relative to a window's geometry when `window` is given, like element rectangles.
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
@@ -129,7 +135,17 @@ pub enum InputMsg {
     /// Move the pointer.
     Move { x: f64, y: f64, #[serde(default)] window: Option<u64> },
     /// Move the pointer there and click `count` times (default 1).
-    Click { x: f64, y: f64, #[serde(default)] window: Option<u64>, #[serde(default)] button: Button, #[serde(default)] count: Option<u32> },
+    Click {
+        x: f64,
+        y: f64,
+        #[serde(default)]
+        window: Option<u64>,
+        #[serde(default)]
+        button: Button,
+        #[serde(default)]
+        #[schemars(range(min = 1, max = 3))]
+        count: Option<u32>,
+    },
     /// Press or release a button where the pointer is (drags).
     Button { button: Button, pressed: bool },
     /// Scroll by wheel lines; positive `dy` scrolls down.

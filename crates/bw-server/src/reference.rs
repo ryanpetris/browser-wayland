@@ -14,8 +14,8 @@ const ROUTES: &str = "\
 | `GET /api/windows/{id}/elements` | | **Elements**; `501` without `--elements`, `503` tree unreadable, `404` unknown window |
 | `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `503` |
 | `GET /api/screenshot.png` | | PNG of the whole output at its size |
-| `POST /api/control` | **Control** | `202`; fire-and-forget |
-| `POST /api/input` | **Input** | `202`; `404` unknown window |
+| `POST /api/control` | **Control** | `202`; fire-and-forget; `503` compositor gone |
+| `POST /api/input` | **Input** | `202`; `404` unknown window; `503` compositor gone |
 | `POST /mcp` | MCP Streamable HTTP | the tools below |
 | `GET /skill/SKILL.md`, `GET /skill/reference.md` | no token needed | this documentation |
 ";
@@ -28,7 +28,7 @@ pub fn markdown() -> String {
     let mut out = String::new();
     out.push_str("# browser-wayland API and MCP reference\n\n");
     out.push_str("Generated from the code (`UPDATE_REFERENCE=1 cargo test -p bw-server reference`); do not edit.\n\n");
-    out.push_str("## HTTP API\n\nEvery `/api` request carries `Authorization: Bearer <token>`; `401` otherwise. Error bodies are\n`{\"error\": \"...\"}`; a malformed JSON body is `422`. Coordinates are logical pixels.\n\n");
+    out.push_str("## HTTP API\n\nEvery `/api` request carries `Authorization: Bearer <token>`; `401` (empty body) otherwise. The\nstatuses in the table come with a JSON body `{\"error\": \"...\"}`. A request body the server can't read is\nrejected before that with a plain-text message: `400` invalid JSON, `415` missing\n`Content-Type: application/json`, `422` wrong shape. Coordinates are logical pixels.\n\n");
     out.push_str(ROUTES);
     for (name, s) in [("Window", schema::<WindowInfo>()), ("Control", schema::<ControlMsg>()), ("Input", schema::<InputMsg>()), ("Elements", schema::<Page>())] {
         out.push_str(&format!("\n## {name}\n\n```json\n{s}\n```\n"));
