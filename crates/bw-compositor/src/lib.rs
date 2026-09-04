@@ -437,8 +437,10 @@ impl State {
         let mode = mode_for(&geo);
         self.output.change_current_state(Some(mode), None, Some(Scale::Fractional(geo.scale)), None);
         self.output.set_preferred(mode);
-        self.gpu.swapchain.resize(geo.width_px, geo.height_px);
-        self.gpu.modifier_verified = false; // new buffers
+        if (geo.width_px, geo.height_px) != (self.geometry.width_px, self.geometry.height_px) {
+            self.gpu.swapchain.resize(geo.width_px, geo.height_px); // a scale-only change keeps the buffers
+            self.gpu.modifier_verified = false;
+        }
         if let CursorImageStatus::Surface(s) = &self.cursor_status {
             // cursor surfaces aren't in the space, so relayout doesn't reach them
             smithay::wayland::compositor::with_states(s, |states| smithay::wayland::fractional_scale::with_fractional_scale(states, |f| f.set_preferred_scale(geo.scale)));

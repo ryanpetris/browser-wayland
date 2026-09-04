@@ -3,6 +3,7 @@
 use std::{cell::RefCell, os::unix::io::OwnedFd};
 
 use smithay::{
+    input::pointer::CursorImageSurfaceData,
     backend::{
         allocator::dmabuf::Dmabuf,
         renderer::ImportDma,
@@ -178,6 +179,15 @@ impl CompositorHandler for State {
             self.touch_window(&window);
         }
         if matches!(&self.cursor_status, CursorImageStatus::Surface(s) if s == surface) {
+            // GTK 4 changes the image on the same surface with wl_surface.offset; the hotspot moves with it
+            let delta = with_states(surface, |s| s.cached_state.get::<SurfaceAttributes>().current().buffer_delta.take());
+            if let Some(d) = delta.filter(|d| d.x != 0 || d.y != 0) {
+                with_states(surface, |s| {
+                    if let Some(data) = s.data_map.get::<CursorImageSurfaceData>() {
+                        data.lock().unwrap().hotspot -= d;
+                    }
+                });
+            }
             self.export_cursor(); // client redrew its cursor
             return;
         }

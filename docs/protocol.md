@@ -26,7 +26,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 |---|---|---|
 | `0x01` | Config | JSON `{streamId, codec, width, height, scale}`. Sent before the first frame of every (re)started stream; the viewer resets its decoder on a new `streamId`. `codec` is a WebCodecs string (`avc1…`, `hev1…`, `vp09…`). |
 | `0x02` | Video | `u8 flags` (bit 0 keyframe) `u64 pts_us` then one Annex B access unit. |
-| `0x03` | Cursor | `u16 w` `u16 h` `i16 hot_x` `i16 hot_y` `u8 scale` then straight-alpha RGBA; `w == 0` hides the pointer. `w × h` is the bitmap; it is `scale` × the logical size (a client's HiDPI cursor buffer), the hotspot is logical, so the page uses `image-set(… scale x)`. |
+| `0x03` | Cursor | `u16 w` `u16 h` `i16 hot_x` `i16 hot_y` `u16 logical_w` `u16 logical_h` then straight-alpha RGBA; `w == 0` hides the pointer. The bitmap is `w × h`; it is shown at `logical_w × logical_h` logical pixels (larger for a client's HiDPI cursor, by buffer scale or viewport), the hotspot is logical, so the page uses `image-set(… (w/logical_w)x)`. |
 | `0x04` | PointerLock | `u8 locked`: a client locked or released the pointer; the page mirrors it with the Pointer Lock API. |
 | `0x05` | Audio | `u8 0` `u64 pts_us` then one 20 ms Opus packet. |
 | `0x06` | Windows | JSON array of window objects (see below), the whole list, whenever anything in it changed. Replayed to a new viewer. |

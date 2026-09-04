@@ -201,8 +201,10 @@ pub struct CursorImage {
     /// Hotspot in logical pixels.
     pub hot_x: i32,
     pub hot_y: i32,
-    /// The bitmap is `scale` × its logical size (a client's HiDPI cursor buffer); 1 for theme cursors.
-    pub scale: u32,
+    /// The size the cursor is shown at, in logical pixels; the bitmap is larger for a client's HiDPI
+    /// cursor (buffer scale or a viewport), equal for theme cursors.
+    pub logical_w: u32,
+    pub logical_h: u32,
     /// Straight (non-premultiplied) RGBA.
     pub rgba: Vec<u8>,
 }

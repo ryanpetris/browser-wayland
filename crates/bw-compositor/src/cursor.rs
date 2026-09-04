@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use bw_core::{CursorImage, Event};
 use smithay::{
-    wayland::compositor::SurfaceAttributes,
+    wayland::{compositor::SurfaceAttributes, viewporter::ViewportCachedState},
     backend::renderer::utils::with_renderer_surface_state,
     input::pointer::{CursorIcon, CursorImageStatus, CursorImageSurfaceData},
     reexports::wayland_server::protocol::{wl_shm, wl_surface::WlSurface},
@@ -44,7 +44,8 @@ impl CursorTheme {
                 height: img.height,
                 hot_x: img.xhot as i32,
                 hot_y: img.yhot as i32,
-                scale: 1,
+                logical_w: img.width,
+                logical_h: img.height,
                 rgba: unpremultiply(img.pixels_rgba.chunks_exact(4).map(|p| (p[0], p[1], p[2], p[3]))),
             })
     }
@@ -62,9 +63,11 @@ fn unpremultiply(pixels: impl Iterator<Item = (u8, u8, u8, u8)>) -> Vec<u8> {
 
 /// The client's cursor surface (a wl_shm buffer) as straight RGBA.
 fn surface_cursor(surface: &WlSurface) -> Option<CursorImage> {
-    let (hotspot, scale) = with_states(surface, |s| {
+    // GTK 3 scales a HiDPI cursor with wl_surface.set_buffer_scale, GTK 4 with a viewport destination
+    let (hotspot, scale, viewport) = with_states(surface, |s| {
         let hotspot = s.data_map.get::<CursorImageSurfaceData>().map(|d| d.lock().unwrap().hotspot)?;
-        Some((hotspot, s.cached_state.get::<SurfaceAttributes>().current().buffer_scale.max(1) as u32))
+        let scale = s.cached_state.get::<SurfaceAttributes>().current().buffer_scale.max(1) as u32;
+        Some((hotspot, scale, s.cached_state.get::<ViewportCachedState>().current().size()))
     })?;
     let buffer = with_renderer_surface_state(surface, |s| s.buffer().cloned())??;
     with_buffer_contents(&buffer, |ptr, len, data| {
@@ -83,8 +86,9 @@ fn surface_cursor(surface: &WlSurface) -> Option<CursorImage> {
             let p = ptr.add(i);
             (p.add(2).read_volatile(), p.add(1).read_volatile(), p.read_volatile(), if opaque { 255 } else { p.add(3).read_volatile() })
         });
-        tracing::debug!(w, h, scale, ?hotspot, "client cursor");
-        Some(CursorImage { width: w as u32, height: h as u32, hot_x: hotspot.x, hot_y: hotspot.y, scale, rgba: unpremultiply(pixels) })
+        let (logical_w, logical_h) = viewport.map_or((w as u32 / scale, h as u32 / scale), |v| (v.w.max(1) as u32, v.h.max(1) as u32));
+        tracing::debug!(w, h, logical_w, logical_h, ?hotspot, "client cursor");
+        Some(CursorImage { width: w as u32, height: h as u32, hot_x: hotspot.x, hot_y: hotspot.y, logical_w, logical_h, rgba: unpremultiply(pixels) })
     })
     .ok()
     .flatten()

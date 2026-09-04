@@ -38,9 +38,13 @@ impl State {
             self.gpu.modifier_verified = true;
             let got = dmabuf.format().modifier;
             if got == self.gpu.modifier {
-                tracing::info!(modifier = ?got, "swapchain buffer modifier matches the encoder's");
+                tracing::debug!(modifier = ?got, "swapchain buffer modifier matches the encoder's");
             } else {
-                tracing::warn!(?got, negotiated = ?self.gpu.modifier, "swapchain buffer modifier is not the negotiated one: the encoder will copy every frame");
+                // The encoder was told the negotiated modifier and would read these buffers with the wrong
+                // layout. Tell it the real one; if it can't take it, the pipeline fails visibly.
+                tracing::warn!(?got, negotiated = ?self.gpu.modifier, "swapchain buffer modifier is not the negotiated one; rebuilding the encoder for it");
+                self.gpu.modifier = got;
+                self.sink.output_changed(self.geometry, self.gpu.fourcc as u32, u64::from(got));
             }
         }
         let (sync, damaged) = {
