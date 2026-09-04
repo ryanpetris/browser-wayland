@@ -3,7 +3,7 @@
 fn main() {
     let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/dist");
     println!("cargo:rerun-if-changed={}", dist.display());
-    if !dist.join("app.js").exists() {
+    if !["index.html", "app.js", "app.css"].iter().all(|f| dist.join(f).exists()) {
         eprintln!("web/dist is missing: run `make web` (Node 24) or `make`, which builds the viewer before the binary");
         std::process::exit(1);
     }

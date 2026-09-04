@@ -48,7 +48,8 @@ Two files, both compiled in with `include_str!` and served at `/skill/`:
   `InputMsg` and the elements page (from `schemars`, the same derive rmcp uses for tool arguments),
   and every MCP tool with its description and input schema (from the tool router). The
   `reference_is_current` test compares the checked-in file with what the code generates, so it is
-  regenerated with `UPDATE_REFERENCE=1 cargo test -p bw-server reference` and cannot silently drift.
+  regenerated with `UPDATE_REFERENCE=1 cargo test -p bw-server reference` (after `make web`, which
+the embedded viewer needs) and cannot silently drift.
 
 ## Verification
 

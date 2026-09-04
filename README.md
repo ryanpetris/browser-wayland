@@ -26,8 +26,10 @@ GStreamer (core and base), libgbm, libEGL and libxkbcommon; `make` builds the vi
 ## Run
 
 ```sh
-cargo run --release -- --exec 'foot'          # any Wayland client; WAYLAND_DISPLAY is set for it
+make run ARGS="--exec foot"                   # any Wayland client; WAYLAND_DISPLAY is set for it
 ```
+
+(`make web` once, then plain `cargo run --release -- --exec foot` works too.)
 
 The server prints the certificate fingerprint and a URL like `https://<lan-ip>:8443/#token=…`.
 Open it in a browser on the LAN, compare the fingerprint before accepting the self-signed

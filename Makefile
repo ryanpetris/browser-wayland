@@ -6,7 +6,9 @@
 #   make docker     the container image
 #   make clean
 
-WEB_SRC := $(shell find web/src web/index.html web/vite.config.js web/package.json -type f)
+# directories included: a deleted source changes its directory's time
+WEB_SRC := $(shell find web/src web/index.html web/vite.config.js web/package.json)
+DIST := web/dist/index.html web/dist/app.js web/dist/app.css
 
 .PHONY: all build web test run docker clean
 
@@ -15,19 +17,20 @@ all: build
 build: web
 	cargo build --release --locked
 
-web: web/dist/index.html
+web: $(DIST)
 
-web/dist/index.html: web/node_modules/.package-lock.json $(WEB_SRC)
+# one build for the three files (grouped target), so a missing one brings back all of them
+$(DIST) &: web/node_modules/.package-lock.json $(WEB_SRC)
 	cd web && npm run build
 
 web/node_modules/.package-lock.json: web/package-lock.json
 	cd web && npm ci --no-audit --no-fund
 
 test: web
-	cargo test --workspace
+	cargo test --workspace --locked
 
 run: web
-	cargo run --release -- $(ARGS)
+	cargo run --release --locked -- $(ARGS)
 
 docker:
 	docker build -t browser-wayland .
