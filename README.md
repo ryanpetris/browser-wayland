@@ -11,16 +11,17 @@ Design notes: [docs/architecture.md](docs/architecture.md), [docs/protocol.md](d
 
 Releases (made from `vX.Y.Z` tags; the tag is the version) carry a Debian package built on Debian
 stable that also installs on Ubuntu 24.04 and later, an Arch package, and a tarball with the binary.
-Building from source needs Rust stable and the development packages for GStreamer (core and base),
-libgbm, libEGL and libxkbcommon; `cargo build --release` produces `target/release/browser-wayland`,
-which reports `0.0.0-dev` unless `BW_VERSION` is set. The Arch `PKGBUILD` is in `packaging/arch`.
+Building from source needs Rust stable, Node 24 (for the viewer) and the development packages for
+GStreamer (core and base), libgbm, libEGL and libxkbcommon; `make` builds the viewer and then
+`target/release/browser-wayland`, which reports `0.0.0-dev` unless `BW_VERSION` is set. The Arch
+`PKGBUILD` is in `packaging/arch`.
 
 ## Requirements
 
 - Linux with a GPU render node (`/dev/dri/renderD128`) and Mesa.
 - GStreamer 1.24+ with the VA plugin: `gst-plugin-va` on Arch (`vapostproc`, `vah264enc`).
 - `xorg-xwayland` for X11 clients, and PipeWire or PulseAudio with `pactl` for audio (both optional).
-- Rust stable. The browser needs WebCodecs (Chromium, Firefox 130+, Safari 26+).
+- Rust stable and Node 24 to build. The browser needs WebCodecs (Chromium, Firefox 130+, Safari 26+).
 
 ## Run
 
@@ -153,11 +154,10 @@ the app id over every window and an outline of the focused window's elements. In
 `bw.windows()`, `bw.activate(id)`, `bw.control({...})`, `bw.spawn(cmd)`, `bw.snapshot(id)` and
 `bw.elements(id)` do the same.
 
-The viewer lives in `web/` (React, Tailwind CSS, Vite). Its build output `web/dist` is committed and
-embedded in the binary, so `cargo build` needs no Node; after changing anything under `web/src`, run
-`npm ci && npm run build` in `web/` and commit `dist` with the change; a workflow checks that `dist`
-matches `src`. `npm run dev` serves the page with hot reload, proxying `/ws` and `/api` to a server
-started with `--no-tls --listen 127.0.0.1:8080`.
+The viewer lives in `web/` (React, Tailwind CSS, Vite) and is built into `web/dist`, which the binary
+embeds at compile time; `make` builds the viewer (Node 24) and then the binary, `make web` only the
+viewer, and a `cargo build` without `web/dist` stops with that hint. `npm run dev` in `web/` serves the
+page with hot reload, proxying `/ws` and `/api` to a server started with `--no-tls --listen 127.0.0.1:8080`.
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,

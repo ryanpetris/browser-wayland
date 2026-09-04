@@ -12,12 +12,21 @@
 # If /dev/dri/renderD128 isn't world-accessible on the host, add `--group-add $(stat -c %g /dev/dri/renderD128)`.
 # Hardware encoding uses the host GPU through VA-API: Intel (iHD) and AMD (Mesa) drivers are included.
 
+# The viewer (React, built by Vite into web/dist); the binary embeds it.
+FROM node:24-alpine AS web
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY web ./
+RUN npm run build
+
 FROM archlinux:latest AS build
 RUN pacman -Sy --noconfirm archlinux-keyring \
     && pacman -Syu --noconfirm --needed rust pkgconf gstreamer gst-plugins-base mesa libxkbcommon \
     && rm -rf /var/cache/pacman/pkg/*
 WORKDIR /src
 COPY . .
+COPY --from=web /src/web/dist web/dist
 RUN cargo build --release --locked
 
 FROM archlinux:latest

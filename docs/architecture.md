@@ -62,11 +62,12 @@ small shared-types crate. That boundary keeps encoders and transports pluggable 
 | `bw-core` | Plain types shared by everything: `Command` (server → compositor), `Event` (compositor → server), `DmabufFrame`, `FrameSink`, `StreamMsg`, `WindowInfo`, `ControlMsg`, `Snapshot`. Serde on the API types. |
 | `bw-compositor` | Smithay. `lib.rs` (state, loop, output, resize, spawn), `handlers.rs` (protocol delegates), `input.rs` (browser input → seat, focus), `render.rs` (frame), `gpu.rs` (render node, GBM, EGL, swapchain), `grabs.rs` (move/resize), `xwayland.rs`, `foreign_toplevel.rs`, `desktop.rs` (window list, control, snapshots), `cursor.rs`. |
 | `bw-stream` | GStreamer. `GstSink: FrameSink` (dmabuf import, pipeline build/rebuild, keyframes, codec switch), `lease.rs` (a custom `GstMeta` whose `free` drops the swapchain lease), the Opus audio source, and a `videotestsrc` fake source for `--fake-source`. |
-| `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`, so a web build is followed by a cargo build), `/ws` sessions, `/api`, frame/audio/event distribution to the current viewer. |
+| `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`; its build script insists on a web build first), `/ws` sessions, `/api`, frame/audio/event distribution to the current viewer. |
 | `bw` | The `browser-wayland` binary: clap CLI, thread spawning, channel wiring, the audio null sink. |
 
-`web/` is the viewer: React 19 and Tailwind CSS 4, built by Vite into `web/dist` (`npm ci && npm run
-build`), which is committed so that `cargo build` needs no Node. `src/viewer.js` is the engine (the
+`web/` is the viewer: React 19 and Tailwind CSS 4, built by Vite into `web/dist` by `make web` (the
+`Makefile` runs it before cargo; the Dockerfile and the release workflow do the same; `web/dist` is
+not tracked). `src/viewer.js` is the engine (the
 WebSocket, WebCodecs decoding onto the canvas, input, clipboard, audio, the `bw` console helpers); it
 publishes its state on a small store and React only renders the chrome around the canvas
 (`src/App.jsx` and `src/components/`). `src/keycodes.js` maps DOM `code` to evdev (generated from

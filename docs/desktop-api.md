@@ -170,7 +170,7 @@ size, and `sessionStorage` (the token) is copied into it by the browser.
 
 ## Browser UI (`web/src`)
 
-React and Tailwind, built by Vite into `web/dist` (committed and embedded; see the README). The engine
+React and Tailwind, built by Vite into `web/dist` by `make web` and embedded (see the README). The engine
 `viewer.js` owns the canvas and the connection and publishes state through `store.js`; the components
 read it with `useSyncExternalStore` and send actions back through the engine.
 

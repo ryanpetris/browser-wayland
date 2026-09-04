@@ -9,7 +9,7 @@ arch=('x86_64')
 url="https://github.com/ryanpetris/browser-wayland"
 license=('MIT')
 depends=('gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-plugin-va' 'mesa' 'libxkbcommon')
-makedepends=('cargo')
+makedepends=('cargo' 'nodejs' 'npm')
 optdepends=('xorg-xwayland: X11 clients'
             'libpulse: audio to the browser (pactl)'
             'intel-media-driver: VA-API on Intel GPUs'
@@ -18,7 +18,7 @@ options=('!lto' '!debug') # one package; no split -debug package with the symbol
 
 build() {
     cd "$startdir/../.."
-    BW_VERSION="$pkgver" cargo build --release --locked
+    BW_VERSION="$pkgver" make build
 }
 
 package() {

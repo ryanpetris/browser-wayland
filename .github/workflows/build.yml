@@ -40,6 +40,11 @@ jobs:
           apt-get install -y --no-install-recommends pkg-config cmake libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev libgbm-dev libegl-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Viewer
+        run: make web
       - uses: cargo-bins/cargo-binstall@v1.22.0
       - run: cargo binstall -y cargo-deb
       - name: Debian package
@@ -87,7 +92,7 @@ jobs:
       - name: Dependencies
         run: |
           pacman -Sy --noconfirm archlinux-keyring
-          pacman -Syu --noconfirm --needed cargo gstreamer gst-plugins-base gst-plugins-good \
+          pacman -Syu --noconfirm --needed cargo nodejs npm gstreamer gst-plugins-base gst-plugins-good \
             gst-plugins-bad gst-plugin-va mesa libxkbcommon git
           useradd -m builder
       - uses: actions/checkout@v7
