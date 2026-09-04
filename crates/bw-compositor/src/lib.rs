@@ -64,7 +64,7 @@ pub struct Config {
     pub socket_name: String,
     /// Output size until a viewer connects and resizes it.
     pub initial: OutputGeometry,
-    /// Shell command started when the first viewer connects, with WAYLAND_DISPLAY, DISPLAY,
+    /// Shell command started with the compositor, with WAYLAND_DISPLAY, DISPLAY,
     /// BW_WIDTH/BW_HEIGHT (logical output size) and `exec_env` set.
     pub exec: Option<String>,
     pub exec_env: Vec<(String, String)>,
@@ -294,13 +294,6 @@ impl State {
         Ok((event_loop, state))
     }
 
-    /// `--exec` runs once the first viewer has told us its size, so a nested desktop can match it.
-    fn spawn_exec_once(&mut self, geo: OutputGeometry) {
-        if let Some(cmd) = self.exec.take() {
-            self.spawn_client(&cmd, geo);
-        }
-    }
-
     /// Run a shell command as a client of this compositor: WAYLAND_DISPLAY, DISPLAY,
     /// BW_WIDTH/BW_HEIGHT (logical size of `geo`) and the toolkit backends set.
     pub fn spawn_client(&self, cmd: &str, geo: OutputGeometry) {
@@ -334,6 +327,10 @@ impl State {
     }
 
     fn run(mut self, event_loop: &mut EventLoop<'static, State>, rx: channel::Channel<Command>) {
+        // at the initial output size; a viewer that connects later resizes the output like any other time
+        if let Some(cmd) = self.exec.take() {
+            self.spawn_client(&cmd, self.geometry);
+        }
         let handle = event_loop.handle();
         handle
             .insert_source(rx, |ev, _, state| match ev {
@@ -412,7 +409,6 @@ impl State {
 
     /// Apply a new output size/scale from the viewer.
     pub fn resize(&mut self, geo: OutputGeometry) {
-        self.spawn_exec_once(geo);
         if geo == self.geometry {
             return;
         }

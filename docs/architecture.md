@@ -161,8 +161,8 @@ console returns the same as JSON.
 ## Running and deployment
 
 See the README for flags and the `Dockerfile` for a complete Arch Linux image with the Xfce panel,
-Xfce applications, Firefox and PipeWire. Practical notes: `--exec` runs when the first viewer connects,
-with `BW_WIDTH`/`BW_HEIGHT` set to the browser's size; nested desktops need `--kiosk`; the data
+Xfce applications, Firefox and PipeWire. Practical notes: `--exec` runs at startup, with `BW_WIDTH`/`BW_HEIGHT`
+set to the output size (1920×1080 until the first viewer resizes it); nested desktops need `--kiosk`; the data
 directory should be persisted in containers or every start prints a new token.
 
 ## Known limitations

@@ -23,8 +23,8 @@ struct Cli {
     /// Video codec: auto picks HEVC, VP9 or H.264 by what the browser decodes in hardware.
     #[arg(long, default_value = "auto", value_parser = ["auto", "h264", "hevc", "vp9"])]
     codec: String,
-    /// Command to run (via `sh -c`) once the first viewer connects; WAYLAND_DISPLAY, DISPLAY,
-    /// PULSE_SINK and BW_WIDTH/BW_HEIGHT (the browser's size) are set for it.
+    /// Command to run (via `sh -c`) at startup; WAYLAND_DISPLAY, DISPLAY, PULSE_SINK and
+    /// BW_WIDTH/BW_HEIGHT (the output size: 1920×1080 until a viewer connects) are set for it.
     #[arg(long)]
     exec: Option<String>,
     /// Fullscreen every window: for running a nested desktop such as

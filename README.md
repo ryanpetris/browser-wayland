@@ -43,8 +43,8 @@ Audio from clients goes to the browser instead of the host speakers: the server 
 `browser-wayland-<pid>` sink (printed in the log) and captures it as Opus. Clients started with
 `--exec` get `PULSE_SINK` set; for others use `PULSE_SINK=<that name> some-app`. `--no-audio` turns this off.
 
-`--exec` runs when the first viewer connects, with `BW_WIDTH`/`BW_HEIGHT` set to the browser's size,
-and `--kiosk` fullscreens every window. Together they run a whole nested desktop; with the
+`--exec` runs at startup with `BW_WIDTH`/`BW_HEIGHT` set to the output size (1920×1080 until a viewer
+connects and resizes it), and `--kiosk` fullscreens every window. Together they run a whole nested desktop; with the
 `mutter-devkit` package installed, GNOME:
 
 ```sh
