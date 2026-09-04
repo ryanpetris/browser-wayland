@@ -134,9 +134,8 @@ pub async fn run(
 
     let router = Router::new()
         .route("/", get(index))
-        .route("/app.js", get(|| async { js(include_str!("../../../web/app.js")) }))
-        .route("/keycodes.js", get(|| async { js(include_str!("../../../web/keycodes.js")) }))
-        .route("/desktop.js", get(|| async { js(include_str!("../../../web/desktop.js")) }))
+        .route("/app.js", get(|| async { asset("text/javascript", include_str!("../../../web/dist/app.js")) }))
+        .route("/app.css", get(|| async { asset("text/css", include_str!("../../../web/dist/app.css")) }))
         .route("/ws", get(websocket))
         .route("/ws/window/{id}", get(window_websocket))
         .merge(
@@ -177,13 +176,14 @@ pub async fn run(
 }
 
 /// The page is public; it authenticates its WebSocket with the token from its URL fragment (or sessionStorage).
+/// The viewer is built from `web/` into `web/dist` (`npm run build`), which is committed and embedded here.
 async fn index() -> Html<&'static str> {
-    Html(include_str!("../../../web/index.html"))
+    Html(include_str!("../../../web/dist/index.html"))
 }
 
 /// Revalidated on every load, so an upgraded server never runs a stale page.
-fn js(src: &'static str) -> Response {
-    ([(header::CONTENT_TYPE, "text/javascript"), (header::CACHE_CONTROL, "no-cache")], src).into_response()
+fn asset(mime: &'static str, src: &'static str) -> Response {
+    ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "no-cache")], src).into_response()
 }
 
 fn markdown(src: &'static str) -> Response {

@@ -31,7 +31,8 @@ cargo run --release -- --exec 'foot'          # any Wayland client; WAYLAND_DISP
 The server prints the certificate fingerprint and a URL like `https://<lan-ip>:8443/#token=…`.
 Open it in a browser on the LAN, compare the fingerprint before accepting the self-signed
 certificate, and the desktop appears. The browser viewport size becomes the output size.
-The ⛶ button enters fullscreen with keyboard lock so shortcuts like Ctrl+W reach the desktop.
+The desktop takes the size of the viewer's display area; the fullscreen button hands it the whole screen,
+with keyboard lock so shortcuts like Ctrl+W reach the desktop.
 Frames are painted on a 2D canvas. `?renderer=webgpu` in the URL uses a WebGPU external-texture path
 instead; it is opt-in because Chromium on Linux occasionally presents a blank frame that way, which looks like flicker.
 
@@ -145,11 +146,18 @@ generated `reference.md` with every route, body and tool schema; both are also s
 without a token and can be copied into an agent's skills directory. With a self-signed certificate,
 point the agent at the fingerprint the server prints, or run `--no-tls` behind a reverse proxy.
 
-The viewer page uses the same data over its WebSocket: the ☰ button opens a window list with thumbnails
-and maximize/minimize/close buttons (click a row to bring the window forward, type in the box to start a
-program), ▢ draws colour-coded borders with the app id over every window, ⌖ outlines the focused
-window's elements, and ▤ shows stream statistics (per-stage timings, drops, audio lead) once a second. In the browser console, `bw.windows()`, `bw.activate(id)`, `bw.control({...})`,
-`bw.spawn(cmd)`, `bw.snapshot(id)` and `bw.elements(id)` do the same.
+The viewer page uses the same data over its WebSocket: its side panel lists the windows with thumbnails
+and open-in-popup, snapshot, maximize, minimize and close buttons (click a row to bring the window
+forward, type in the box at the top to start a program), its Statistics tab shows the stream's numbers
+(per-stage timings, drops, audio lead) once a second, and the top bar toggles colour-coded borders with
+the app id over every window and an outline of the focused window's elements. In the browser console,
+`bw.windows()`, `bw.activate(id)`, `bw.control({...})`, `bw.spawn(cmd)`, `bw.snapshot(id)` and
+`bw.elements(id)` do the same.
+
+The viewer lives in `web/` (React, Tailwind CSS, Vite). Its build output `web/dist` is committed and
+embedded in the binary, so `cargo build` needs no Node; after changing anything under `web/src`, run
+`npm ci && npm run build` in `web/` and commit `dist` with the change (`npm run dev` serves the page with
+hot reload, proxying `/ws` and `/api` to a server on port 8080).
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,

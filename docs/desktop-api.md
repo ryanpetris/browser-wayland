@@ -168,32 +168,44 @@ are forwarded as window-relative `Input` moves, resolved on the compositor threa
 `resize` control for the window. Page: `?window=ID` (see `docs/protocol.md`); the panel's ↗ button opens a popup the window's
 size, and `sessionStorage` (the token) is copied into it by the browser.
 
-## Browser UI (`web/desktop.js`)
+## Browser UI (`web/src`)
 
-- **Window panel** (☰ button, hidden in fullscreen): one row per window, top-most first, minimized
-  last: a thumbnail, a colour dot, the title, badges (`full`, `max`, `min`), and buttons to open the
-  window in its own popup (a window stream), snapshot, maximize/restore, minimize/restore (restore uses
-  `activate`, so the window also gets the keyboard), close. Clicking a row activates the window. A command box at the top spawns programs; focusing it
-  releases any key held in the compositor and its keys never reach the desktop.
-- Rows are kept per window id across list updates, so a thumbnail reloads only when its `updated_ms`
-  changed. `<img>` can't send the bearer header, so thumbnails and the full-size snapshot come through
-  `fetch()` and blob URLs, one at a time (the server allows one snapshot in flight). Nothing is fetched
-  while the panel is closed.
-- **Borders** (▢ button, remembered in `localStorage`): an overlay with one rectangle per visible
-  window, positioned from the geometry scaled by canvas CSS size over logical stream size, hue hashed
-  from the app id (the same hue as the row's dot), thicker for the focused window, app id label in the
-  corner. Redrawn on every list, on resize, and when the stream config arrives (the list usually comes
-  first).
-- **Stats** (▤ button, remembered in `localStorage`): stream and per-stage timing statistics once a
-  second; frames in flight are tracked by pts only while the overlay is shown, so a hidden overlay
-  costs nothing.
-- **Elements** (⌖ button, remembered in `localStorage`): the focused window's elements as thin
-  rectangles coloured by role, positioned like the borders from the window's current geometry, so a
-  moving window needs no refetch. Fetched when the focused window's id, title, `updated_ms`, geometry
-  or the stream scale changes, or a popup opens or closes, 300 ms after the last change; an answer that no longer matches the current
-  state is dropped, a failed request is retried on the next list update. A note under
-  the window says why there are none (`501`, `503`, or the `level`).
-- `window.bw` gains `windows()`, `control()`, `activate()`, `spawn()`, `snapshot()`, `elements()`.
+React and Tailwind, built by Vite into `web/dist` (committed and embedded; see the README). The engine
+`viewer.js` owns the canvas and the connection and publishes state through `store.js`; the components
+read it with `useSyncExternalStore` and send actions back through the engine.
+
+- **Layout** (`App.jsx`): a top bar (name, connection status, codec and size, the toggles, fullscreen),
+  the stage (`Stage.jsx`: the canvas, which fills it, plus the overlays and the status banners), the
+  side panel (`Sidebar.jsx`) and a status bar (`StatusBar.jsx`: fps, bandwidth, input-to-paint latency,
+  loss counters, clipboard, pointer lock, audio). The desktop's output takes the stage's size. Fullscreen
+  is requested on the stage element, so the chrome is gone while it lasts. Toggles are remembered in
+  `localStorage`. A popup (`?window=ID`) shows the window's title in the top bar, no side panel, and the
+  canvas centred at the window's size, scaled down if the popup is smaller.
+- **Windows tab**: one row per window, top-most first, minimized last: a thumbnail, a colour dot, the
+  title, the app id and size, state badges, and (on hover) buttons to open the window in its own popup
+  (a window stream), snapshot, maximize/restore, minimize/restore (restore uses `activate`, so the window
+  also gets the keyboard), close. Clicking a row activates the window. The command box at the top spawns
+  programs; focusing it releases any key held in the compositor, and keys typed into any text field of
+  the page never reach the desktop.
+- Thumbnails reload only when a window's `updated_ms` changed. `<img>` can't send the bearer header, so
+  thumbnails and the full-size snapshot come through `fetch()` and blob URLs, one at a time (the server
+  allows one snapshot in flight); the old picture stays until the new one is in.
+- **Borders**: an overlay with one rectangle per visible window, positioned from the geometry scaled by
+  the stage's CSS size over the logical stream size, hue hashed from the app id (the same hue as the
+  row's dot), thicker for the focused window, app id label in the corner. React redraws it from the
+  window list, the stream config and the stage size.
+- **Statistics tab**: stream, per-stage timings, frame counters, audio and connection numbers once a
+  second; frames in flight are tracked by pts only while the tab is shown, so it costs nothing otherwise.
+- **Elements**: the focused window's elements as thin rectangles coloured by role, positioned like the
+  borders from the window's current geometry, so a moving window needs no refetch. Fetched when the
+  focused window's id, title, `updated_ms`, geometry or the stream scale changes, or a popup opens or
+  closes, 300 ms after the last change; an answer that no longer matches the current state is dropped, a
+  failed request is retried on the next list update. A note under the window says why there are none
+  (`501`, `503`, or the `level`).
+- **Banners** on the stage: reconnecting, replaced by another viewer (with a button to take over), a
+  window stream whose window is gone; a modal asks for the token when there is none or it was rejected.
+- `window.bw()` returns the numbers; `bw.windows()`, `bw.control()`, `bw.activate()`, `bw.spawn()`,
+  `bw.snapshot()`, `bw.elements()` and `bw.clipboard.read()/write()` act on the desktop.
 
 ## Security model
 

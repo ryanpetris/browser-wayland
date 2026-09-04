@@ -62,12 +62,15 @@ small shared-types crate. That boundary keeps encoders and transports pluggable 
 | `bw-core` | Plain types shared by everything: `Command` (server → compositor), `Event` (compositor → server), `DmabufFrame`, `FrameSink`, `StreamMsg`, `WindowInfo`, `ControlMsg`, `Snapshot`. Serde on the API types. |
 | `bw-compositor` | Smithay. `lib.rs` (state, loop, output, resize, spawn), `handlers.rs` (protocol delegates), `input.rs` (browser input → seat, focus), `render.rs` (frame), `gpu.rs` (render node, GBM, EGL, swapchain), `grabs.rs` (move/resize), `xwayland.rs`, `foreign_toplevel.rs`, `desktop.rs` (window list, control, snapshots), `cursor.rs`. |
 | `bw-stream` | GStreamer. `GstSink: FrameSink` (dmabuf import, pipeline build/rebuild, keyframes, codec switch), `lease.rs` (a custom `GstMeta` whose `free` drops the swapchain lease), the Opus audio source, and a `videotestsrc` fake source for `--fake-source`. |
-| `bw-server` | axum. TLS and token bootstrap, the viewer assets (embedded with `include_str!`, so JS/HTML edits need a rebuild), `/ws` sessions, `/api`, frame/audio/event distribution to the current viewer. |
+| `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`, so a web build is followed by a cargo build), `/ws` sessions, `/api`, frame/audio/event distribution to the current viewer. |
 | `bw` | The `browser-wayland` binary: clap CLI, thread spawning, channel wiring, the audio null sink. |
 
-`web/` is plain JavaScript with no build step: `app.js` (stream, input, audio, status), `desktop.js`
-(window panel, borders, `bw` console helpers), `keycodes.js` (DOM `code` → evdev, generated from
-Chromium's table), `index.html`.
+`web/` is the viewer: React 19 and Tailwind CSS 4, built by Vite into `web/dist` (`npm ci && npm run
+build`), which is committed so that `cargo build` needs no Node. `src/viewer.js` is the engine (the
+WebSocket, WebCodecs decoding onto the canvas, input, clipboard, audio, the `bw` console helpers); it
+publishes its state on a small store and React only renders the chrome around the canvas
+(`src/App.jsx` and `src/components/`). `src/keycodes.js` maps DOM `code` to evdev (generated from
+Chromium's table).
 
 ## Compositor
 
@@ -156,13 +159,15 @@ for room instead. Encoder output belonging to a superseded stream id is discarde
 
 `VideoDecoder` with `optimizeForLatency`; frames are drawn onto a 2D canvas as they decode. A WebGPU
 external-texture path exists behind `?renderer=webgpu` but is opt-in because Chromium on Linux
-occasionally presented a blank frame with it. The canvas is the whole viewport; a browser resize is
-debounced and sent as a `Resize`, and the old picture is stretched until the new stream arrives.
-Fullscreen with the Keyboard Lock API lets shortcuts like Ctrl+W reach the desktop. The status line
-shows codec, size, renderer, fps, bandwidth, input-to-frame latency and loss counters; the ▤ overlay adds
-per-stage timings (receive to decoded, decoded to paint, paint interval as p50/p95), decode queue depth,
-keyframe cadence and audio lead once a second, collected only while it is shown; `bw()` in the
-console returns the same as JSON.
+occasionally presented a blank frame with it. The canvas fills the stage, the area between the top
+bar, the side panel and the status bar; the desktop's output takes the stage's size (a `ResizeObserver`
+sends a debounced `Resize`), and the old picture is stretched until the new stream arrives. Fullscreen
+is requested on the stage, so the chrome disappears and the output becomes the screen's size; the
+Keyboard Lock API then lets shortcuts like Ctrl+W reach the desktop. The status bar shows fps, bandwidth,
+input-to-frame latency and loss counters; the Statistics tab of the side panel adds per-stage timings
+(receive to decoded, decoded to paint, paint interval as p50/p95), decode queue depth, keyframe cadence
+and audio lead once a second, collected only while it is shown; `bw()` in the console returns the same
+as JSON.
 
 ## Running and deployment
 

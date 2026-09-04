@@ -5,7 +5,7 @@ for scripts. Both are guarded by the one shared token from the data directory (`
 
 ## Authentication
 
-- **Viewer page** (`/`, `/app.js`, `/desktop.js`, `/keycodes.js`): public. The token arrives once in the
+- **Viewer page** (`/`, `/app.js`, `/app.css`): public. The token arrives once in the
   URL fragment (`/#token=…`, the URL the server prints; `?token=` is accepted too), is moved into
   `sessionStorage` and stripped from the address bar; a page with no token shows a paste box.
 - **WebSocket** (`/ws`): the first message must be `AUTH` with the token. Until then the socket is
@@ -21,7 +21,7 @@ No cookies are used anywhere.
 ## WebSocket messages
 
 Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/src/protocol.rs` and
-`web/app.js`.
+`web/src/viewer.js` (with the constants in `web/src/protocol.js`).
 
 ### Server → client
 

@@ -1,51 +1,12 @@
 <!doctype html>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>browser-wayland</title>
-<style>
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
-  #s { position: fixed; left: 8px; bottom: 8px; color: #9a9; font: 12px monospace; pointer-events: none; }
-  #tokenform:not([hidden]) { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; gap: 8px; }
-  #tokenform input { width: 34em; padding: 6px; font: 14px monospace; background: #111; color: #eee; border: 1px solid #444; border-radius: 4px; }
-  #tokenform button { background: #333; color: #ccc; border: 0; border-radius: 4px; padding: 6px 12px; }
-  #btns { position: fixed; right: 8px; bottom: 8px; display: flex; gap: 6px; }
-  #btns button { background: #333; color: #ccc; border: 0; border-radius: 4px; font: 14px sans-serif; padding: 2px 8px; opacity: .6; }
-  #panel { position: fixed; top: 0; right: 0; bottom: 32px; width: 320px; background: rgba(20,20,24,.92); color: #ddd; font: 13px sans-serif; overflow: auto; display: none; }
-  #panel.open { display: block; }
-  #spawn { width: calc(100% - 16px); box-sizing: border-box; margin: 8px; padding: 4px; background: #111; color: #eee; border: 1px solid #444; border-radius: 4px; }
-  .win { display: flex; align-items: center; gap: 6px; padding: 6px 8px; cursor: pointer; border-bottom: 1px solid #2a2a2e; }
-  .win:hover { background: rgba(255,255,255,.06); }
-  .win.focused { background: rgba(255,255,255,.12); }
-  .win .thumb { width: 48px; height: 32px; object-fit: contain; background: #0006; border-radius: 3px; flex: none; }
-  .win .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-  .win .title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .win .badge { font-size: 11px; color: #9a9; }
-  .win button { background: none; border: 0; color: #aaa; cursor: pointer; padding: 0 2px; font-size: 14px; }
-  .win button:hover { color: #fff; }
-  #stats { position: fixed; left: 8px; top: 8px; color: #dfd; background: rgba(0,0,0,.65); font: 12px monospace; padding: 6px 8px; border-radius: 4px; white-space: pre; pointer-events: none; }
-  #overlay { position: fixed; inset: 0; pointer-events: none; }
-  #overlay div { position: absolute; box-sizing: border-box; border: 2px solid; }
-  #overlay div.focused { border-width: 3px; }
-  #overlay div.el { border-width: 1px; }
-  #overlay div.note { border: 0; font: 11px monospace; color: #fff; background: #0009; padding: 0 4px; white-space: nowrap; }
-  #overlay span { position: absolute; left: -2px; top: -2px; font: 11px monospace; color: #000; padding: 0 4px; border-radius: 0 0 4px 0; }
-  :fullscreen #btns, :fullscreen #panel, :fullscreen #overlay, :fullscreen #stats { display: none; }
-  /* one window's own stream (?window=ID): shown at its size, centred */
-  body.window { display: flex; align-items: center; justify-content: center; }
-  body.window #panelbtn, body.window #borders, body.window #elements { display: none; }
-</style>
-<canvas id="c"></canvas>
-<div id="overlay" hidden></div>
-<div id="stats" hidden></div>
-<aside id="panel"><input id="spawn" placeholder="run a command… (Enter)"><div id="wins"></div></aside>
-<div id="s">connecting…</div>
-<form id="tokenform" hidden><input name="token" placeholder="paste the token…" autocomplete="off" spellcheck="false"><button>connect</button></form>
-<div id="btns">
-  <button id="stats-btn" title="Stream statistics">▤</button>
-  <button id="borders" title="Window borders">▢</button>
-  <button id="elements" title="UI elements of the focused window">⌖</button>
-  <button id="panelbtn" title="Windows">☰</button>
-  <button id="fs" title="Fullscreen (browser shortcuts go to the desktop)">⛶</button>
-</div>
-<script type="module" src="/app.js"></script>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>browser-wayland</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

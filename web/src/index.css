@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", Menlo, monospace;
+}
+
+html, body, #root { height: 100%; margin: 0; background: #09090b; }
+/* the video canvas: no smoothing when scaled, no touch gestures */
+canvas.stage { touch-action: none; image-rendering: auto; }
