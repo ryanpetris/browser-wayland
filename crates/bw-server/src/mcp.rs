@@ -33,10 +33,9 @@ pub struct WindowArg {
     pub window: u64,
 }
 
-#[derive(Deserialize, JsonSchema, Default)]
+#[derive(Deserialize, JsonSchema)]
 pub struct ScreenshotArgs {
     /// 0.05..=2 relative to the output scale; default fits the long side in about 1600 px.
-    #[serde(default)]
     pub scale: Option<f64>,
 }
 

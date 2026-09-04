@@ -824,7 +824,6 @@ PNG of the whole output (panels included, pointer excluded), scaled to fit about
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "scale": {
-      "default": null,
       "description": "0.05..=2 relative to the output scale; default fits the long side in about 1600 px.",
       "format": "double",
       "type": [

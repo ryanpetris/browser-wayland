@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::Result;
-use bw_core::{Codec, Command, OutputGeometry, StreamControl};
+use bw_core::{Codec, Command, StreamControl};
 use clap::Parser;
 use tokio::sync::mpsc;
 
