@@ -20,9 +20,15 @@ export function App({ viewer }) {
   const [borders, setBorders] = usePref('borders', false);
   const [elements, setElements] = usePref('elements', false);
   const [tab, setTab] = useState('windows');
+  const [fullscreen, setFullscreen] = useState(false); // the chrome is gone then, so nothing is collected for it
   const windowMode = !!WINDOW;
+  useEffect(() => {
+    const on = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', on);
+    return () => document.removeEventListener('fullscreenchange', on);
+  }, []);
   useEffect(() => viewer.setElementsOn(elements && !windowMode), [viewer, elements, windowMode]);
-  useEffect(() => viewer.setStatsOn(sidebar && tab === 'stats'), [viewer, sidebar, tab]);
+  useEffect(() => viewer.setStatsOn(sidebar && tab === 'stats' && !fullscreen), [viewer, sidebar, tab, fullscreen]);
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden bg-zinc-950 text-zinc-300 select-none">

@@ -23,9 +23,13 @@ export const snapshotUrl = (id, scale = 1) => `${id == null ? '/api/screenshot.p
 export const snapshot = async (id, scale = 1) => (await api(snapshotUrl(id, scale))).blob();
 export const elementsOf = async id => (await api(`/api/windows/${id}/elements`)).json();
 
-// The server renders one snapshot at a time (429 otherwise): thumbnails are fetched one by one.
+// The server renders one snapshot at a time (429 otherwise): thumbnails are fetched one by one, and
+// one nobody wants any more by its turn (`wanted()` false) is skipped.
 let queue = Promise.resolve();
-export const queuedSnapshot = (id, scale) => (queue = queue.then(() => snapshot(id, scale), () => snapshot(id, scale)));
+export const queuedSnapshot = (id, scale, wanted = () => true) => {
+  const run = () => (wanted() ? snapshot(id, scale) : null);
+  return (queue = queue.then(run, run));
+};
 
 /// A remembered UI preference.
 export const pref = {

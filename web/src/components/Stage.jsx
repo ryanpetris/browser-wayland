@@ -9,13 +9,17 @@ export function Stage({ viewer, windowMode, borders, elements }) {
   const el = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   useEffect(() => {
-    const ro = new ResizeObserver(([e]) => {
-      const { width, height } = e.contentRect;
+    const measure = () => {
+      const { width, height } = el.current.getBoundingClientRect();
       setSize({ w: width, h: height });
       viewer.setStage(width, height);
-    });
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el.current);
-    return () => ro.disconnect();
+    // a move to a display with another scale can leave the CSS size alone: watch the ratio too
+    const dpr = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+    dpr.addEventListener('change', measure);
+    return () => { ro.disconnect(); dpr.removeEventListener('change', measure); };
   }, [viewer]);
   return (
     <div ref={el} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-black">

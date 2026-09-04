@@ -158,7 +158,7 @@ mod tests {
         assert_eq!(decode(&[]), None);
     }
 
-    /// Server → client media headers as `app.js` reads them: type, flags, u16 seq, u64 pts, payload from byte 12.
+    /// Server → client media headers as `viewer.js` reads them: type, flags, u16 seq, u64 pts, payload from byte 12.
     #[test]
     fn media_layout() {
         let v = video(&bw_core::EncodedFrame { stream_id: 7, keyframe: true, pts_us: 0x0102030405060708, data: bw_core::Bytes::from_static(&[9, 9]) }, 0xBEEF);

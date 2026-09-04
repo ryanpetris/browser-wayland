@@ -118,8 +118,8 @@ function Thumb({ id, updated }) {
   const url = useRef('');
   useEffect(() => {
     let live = true;
-    queuedSnapshot(id, 0.12).then(b => {
-      if (!live) return;
+    queuedSnapshot(id, 0.12, () => live).then(b => {
+      if (!live || !b) return;
       if (url.current) URL.revokeObjectURL(url.current);
       url.current = URL.createObjectURL(b);
       setSrc(url.current);

@@ -128,7 +128,13 @@ export function createViewer() {
     ws.onmessage = e => onMessage(e.data);
     ws.onclose = e => {
       closes.push(`${e.code}:${e.reason}`);
-      if (e.code === 4001) { stream = null; forgetToken(); store.set({ status: 'unauthorized', reason: e.reason || 'wrong token', stream: null }); return; }
+      if (e.code === 4001) {
+        stream = null;
+        forgetToken();
+        if (document.fullscreenElement) document.exitFullscreen(); // the token dialog is outside the stage
+        store.set({ status: 'unauthorized', reason: e.reason || 'wrong token', stream: null });
+        return;
+      }
       if (e.code === 4002) { store.set({ status: 'replaced' }); return; }
       if (e.code === 4003) { store.set({ status: 'gone', reason: e.reason }); return; } // the window is gone
       store.set({ status: 'retrying' });
@@ -414,8 +420,8 @@ export function createViewer() {
     flushPaste();
   });
 
-  // Keys go to the desktop from anywhere in the page except its own text fields.
-  const isFormField = t => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement;
+  // Keys go to the desktop from anywhere in the page except its own controls (a focused button keeps Enter and Space).
+  const isFormField = t => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLButtonElement;
   function onKey(e) {
     if (isFormField(e.target)) return;
     const code = KEYCODES[e.code];
