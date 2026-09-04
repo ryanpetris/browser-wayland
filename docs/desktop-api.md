@@ -91,17 +91,19 @@ only when title, focus, maximized state or width change, drawn as a memory rende
 the window's own elements. Layout: placement, clamping and maximizing leave room for the bar
 (`fill_rect`, `clamp_to_output`).
 
-Input (`input.rs`): before the clients' surfaces, `decoration_under` finds the top-most window whose bar
-or resize band (6 px around bar and window, not when maximized) holds the pointer, unless a window's
-own area covers the point. A press on the bar focuses and raises the window and starts the same move
+Input (`input.rs`): `window_under` walks the windows top-most first and stops at the first that has
+either a surface under the pointer (its own, a popup, a client-side resize handle) or, if we decorate
+it, its bar or resize band (6 px around bar and window, not when maximized); pointer focus and the
+decorations both come from that walk, so a higher window always wins. A press on the bar focuses and raises the window and starts the same move
 grab an xdg move request uses; a second press within 400 ms toggles maximized; a press in the band
 starts a resize grab with that edge; a button acts on release if the pointer is still on it (close,
 minimize, maximize or restore, through `control`). Over the bar or band the compositor sets the cursor
 itself (arrow or a resize arrow), since no client surface is under the pointer there.
 
 Elements (`elements.rs`): when `decoration` > 0 the page ends with a `title bar` element and three
-`push button`s (`Minimize`, `Maximize` or `Restore`, `Close`) at `y = -32`, at any `level`, so an agent
-targets them like the application's own controls.
+`push button`s (`Minimize`, `Maximize` or `Restore`, `Close`) at `y = -32`, at any `level` and even
+when the accessibility bus is unreachable (then with `level: none`), so an agent targets them like the
+application's own controls.
 
 ## UI elements
 
