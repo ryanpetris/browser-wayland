@@ -211,9 +211,13 @@ async fn api_window_elements(UrlPath(id): UrlPath<u64>, headers: HeaderMap, Stat
     if !app.elements {
         return (StatusCode::NOT_IMPLEMENTED, Json(serde_json::json!({ "error": "started without --elements" }))).into_response();
     }
-    let list = app.viewer.lock().unwrap().windows.as_ref().and_then(|b| serde_json::from_slice::<Vec<bw_core::WindowInfo>>(&b[1..]).ok()).unwrap_or_default();
+    let (list, scale) = {
+        let v = app.viewer.lock().unwrap();
+        let list = v.windows.as_ref().and_then(|b| serde_json::from_slice::<Vec<bw_core::WindowInfo>>(&b[1..]).ok()).unwrap_or_default();
+        (list, v.info.as_ref().map_or(1.0, |i| i.scale))
+    };
     let Some(win) = list.into_iter().find(|w| w.id == id) else { return StatusCode::NOT_FOUND.into_response() };
-    match tokio::time::timeout(std::time::Duration::from_secs(2), elements::elements(&win)).await {
+    match tokio::time::timeout(std::time::Duration::from_secs(2), elements::elements(&win, scale)).await {
         Ok(Ok(page)) => Json(page).into_response(),
         Ok(Err(e)) => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": format!("{e:#}") }))).into_response(),
         Err(_) => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": "timed out reading the tree" }))).into_response(),

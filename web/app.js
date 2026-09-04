@@ -1,7 +1,7 @@
 // Viewer: decodes the H.264 stream with WebCodecs and forwards input.
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
-import { initDesktop, onWindows, renderBorders, control, getWindows, snapshot } from './desktop.js';
+import { initDesktop, onWindows, renderBorders, control, getWindows, snapshot, elementsOf } from './desktop.js';
 
 const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05, WINDOWS = 0x06;
 const AUTH = 0x80, HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A, CONTROL = 0x8B;
@@ -349,6 +349,6 @@ function audioStats() {
   return { packets: audioPackets, decoded: audioDecoded, state: audioCtx.state, peakHz: Math.round(peak * audioCtx.sampleRate / 2 / bins.length), level: bins[peak] };
 }
 window.bw = () => ({ frames, received, fps, mbps, audio: audioStats(), keyframes, decodeErrors, dropped, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
-Object.assign(window.bw, { windows: getWindows, control, snapshot, activate: id => control({ id, op: 'activate' }), spawn: cmd => control({ op: 'spawn', cmd }) });
+Object.assign(window.bw, { windows: getWindows, control, snapshot, elements: elementsOf, activate: id => control({ id, op: 'activate' }), spawn: cmd => control({ op: 'spawn', cmd }) });
 initDesktop(sendControl, () => stream && { w: stream.width / stream.scale, h: stream.height / stream.scale }, () => send(BLUR, 0));
 initRenderer().then(connect);

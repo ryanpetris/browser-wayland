@@ -1,10 +1,13 @@
-// Desktop UI on top of the video: the window list, click-to-activate, colour-coded borders.
+// Desktop UI on top of the video: the window list, click-to-activate, colour-coded borders, and the
+// UI elements of the focused window (from /api/windows/{id}/elements) drawn over it.
 // Fed by the WINDOWS message; talks back with CONTROL (see crates/bw-server/src/protocol.rs).
 
 let windows = [];
 let sendControl = () => {}, streamSize = () => null, releaseInput = () => {}; // streamSize(): logical {w, h} of the video, or null before Config
 const rows = new Map(); // window id -> its panel row, kept across list updates so thumbnails only reload when their URL changes
 let thumbQueue = Promise.resolve(); // the server renders one snapshot at a time (429 otherwise), so fetch them one by one
+let bordersOn = false, elementsOn = false;
+let elements = null, elementsKey = '', elementsTimer = 0; // the focused window's elements: {id, status, page}
 const panel = document.getElementById('panel'), wins = document.getElementById('wins'), spawn = document.getElementById('spawn');
 const overlay = document.getElementById('overlay'), canvas = document.getElementById('c');
 
@@ -15,6 +18,7 @@ const TOKEN = new URLSearchParams(location.search).get('token') ?? '';
 export const api = (path, init = {}) => fetch(path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${TOKEN}` } });
 export const snapshotUrl = (id, scale = 1) => `${id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`}?scale=${scale}`;
 export const snapshot = async (id, scale = 1) => (await api(snapshotUrl(id, scale))).blob();
+export const elementsOf = async id => (await api(`/api/windows/${id}/elements`)).json();
 
 export function initDesktop(send, size, release) {
   sendControl = send;
@@ -22,11 +26,16 @@ export function initDesktop(send, size, release) {
   releaseInput = release;
   spawn.onfocus = () => releaseInput(); // a key held on the canvas must not stay held in the compositor
   document.getElementById('panelbtn').onclick = () => { panel.classList.toggle('open'); renderList(); };
-  const borders = document.getElementById('borders');
-  try { overlay.hidden = localStorage.getItem('bw.borders') !== '1'; } catch {}
-  borders.onclick = () => {
-    overlay.hidden = !overlay.hidden;
-    try { localStorage.setItem('bw.borders', overlay.hidden ? '0' : '1'); } catch {}
+  try { bordersOn = localStorage.getItem('bw.borders') === '1'; elementsOn = localStorage.getItem('bw.elements') === '1'; } catch {}
+  document.getElementById('borders').onclick = () => {
+    bordersOn = !bordersOn;
+    try { localStorage.setItem('bw.borders', bordersOn ? '1' : '0'); } catch {}
+    renderBorders();
+  };
+  document.getElementById('elements').onclick = () => {
+    elementsOn = !elementsOn;
+    try { localStorage.setItem('bw.elements', elementsOn ? '1' : '0'); } catch {}
+    fetchElements();
     renderBorders();
   };
   window.addEventListener('resize', renderBorders);
@@ -40,26 +49,69 @@ export function initDesktop(send, size, release) {
 export function onWindows(list) {
   windows = list;
   renderList();
+  fetchElements();
   renderBorders();
 }
 
-// One rectangle per visible window, in CSS px over the canvas; the same hue as the list.
+const focusedWindow = () => windows.find(w => w.focused && !w.minimized);
+
+// The focused window's elements, fetched again when the focus, the title or the content (updated_ms,
+// whole seconds) changed; the 300 ms delay merges a burst of list updates into one request.
+function fetchElements() {
+  const f = focusedWindow();
+  const key = elementsOn && f ? `${f.id}/${f.title}/${f.updated_ms}` : '';
+  if (key === elementsKey) return;
+  elementsKey = key;
+  clearTimeout(elementsTimer);
+  if (!key) { elements = null; return; }
+  elementsTimer = setTimeout(async () => {
+    const res = await api(`/api/windows/${f.id}/elements`);
+    const page = await res.json().catch(() => ({}));
+    if (elementsKey !== key) return; // superseded while in flight; the newer request is on its way
+    elements = { id: f.id, status: res.status, page };
+    renderBorders();
+  }, 300);
+}
+
+// One rectangle per visible window (the same hue as the list) and one per element of the focused
+// window, in CSS px over the canvas.
 export function renderBorders() {
+  overlay.hidden = !bordersOn && !elementsOn;
   if (overlay.hidden) return;
   const size = streamSize();
   if (!size) return;
   const r = canvas.getBoundingClientRect();
   const sx = r.width / size.w, sy = r.height / size.h;
-  overlay.replaceChildren(...windows.filter(w => !w.minimized).map(w => {
-    const d = document.createElement('div');
+  const box = (d, x, y, w, h) => { d.style.cssText = `left:${r.left + x * sx}px;top:${r.top + y * sy}px;width:${w * sx}px;height:${h * sy}px;`; return d; };
+  const nodes = [];
+  if (bordersOn) for (const w of windows.filter(w => !w.minimized)) {
+    const d = box(document.createElement('div'), w.x, w.y, w.w, w.h);
     d.className = w.focused ? 'focused' : '';
-    d.style.cssText = `left:${r.left + w.x * sx}px;top:${r.top + w.y * sy}px;width:${w.w * sx}px;height:${w.h * sy}px;border-color:${color(w)}`;
+    d.style.borderColor = color(w);
     const label = document.createElement('span');
     label.textContent = w.app_id || w.title;
     label.style.background = color(w);
     d.append(label);
-    return d;
-  }));
+    nodes.push(d);
+  }
+  const f = focusedWindow();
+  if (elementsOn && f && elements?.id === f.id) {
+    const { status, page } = elements;
+    for (const e of page.elements ?? []) {
+      const d = box(document.createElement('div'), f.x + e.x, f.y + e.y, e.w, e.h);
+      d.className = 'el';
+      d.style.borderColor = `hsl(${hue(e.role)} 80% 50%)`;
+      nodes.push(d);
+    }
+    const why = status !== 200 ? (page.error || `HTTP ${status}`) : page.level !== 'full' && `no elements: ${page.level}${page.toolkit ? ' (' + page.toolkit + ')' : ''}`;
+    if (why) {
+      const d = box(document.createElement('div'), f.x, f.y + f.h, f.w, 0);
+      d.className = 'note';
+      d.textContent = why;
+      nodes.push(d);
+    }
+  }
+  overlay.replaceChildren(...nodes);
 }
 
 // One hue per app id, so every window of an app gets the same colour.

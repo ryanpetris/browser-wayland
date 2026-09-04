@@ -11,6 +11,7 @@ use zbus::{Connection, names::BusName, proxy, proxy::CacheProperties, zvariant::
 type Ref = (String, OwnedObjectPath);
 
 const COORD_WINDOW: u32 = 1;
+const ROLE_DOCUMENT_WEB: u32 = 95;
 const STATE_SHOWING: u32 = 25;
 const MAX_VISITED: usize = 3000;
 const MAX_ELEMENTS: usize = 500;
@@ -59,7 +60,8 @@ pub struct Page {
     pub elements: Vec<Element>,
 }
 
-pub async fn elements(win: &WindowInfo) -> Result<Page> {
+/// `scale` is the output scale: Chromium reports its web content in device pixels (its own UI in logical ones).
+pub async fn elements(win: &WindowInfo, scale: f64) -> Result<Page> {
     // ponytail: a fresh bus connection per request; cache one if requests ever get frequent
     let conn = a11y_bus().await?;
     let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
@@ -92,11 +94,13 @@ pub async fn elements(win: &WindowInfo) -> Result<Page> {
     let children = accessible(&conn, &frame).await?.get_children().await?;
     let level = if children.is_empty() { "frame" } else { "full" };
 
-    // depth-first in document order; a subtree that isn't showing is skipped whole
-    let mut stack: Vec<Ref> = children.into_iter().rev().collect();
+    // depth-first in document order; a subtree that isn't showing is skipped whole. The flag marks
+    // Chromium web content, whose extents are in device pixels (everything else is logical).
+    let chromium = toolkit.as_deref() == Some("Chromium");
+    let mut stack: Vec<(Ref, bool)> = children.into_iter().rev().map(|r| (r, false)).collect();
     let mut out = Vec::new();
     let mut visited = 0;
-    while let Some(r) = stack.pop() {
+    while let Some((r, device)) = stack.pop() {
         visited += 1;
         if visited > MAX_VISITED || out.len() >= MAX_ELEMENTS || is_null(&r) {
             continue;
@@ -106,15 +110,19 @@ pub async fn elements(win: &WindowInfo) -> Result<Page> {
         if state.first().is_none_or(|s| s & (1 << STATE_SHOWING) == 0) {
             continue;
         }
-        if let Some(role) = role_name(acc.get_role().await.unwrap_or(0))
+        let role = acc.get_role().await.unwrap_or(0);
+        if let Some(role) = role_name(role)
             && let Ok((x, y, w, h)) = component(&conn, &r).await?.get_extents(COORD_WINDOW).await
             && w > 0
             && h > 0
         {
-            out.push(Element { role, name: acc.name().await.unwrap_or_default(), x: x - dx, y: y - dy, w, h });
+            let s = if device { scale } else { 1.0 };
+            let px = |v: i32| (v as f64 / s).round() as i32;
+            out.push(Element { role, name: acc.name().await.unwrap_or_default(), x: px(x) - dx, y: px(y) - dy, w: px(w), h: px(h) });
         }
         if let Ok(children) = acc.get_children().await {
-            stack.extend(children.into_iter().rev());
+            let device = device || (chromium && role == ROLE_DOCUMENT_WEB);
+            stack.extend(children.into_iter().rev().map(|r| (r, device)));
         }
     }
     Ok(Page { level, toolkit, elements: out })
