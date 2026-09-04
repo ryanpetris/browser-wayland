@@ -4,11 +4,13 @@ import { KEYCODES } from './keycodes.js';
 import { initDesktop, onWindows, renderBorders, control, getWindows, snapshot } from './desktop.js';
 
 const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05, WINDOWS = 0x06;
-const HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A, CONTROL = 0x8B;
+const AUTH = 0x80, HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A, CONTROL = 0x8B;
 const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA
 
 const canvas = document.getElementById('c');
 const status = document.getElementById('s');
+// The token lives in the page URL: first message on the socket, bearer header on API calls. No cookies.
+const TOKEN = new URLSearchParams(location.search).get('token') ?? '';
 let draw, renderer; // set by initRenderer(): paints one VideoFrame
 let pendingFrame = null, rafId = 0;
 
@@ -97,11 +99,18 @@ function connect() {
   connects++;
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = async () => { await sendHello(); sendResize(); };
+  ws.onopen = async () => {
+    const t = new TextEncoder().encode(TOKEN);
+    send(AUTH, t.length, dv => new Uint8Array(dv.buffer, 1).set(t));
+    await sendHello();
+    sendResize();
+  };
   ws.onmessage = e => onMessage(e.data);
   ws.onclose = e => {
     closes.push(`${e.code}:${e.reason}`);
-    status.textContent = stream ? 'disconnected, retrying…' : 'no stream; open the URL with ?token= printed by the server';
+    if (e.code === 4001) { status.textContent = 'wrong token: open the URL with ?token= printed by the server'; return; }
+    if (e.code === 4002) { status.textContent = 'replaced by another viewer (only one at a time); reload to take over'; return; }
+    status.textContent = stream ? 'disconnected, retrying…' : 'no stream, retrying…';
     setTimeout(connect, 1000);
   };
 }

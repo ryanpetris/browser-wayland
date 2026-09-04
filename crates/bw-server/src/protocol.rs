@@ -11,6 +11,8 @@ pub const AUDIO: u8 = 0x05;
 /// `[WINDOWS][JSON array of WindowInfo]`
 pub const WINDOWS: u8 = 0x06;
 // client -> server
+/// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
+pub const AUTH: u8 = 0x80;
 /// `[HELLO][u8 hw][u8 sw]`: codec families the browser decodes (bit0 H.264, bit1 HEVC, bit2 VP9), with/without hardware.
 pub const HELLO: u8 = 0x81;
 pub const RESIZE: u8 = 0x82;

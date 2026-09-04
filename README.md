@@ -63,19 +63,19 @@ icons with Font Awesome (`otf-font-awesome`); GTK only shows icons in the Xfce m
 The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps, and
 Firefox, with PipeWire for audio. Build and run instructions are in its header.
 
-If the page says "no stream; open the URL with ?token=", the `/ws` handshake was refused: the token is
-stale (each fresh data directory, e.g. a new container without a volume, gets a new one; `/?token=` with a
-wrong token now answers 401), another viewer holds the stream (one at a time, the newest wins), or a
-reverse proxy rewrote the `Host` header so it no longer matches the page's `Origin`. The browser's
-network tab shows which: 401, 403, or a connection that closes after opening.
+The page tells you when the server closed its socket: "wrong token" (the token changes with the data
+directory, e.g. a fresh container without a volume) or "replaced by another viewer" (one at a time, the
+newest wins).
 
 ## Desktop API
 
 The compositor is the window manager, so the viewer and outside scripts can see and drive the desktop.
-Everything is behind the same token as the stream: the cookie the `?token=` URL sets, `?token=` on the
-request, or `Authorization: Bearer <token>`.
+HTTP calls send the token as `Authorization: Bearer <token>`; the viewer page keeps it in its URL and
+sends it as the first message on its WebSocket. There are no cookies and the token is never in a URL
+the server sees.
 
 ```sh
+T=$(cat ~/.config/browser-wayland/token)
 curl -s -H "Authorization: Bearer $T" http://host:8443/api/windows | jq        # the window list
 curl -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
      http://host:8443/api/control -d '{"id":3,"op":"minimize"}'                # act on a window

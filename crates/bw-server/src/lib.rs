@@ -1,5 +1,6 @@
-//! HTTPS + WebSocket front end: serves the viewer page, authenticates with a
-//! shared token, streams encoded video out and turns browser input into `Command`s.
+//! HTTPS + WebSocket front end: serves the viewer page, authenticates the WebSocket in-band and the
+//! HTTP API with a bearer token (never a cookie), streams encoded video out and turns browser input
+//! into `Command`s.
 
 mod protocol;
 mod ws;
@@ -19,7 +20,7 @@ use axum::{
     extract::{Path as UrlPath, Query, State, ws::WebSocketUpgrade},
     Json,
     http::{HeaderMap, StatusCode, header},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use bw_core::{Bytes, Codec, Command, ControlMsg, Event, Snapshot, SnapshotReply, StreamControl, StreamInfo, StreamMsg};
@@ -48,7 +49,6 @@ impl Config {
 
 pub struct App {
     token: String,
-    tls: bool,
     commands: calloop::channel::Sender<Command>,
     control: Box<dyn StreamControl>,
     policy: CodecPolicy,
@@ -86,7 +86,6 @@ pub async fn run(
     let token = load_or_create(&cfg.data_dir.join("token"), || Ok(random_hex(32)))?;
     let app = Arc::new(App {
         token,
-        tls: cfg.tls,
         commands,
         control,
         policy: cfg.codec,
@@ -131,58 +130,23 @@ pub async fn run(
     Ok(())
 }
 
-/// `/?token=…` sets the auth cookie and redirects to `/`; otherwise serve the page.
-async fn index(Query(q): Query<HashMap<String, String>>, State(app): State<Arc<App>>) -> Response {
-    match q.get("token") {
-        // Say so instead of serving a page that can only fail: the token changes whenever the data dir does (a fresh container).
-        Some(t) if !app.token_ok(t) => (StatusCode::UNAUTHORIZED, "wrong token: use the ?token= URL from the server's current log output").into_response(),
-        Some(t) => {
-            let secure = if app.tls { "; Secure" } else { "" };
-            (
-                [(header::SET_COOKIE, format!("bw_token={t}; Path=/; HttpOnly; SameSite=Strict{secure}"))],
-                Redirect::to("/"),
-            )
-                .into_response()
-        }
-        _ => Html(include_str!("../../../web/index.html")).into_response(),
-    }
+/// The page is public; it authenticates its WebSocket with the token it finds in its own URL.
+async fn index() -> Html<&'static str> {
+    Html(include_str!("../../../web/index.html"))
 }
 
 fn js(src: &'static str) -> Response {
     ([(header::CONTENT_TYPE, "text/javascript")], src).into_response()
 }
 
-async fn websocket(
-    ws: WebSocketUpgrade,
-    Query(q): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-    State(app): State<Arc<App>>,
-) -> Response {
-    if !same_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    if !app.authorized(&headers, &q) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
+/// Unauthenticated until the first message (see `ws::session`).
+async fn websocket(ws: WebSocketUpgrade, State(app): State<Arc<App>>) -> Response {
     ws.max_message_size(64 << 10).on_upgrade(move |socket| ws::session(socket, app))
 }
 
-/// Same-site cookies still travel cross-origin from another port on this host: require a matching Origin
-/// when the browser sends one, and Sec-Fetch-Site same-origin/none (plain <img> loads carry no Origin).
-/// curl sends neither header and passes; it needs the token anyway.
-fn same_origin(headers: &HeaderMap) -> bool {
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
-    let origin_host = headers.get(header::ORIGIN).and_then(|o| o.to_str().ok()).map(|o| o.trim_start_matches("https://").trim_start_matches("http://"));
-    let fetch_site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
-    origin_host.is_none_or(|o| Some(o) == host) && fetch_site.is_none_or(|s| s == "same-origin" || s == "none")
-}
-
 /// The current window list as JSON (what the viewer was last sent).
-async fn api_windows(Query(q): Query<HashMap<String, String>>, headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
-    if !same_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    if !app.authorized(&headers, &q) {
+async fn api_windows(headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
+    if !app.authorized(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let body = app.viewer.lock().unwrap().windows.as_ref().map(|b| b.slice(1..)).unwrap_or_else(|| Bytes::from_static(b"[]"));
@@ -199,10 +163,7 @@ async fn api_screenshot(Query(q): Query<HashMap<String, String>>, headers: Heade
 
 /// `?scale=` (windows only, 0.05..=2, default 1) → PNG. 404 for an unknown window, 503 if the compositor doesn't answer.
 async fn snapshot(app: &App, headers: &HeaderMap, q: &HashMap<String, String>, id: Option<u64>) -> Response {
-    if !same_origin(headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    if !app.authorized(headers, q) {
+    if !app.authorized(headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     // One at a time: the compositor renders these on its own thread and a queued request can't be cancelled.
@@ -236,11 +197,8 @@ async fn snapshot(app: &App, headers: &HeaderMap, q: &HashMap<String, String>, i
 }
 
 /// Fire-and-forget: the compositor ignores unknown ids and impossible requests.
-async fn api_control(Query(q): Query<HashMap<String, String>>, headers: HeaderMap, State(app): State<Arc<App>>, Json(msg): Json<ControlMsg>) -> Response {
-    if !same_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    if !app.authorized(&headers, &q) {
+async fn api_control(headers: HeaderMap, State(app): State<Arc<App>>, Json(msg): Json<ControlMsg>) -> Response {
+    if !app.authorized(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let _ = app.commands.send(Command::Control(msg));
@@ -248,17 +206,13 @@ async fn api_control(Query(q): Query<HashMap<String, String>>, headers: HeaderMa
 }
 
 impl App {
-    /// `?token=`, the `bw_token` cookie, or `Authorization: Bearer` (for curl).
-    fn authorized(&self, headers: &HeaderMap, q: &HashMap<String, String>) -> bool {
-        let cookie = headers
-            .get(header::COOKIE)
-            .and_then(|c| c.to_str().ok())
-            .and_then(|c| c.split(';').find_map(|kv| kv.trim().strip_prefix("bw_token=")));
+    /// HTTP API: `Authorization: Bearer <token>`, nothing else (no cookies, no query strings in logs).
+    fn authorized(&self, headers: &HeaderMap) -> bool {
         let bearer = headers.get(header::AUTHORIZATION).and_then(|a| a.to_str().ok()).and_then(|a| a.strip_prefix("Bearer "));
-        q.get("token").map(String::as_str).or(cookie).or(bearer).is_some_and(|t| self.token_ok(t))
+        bearer.is_some_and(|t| self.token_ok(t))
     }
 
-    fn token_ok(&self, t: &str) -> bool {
+    pub(crate) fn token_ok(&self, t: &str) -> bool {
         // constant-time compare, no dependency needed
         t.len() == self.token.len()
             && t.bytes().zip(self.token.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0

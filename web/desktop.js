@@ -4,13 +4,17 @@
 let windows = [];
 let sendControl = () => {}, streamSize = () => null, releaseInput = () => {}; // streamSize(): logical {w, h} of the video, or null before Config
 const rows = new Map(); // window id -> its panel row, kept across list updates so thumbnails only reload when their URL changes
+let thumbQueue = Promise.resolve(); // the server renders one snapshot at a time (429 otherwise), so fetch them one by one
 const panel = document.getElementById('panel'), wins = document.getElementById('wins'), spawn = document.getElementById('spawn');
 const overlay = document.getElementById('overlay'), canvas = document.getElementById('c');
 
 export const getWindows = () => windows;
 export const control = obj => sendControl(obj);
-export const snapshotUrl = (id, scale = 1) => id == null ? `/api/screenshot.png?scale=${scale}` : `/api/windows/${id}/snapshot.png?scale=${scale}`;
-export const snapshot = async (id, scale = 1) => (await fetch(snapshotUrl(id, scale))).blob();
+const TOKEN = new URLSearchParams(location.search).get('token') ?? '';
+/// fetch() with the bearer token, for the HTTP API.
+export const api = (path, init = {}) => fetch(path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${TOKEN}` } });
+export const snapshotUrl = (id, scale = 1) => `${id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`}?scale=${scale}`;
+export const snapshot = async (id, scale = 1) => (await api(snapshotUrl(id, scale))).blob();
 
 export function initDesktop(send, size, release) {
   sendControl = send;
@@ -80,17 +84,27 @@ function renderList() {
       rows.set(w.id, row);
     }
     row.className = 'win' + (w.focused ? ' focused' : '');
-    // updated_ms has whole-second resolution, so a busy window costs at most one render per second
-    const src = snapshotUrl(w.id, 0.12) + `&t=${w.updated_ms}`;
+    // updated_ms has whole-second resolution, so a busy window costs at most one render per second.
+    // <img> can't send the bearer header, so the PNG comes through fetch() and a blob URL.
     const thumb = row.querySelector('.thumb');
-    if (thumb.getAttribute('src') !== src) thumb.src = src;
+    if (thumb.dataset.key !== String(w.updated_ms)) {
+      thumb.dataset.key = w.updated_ms;
+      thumbQueue = thumbQueue.then(() => snapshot(w.id, 0.12)).then(b => {
+        if (thumb.src.startsWith('blob:')) URL.revokeObjectURL(thumb.src);
+        thumb.src = URL.createObjectURL(b);
+      }).catch(() => {});
+    }
     const title = row.querySelector('.title');
     title.textContent = w.title || w.app_id || `#${w.id}`;
     title.title = `${w.app_id}${w.pid ? ' · pid ' + w.pid : ''} · ${w.w}×${w.h} at ${w.x},${w.y}`;
     row.querySelector('.badge').textContent = [w.fullscreen && 'full', w.maximized && 'max', w.minimized && 'min'].filter(Boolean).join(' ');
     const [shot, max, min, close] = row.querySelectorAll('button');
     row.onclick = () => sendControl({ id: w.id, op: 'activate' });
-    shot.onclick = e => { e.stopPropagation(); window.open(snapshotUrl(w.id, 1)); };
+    shot.onclick = e => {
+      e.stopPropagation();
+      const tab = window.open('', '_blank'); // opened now, inside the click, so popup blockers allow it
+      snapshot(w.id, 1).then(b => { tab.location = URL.createObjectURL(b); }).catch(() => tab.close());
+    };
     max.onclick = e => { e.stopPropagation(); sendControl({ id: w.id, op: w.maximized ? 'unmaximize' : 'maximize' }); };
     // restoring should also give the window the keyboard, which is what activate does
     min.onclick = e => { e.stopPropagation(); sendControl({ id: w.id, op: w.minimized ? 'activate' : 'minimize' }); };

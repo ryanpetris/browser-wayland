@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use bw_core::{AxisSource, Bytes, Codec, Command, Event, OutputGeometry, StreamMsg};
 use tokio::sync::mpsc;
 
@@ -99,7 +99,29 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
     }
 }
 
+/// Close codes the page understands.
+const UNAUTHORIZED: u16 = 4001;
+const REPLACED: u16 = 4002;
+
 pub async fn session(mut socket: WebSocket, app: Arc<App>) {
+    // The first message must be AUTH with the token; until then this socket is nobody and can't
+    // take the stream over. A wrong token, or five seconds of silence, ends it.
+    let authed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match socket.recv().await {
+                Some(Ok(Message::Binary(b))) => return b.first() == Some(&protocol::AUTH) && app.token_ok(std::str::from_utf8(&b[1..]).unwrap_or("")),
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return false,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    if !authed {
+        let _ = socket.send(Message::Close(Some(CloseFrame { code: UNAUTHORIZED, reason: "unauthorized".into() }))).await;
+        return;
+    }
+
     let (tx, mut rx) = mpsc::channel::<Bytes>(8);
     let (atx, mut arx) = mpsc::channel::<Bytes>(4);
     // Taking over drops the previous viewer's only sender, which ends its session below.
@@ -132,7 +154,11 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         tokio::select! {
             out = rx.recv() => match out {
                 Some(b) => if socket.send(Message::Binary(b)).await.is_err() { break },
-                None => break, // replaced by a newer viewer
+                None => {
+                    // replaced by a newer viewer: tell the page so it stops retrying
+                    let _ = socket.send(Message::Close(Some(CloseFrame { code: REPLACED, reason: "replaced by another viewer".into() }))).await;
+                    break;
+                }
             },
             Some(b) = arx.recv() => if socket.send(Message::Binary(b)).await.is_err() { break },
             msg = socket.recv() => match msg {
