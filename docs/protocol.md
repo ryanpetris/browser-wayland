@@ -77,9 +77,14 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `POST /api/control` | Body: a control message. `202 Accepted`; fire-and-forget. |
 | `GET /api/windows/{id}/snapshot.png?scale=` | PNG of that window. `scale` 0.05–2, relative to the output scale, default 1. `404` unknown id, `429` another snapshot is in flight, `503` the compositor didn't answer within 2 s. |
 | `GET /api/screenshot.png` | PNG of the whole output at its own scale (layers included, cursor excluded). |
+| `POST /api/input` | Body: an input message (below). `202`; `404` unknown window. |
 | `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` the tree couldn't be read: no D-Bus session or accessibility bus, the application went away, or 2 s passed (body: `{"error": …}`), `404` unknown id. |
 
 Status codes: `401` missing or wrong bearer token; the JSON body is limited to 2 MiB by axum.
+
+Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; see [mcp.md](mcp.md)) and
+`GET /skill/SKILL.md`, `GET /skill/reference.md` (the agent documentation, no token). The generated
+`skills/browser-wayland/reference.md` holds the JSON schemas of every body and tool.
 
 ### Window object
 
@@ -98,6 +103,22 @@ Status codes: `401` missing or wrong bearer token; the JSON body is limited to 2
 - `z` is the stacking index, 0 = bottom, over the listed windows; `null` while minimized. Menus and tooltips (X11 override-redirect) are not listed.
 - `focused` is the compositor's intent: the window last activated by a click, the taskbar or the API.
 - `updated_ms` is the time of the window's last commit on the compositor's monotonic clock, whole seconds, so a client redrawing at 60 fps does not produce sixty lists a second.
+
+### Input message
+
+```json
+{"type": "click", "window": 3, "x": 549, "y": 47}          {"type": "click", "x": 700, "y": 400, "button": "right", "count": 2}
+{"type": "move", "x": 10, "y": 10}                          {"type": "button", "button": "left", "pressed": true}
+{"type": "scroll", "dy": 3}                                 {"type": "key", "keys": "ctrl+shift+t"}
+{"type": "text", "text": "hello\n"}
+```
+
+- Coordinates are output logical pixels, or relative to the window's geometry when `window` is given
+  (the same origin as element rectangles). `click` moves the pointer first; `count` is 1 to 3.
+- `key` is a `+`-separated chord: `ctrl`, `shift`, `alt`, `super`, then any xkb keysym name (`Return`,
+  `Escape`, `F5`, `Prior`) or a single character. Pressed in order, released in reverse.
+- `text` is typed through the compositor's keyboard layout, Shift where the layout needs it; `\n` is Return.
+- `scroll` is in wheel lines (positive `dy` down), sent like the viewer's wheel.
 
 ### Elements object
 

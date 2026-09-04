@@ -1,0 +1,58 @@
+# MCP, input and the skill documents
+
+Coding agents drive the desktop through the same operations as the HTTP API, so an agent can find a
+button by name, click it, type, and check the result without interpreting pixels. This document covers
+the design; [protocol.md](protocol.md) has the wire shapes and `skills/browser-wayland/reference.md` the
+generated schemas.
+
+## Decisions
+
+| Question | Decision |
+|---|---|
+| Protocol | MCP over Streamable HTTP at `/mcp` on the existing server, with the `rmcp` SDK. No second port or process; works remotely and from the container. Agents that only speak stdio use the standard `mcp-remote` bridge. |
+| Auth | The bearer token, through the same middleware as `/api`; `401` otherwise. rmcp's host allow-list (DNS-rebinding protection) is off because the token already gates every request. No OAuth. |
+| Shape of the tools | One tool per thing an agent wants to say, fourteen in all, each a few lines calling an `App` method. Arguments use the API's own types where they exist (`Button`, the control ops) so the vocabulary is shared. |
+| Results | JSON as text content for lists and elements, `image/png` content for snapshots, `ok` for fire-and-forget actions, and `isError` results carrying the API's error text so the model can react. |
+| Documentation | The manual is the server's `instructions` at `initialize` and both skill files are MCP resources, so a client gets the documentation with the connection. |
+| Screenshots for models | `snapshot` defaults to a scale that fits the window's long side in about 1600 device pixels. `screenshot` is the output at its size; scaling the whole-output render is future work. |
+
+## Input
+
+The compositor could always move the pointer, click and press keys: that is how the viewer works. What
+was missing was a way in other than the viewer's binary WebSocket. `InputMsg` in `bw-core` is that way:
+`move`, `click`, `button`, `scroll`, `key`, `text`, served as `POST /api/input` and as tools.
+
+- Pointer actions map onto the existing commands. `click` sends a motion then press/release pairs, so
+  it lands where the caller said even if a human moved the pointer. Coordinates are output logical
+  pixels or, with a window id, relative to that window's geometry, the origin element rectangles use.
+- Keys are resolved in the compositor, where the keymap is: `Command::Text` types a string,
+  `Command::Chord` presses keysym names together. `key_for` in `input.rs` scans the active layout for
+  the keycode producing a keysym at level 0 or 1 and adds Shift for level 1, so `text` types any
+  character the layout has and `key` accepts every xkb keysym name plus friendly modifier names.
+  Deeper levels (AltGr) are not handled. Press and release go out back to back; GTK, Firefox and
+  Chromium process them in order, so no pacing was needed.
+- The `key()` guard that ignores a press for an already pressed key (the viewer's auto-repeat) also
+  makes repeated characters safe: each is released before the next press.
+
+## Skill documents
+
+Two files, both compiled in with `include_str!` and served at `/skill/`:
+
+- `SKILL.md`, written by hand for an agent: the loop (windows, elements, act, read again, snapshot to
+  confirm), input details, what the status codes mean, and the things that surprise people.
+- `reference.md`, generated: the route table, the JSON schemas of `WindowInfo`, `ControlMsg`,
+  `InputMsg` and the elements page (from `schemars`, the same derive rmcp uses for tool arguments),
+  and every MCP tool with its description and input schema (from the tool router). The
+  `reference_is_current` test compares the checked-in file with what the code generates, so it is
+  regenerated with `UPDATE_REFERENCE=1 cargo test -p bw-server reference` and cannot silently drift.
+
+## Verification
+
+- A scripted MCP handshake with curl against a test compositor: `initialize` (server info,
+  capabilities, instructions), `tools/list` (14 tools), `resources/list` and `resources/read`, and
+  `tools/call` for `windows`, `elements`, `click`, `type` (text appeared in the editor) and `snapshot`
+  (a PNG of the window's size), plus a tool error for an unknown window and `401` without the token.
+- The input route through curl: click into an editor, type text with punctuation and capitals, `Return`,
+  `ctrl+a`; the snapshot showed the typed lines selected.
+- Key resolution has a unit test on the `us` keymap (letters, Shift for capitals and `plus`, `ctrl`,
+  `Return`, `F5`).

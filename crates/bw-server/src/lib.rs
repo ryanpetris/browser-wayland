@@ -6,6 +6,7 @@ mod api;
 mod elements;
 mod mcp;
 mod protocol;
+#[cfg(test)]
 mod reference;
 mod ws;
 

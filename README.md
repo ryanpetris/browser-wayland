@@ -94,6 +94,8 @@ curl -X POST ... /api/control -d '{"op":"spawn","cmd":"firefox"}'             # 
 curl -o w.png -H "Authorization: Bearer $T" 'http://host:8443/api/windows/3/snapshot.png?scale=0.5'
 curl -o screen.png -H "Authorization: Bearer $T" http://host:8443/api/screenshot.png
 curl -s -H "Authorization: Bearer $T" http://host:8443/api/windows/3/elements | jq   # with --elements
+curl -X POST ... /api/input -d '{"type":"click","window":3,"x":549,"y":47}'  # click an element
+curl -X POST ... /api/input -d '{"type":"text","text":"hello"}'                 # type; also key, scroll, move, button
 ```
 
 Each window reports `id`, `title`, `app_id`, `x11`, `pid`, its geometry `x y w h` in logical pixels, where
@@ -112,6 +114,25 @@ session browser-wayland was started in (`dbus-run-session -- browser-wayland --e
 none; the container does this). GTK and Qt applications and Firefox publish their trees when started from
 `--exec` or `spawn`; Chromium and Electron apps need `--force-renderer-accessibility`. Without the flag
 the route answers `501`; `503` means the tree couldn't be read (no bus, or the application went away).
+
+`/api/input` clicks, types, presses key chords and scrolls as a user would, with coordinates relative to a
+window when you pass its id, so element rectangles can be used as they are.
+
+## Agents: MCP and skill
+
+The same operations are MCP tools at `/mcp` (Streamable HTTP, same bearer token), so a coding agent can
+drive the desktop: `windows`, `elements`, `snapshot`, `screenshot`, `window_control`, `move_window`,
+`resize_window`, `spawn`, `click`, `move_pointer`, `button`, `scroll`, `key`, `type`.
+
+```sh
+claude mcp add --transport http bw https://host:8443/mcp --header "Authorization: Bearer $T"
+BW_TOKEN=$T codex mcp add bw --url https://host:8443/mcp --bearer-token-env-var BW_TOKEN
+```
+
+The server hands the agent its manual on connection (`skills/browser-wayland/SKILL.md`) and the
+generated `reference.md` with every route, body and tool schema; both are also served at `/skill/`
+without a token and can be copied into an agent's skills directory. With a self-signed certificate,
+point the agent at the fingerprint the server prints, or run `--no-tls` behind a reverse proxy.
 
 The viewer page uses the same data over its WebSocket: the ☰ button opens a window list with thumbnails
 and maximize/minimize/close buttons (click a row to bring the window forward, type in the box to start a

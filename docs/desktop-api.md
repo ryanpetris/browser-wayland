@@ -20,6 +20,14 @@ of a window, and a small desktop UI in the viewer built on the same data. Wire f
 | Concurrency | One snapshot in flight; more get `429`. A queued request can't be cancelled once it is on the compositor's channel. |
 | Elements | Behind `--elements`; read live from AT-SPI per request, never cached; the compositor is not involved beyond exporting the geometry offset. |
 
+## One implementation, several fronts
+
+`api.rs` holds the operations as `App` methods: `windows`, `elements`, `snapshot`, `control`, `input`,
+each returning a typed result or an `ApiError` (disabled, not found, busy, unavailable). The HTTP
+routes in `lib.rs` parse and serialize; the MCP tools in `mcp.rs` do the same for an agent; both sit
+behind one bearer middleware. Nothing that talks to the compositor lives in a handler, so the two
+fronts cannot drift. See [mcp.md](mcp.md).
+
 ## Window list
 
 `desktop.rs`. `window_info` builds a `WindowInfo` from a `Window`: title and app id from the xdg
@@ -156,5 +164,6 @@ moving it out (sessionStorage, a paste box, rotation) is future work.
 - New windows are activated but don't take the keyboard until clicked; the API exposes this
   pre-existing behaviour as `focused: true` on a window without keyboard focus.
 - GL failures in a snapshot answer `404` rather than `500`.
+- Screenshots at a smaller scale (the whole-output render path uses the output's own scale).
 - Elements: acting on an element through AT-SPI (activate, set text) instead of clicking its rectangle;
   element states (checked, focused, disabled); Flatpak applications, whose pid on the bus is the sandbox's.
