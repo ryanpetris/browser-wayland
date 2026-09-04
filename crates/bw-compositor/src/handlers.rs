@@ -159,7 +159,7 @@ impl CompositorHandler for State {
             while let Some(parent) = get_parent(&root) {
                 root = parent;
             }
-            let minimized = || self.minimized.iter().map(|(w, _)| w).find(|w| w.wl_surface().is_some_and(|s| *s == root)).cloned();
+            let minimized = || self.minimized.iter().map(|(w, ..)| w).find(|w| w.wl_surface().is_some_and(|s| *s == root)).cloned();
             if let Some(window) = self.window_for(&root).or_else(minimized) {
                 window.on_commit();
                 self.touch_window(&window);

@@ -65,7 +65,7 @@ impl State {
             }
             WindowSurface::X11(x) => (x.is_maximized(), x.is_fullscreen(), x.is_activated()),
         };
-        let minimized = self.minimized.iter().any(|(w, _)| w == window);
+        let minimized = self.minimized.iter().any(|(w, ..)| w == window);
         let states = [
             (maximized, handle::State::Maximized),
             (fullscreen, handle::State::Fullscreen),
@@ -87,7 +87,7 @@ impl State {
             .space
             .elements()
             .filter(|w| w.x11_surface().is_none_or(|x| !x.is_override_redirect())) // menus and tooltips aren't windows
-            .chain(self.minimized.iter().map(|(w, _)| w))
+            .chain(self.minimized.iter().map(|(w, ..)| w))
             .cloned()
             .collect();
         let gone: Vec<Window> = self.foreign.windows.keys().filter(|w| !live.contains(w)).cloned().collect();

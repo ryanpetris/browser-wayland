@@ -136,7 +136,8 @@ pub struct State {
     pub space: Space<Window>,
     pub popups: PopupManager,
     /// Minimized windows (unmapped from the space) with where to put them back.
-    pub minimized: Vec<(Window, Point<i32, Logical>)>,
+    /// Minimized windows with where they come back and their stacking index at the time.
+    pub minimized: Vec<(Window, Point<i32, Logical>, usize)>,
     pub foreign: foreign_toplevel::ForeignToplevels,
     /// The window `focus_window` last activated.
     pub active: Option<Window>,
@@ -352,7 +353,7 @@ impl State {
         event_loop
             .run(None, &mut self, |state| {
                 state.space.refresh();
-                state.minimized.retain(|(w, _)| w.alive());
+                state.minimized.retain(|(w, ..)| w.alive());
                 if state.active.as_ref().is_some_and(|w| !w.alive()) {
                     state.active = None;
                 }
@@ -377,10 +378,20 @@ impl State {
     }
 
     /// Hide a window until a taskbar (or its own client) asks for it back; focus moves to the top-most window left.
+    /// Every window bottom to top, minimized ones at the position they had when minimized.
+    fn full_stack(&self) -> Vec<Window> {
+        let mut stack: Vec<Window> = self.space.elements().cloned().collect();
+        for (w, _, z) in &self.minimized {
+            stack.insert((*z).min(stack.len()), w.clone());
+        }
+        stack
+    }
+
     pub fn minimize(&mut self, window: &Window) {
         let Some(loc) = self.space.element_location(window) else { return };
+        let z = self.full_stack().iter().position(|w| w == window).unwrap_or(0);
         self.space.unmap_elem(window);
-        self.minimized.push((window.clone(), loc));
+        self.minimized.push((window.clone(), loc, z));
         window.set_activated(false); // out of the space, so focus_window can't reach it any more
         if let Some(t) = window.toplevel() {
             t.send_pending_configure();
@@ -390,10 +401,18 @@ impl State {
         self.dirty = true;
     }
 
+    /// Back where it was in the stack; `activate` raises afterwards when that is wanted.
     pub fn unminimize(&mut self, window: &Window) {
-        if let Some(i) = self.minimized.iter().position(|(w, _)| w == window) {
-            let (window, loc) = self.minimized.remove(i);
+        if let Some(i) = self.minimized.iter().position(|(w, ..)| w == window) {
+            // map_element puts it on top, so the mapped windows above its place go back on top of it, in order
+            let stack = self.full_stack();
+            let pos = stack.iter().position(|w| w == window).unwrap_or(stack.len());
+            let above: Vec<(Window, Point<i32, Logical>)> = stack[pos..].iter().skip(1).filter_map(|w| Some((w.clone(), self.space.element_location(w)?))).collect();
+            let (window, loc, _) = self.minimized.remove(i);
             self.space.map_element(window, loc, false);
+            for (w, l) in above {
+                self.space.map_element(w, l, false);
+            }
             self.relayout(); // the output or the panels may have changed meanwhile
         }
     }

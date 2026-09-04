@@ -116,7 +116,7 @@ impl XwmHandler for State {
         if let Some(win) = self.window_for_x11(&window) {
             self.space.unmap_elem(&win);
         }
-        self.minimized.retain(|(w, _)| w.x11_surface() != Some(&window));
+        self.minimized.retain(|(w, ..)| w.x11_surface() != Some(&window));
         self.dirty = true;
     }
 
@@ -153,7 +153,7 @@ impl XwmHandler for State {
         for w in self.space.elements().filter(|w| w.x11_surface().is_some()).cloned().collect::<Vec<_>>() {
             self.space.unmap_elem(&w);
         }
-        self.minimized.retain(|(w, _)| w.x11_surface().is_none());
+        self.minimized.retain(|(w, ..)| w.x11_surface().is_none());
         self.x11_display = None;
         self.dirty = true;
     }
@@ -164,7 +164,7 @@ impl XwmHandler for State {
         }
     }
     fn unminimize_request(&mut self, _xwm: XwmId, window: X11Surface) {
-        if let Some(win) = self.minimized.iter().map(|(w, _)| w).find(|w| w.x11_surface() == Some(&window)).cloned() {
+        if let Some(win) = self.minimized.iter().map(|(w, ..)| w).find(|w| w.x11_surface() == Some(&window)).cloned() {
             self.unminimize(&win);
         }
     }

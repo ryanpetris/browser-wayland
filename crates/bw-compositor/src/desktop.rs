@@ -57,7 +57,7 @@ impl State {
         let (title, app_id) = Self::title_app_id(window);
         let geo = self.space.element_geometry(window).unwrap_or_else(|| {
             // minimized: where it comes back
-            let loc = self.minimized.iter().find(|(w, _)| w == window).map(|(_, l)| *l).unwrap_or_default();
+            let loc = self.minimized.iter().find(|(w, ..)| w == window).map(|(_, l, _)| *l).unwrap_or_default();
             Rectangle::new(loc, window.geometry().size)
         });
         let mut popups = Vec::new();
@@ -105,7 +105,7 @@ impl State {
             .enumerate()
             .map(|(z, w)| self.window_info(w, Some(z as u32)))
             .collect();
-        list.extend(self.minimized.iter().map(|(w, _)| self.window_info(w, None)));
+        list.extend(self.minimized.iter().map(|(w, ..)| self.window_info(w, None)));
         list
     }
 
@@ -121,7 +121,7 @@ impl State {
     pub fn window_by_id(&self, id: u64) -> Option<Window> {
         self.space
             .elements()
-            .chain(self.minimized.iter().map(|(w, _)| w))
+            .chain(self.minimized.iter().map(|(w, ..)| w))
             .find(|w| w.user_data().get::<WindowId>().is_some_and(|i| i.0 == id))
             .cloned()
     }
