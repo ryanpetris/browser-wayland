@@ -134,7 +134,9 @@ pub async fn run(
 /// `/?token=…` sets the auth cookie and redirects to `/`; otherwise serve the page.
 async fn index(Query(q): Query<HashMap<String, String>>, State(app): State<Arc<App>>) -> Response {
     match q.get("token") {
-        Some(t) if app.token_ok(t) => {
+        // Say so instead of serving a page that can only fail: the token changes whenever the data dir does (a fresh container).
+        Some(t) if !app.token_ok(t) => (StatusCode::UNAUTHORIZED, "wrong token: use the ?token= URL from the server's current log output").into_response(),
+        Some(t) => {
             let secure = if app.tls { "; Secure" } else { "" };
             (
                 [(header::SET_COOKIE, format!("bw_token={t}; Path=/; HttpOnly; SameSite=Strict{secure}"))],

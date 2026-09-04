@@ -2,9 +2,12 @@
 # browser-wayland with the Xfce panel, the default Xfce apps and Firefox, on Arch Linux.
 #
 #   docker build -t browser-wayland .
-#   docker run --rm --device /dev/dri --shm-size 1g -p 8443:8443 browser-wayland
+#   docker run --rm --device /dev/dri --shm-size 1g -p 8443:8443 -v bw-data:/home/bw/.config/browser-wayland browser-wayland
 #
-# Open the https://<host>:8443/?token=... URL that `docker logs` prints (self-signed certificate).
+# Open the https://<host>:8443/?token=... URL that `docker logs` prints, with <host> being the Docker
+# host's address (the log shows the container's own), and accept the self-signed certificate. The
+# volume keeps the token and certificate across runs; without it every run prints a new token and
+# old URLs get "wrong token". One viewer at a time: a second browser takes the stream over.
 # Arguments after the image name go to browser-wayland, e.g. `... browser-wayland --codec h264`.
 # If /dev/dri/renderD128 isn't world-accessible on the host, add `--group-add $(stat -c %g /dev/dri/renderD128)`.
 # Hardware encoding uses the host GPU through VA-API: Intel (iHD) and AMD (Mesa) drivers are included.

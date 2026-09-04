@@ -63,6 +63,12 @@ icons with Font Awesome (`otf-font-awesome`); GTK only shows icons in the Xfce m
 The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps, and
 Firefox, with PipeWire for audio. Build and run instructions are in its header.
 
+If the page says "no stream; open the URL with ?token=", the `/ws` handshake was refused: the token is
+stale (each fresh data directory, e.g. a new container without a volume, gets a new one; `/?token=` with a
+wrong token now answers 401), another viewer holds the stream (one at a time, the newest wins), or a
+reverse proxy rewrote the `Host` header so it no longer matches the page's `Origin`. The browser's
+network tab shows which: 401, 403, or a connection that closes after opening.
+
 ## Desktop API
 
 The compositor is the window manager, so the viewer and outside scripts can see and drive the desktop.
