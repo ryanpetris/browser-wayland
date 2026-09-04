@@ -8,7 +8,7 @@ use smithay::reexports::{
         ext_workspace_handle_v1::{self as handle, ExtWorkspaceHandleV1},
         ext_workspace_manager_v1::{self as manager, ExtWorkspaceManagerV1},
     },
-    wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, protocol::wl_output::WlOutput},
+    wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, backend::ClientId, protocol::wl_output::WlOutput},
 };
 
 use crate::State;
@@ -23,7 +23,6 @@ pub struct Workspaces {
 
 impl Workspaces {
     pub fn output_bound(&mut self, wl_output: &WlOutput) {
-        self.groups.retain(|(m, g)| m.is_alive() && g.is_alive());
         for (manager, group) in self.groups.iter().filter(|(m, _)| m.client().is_some_and(|c| Some(c) == wl_output.client())) {
             group.output_enter(wl_output);
             manager.done();
@@ -63,10 +62,16 @@ impl Dispatch<ExtWorkspaceManagerV1, ()> for State {
         }
         // commit: nothing was requested that we would act on
     }
+    fn destroyed(state: &mut Self, _: ClientId, manager: &ExtWorkspaceManagerV1, _: &()) {
+        state.workspaces.groups.retain(|(m, _)| m != manager);
+    }
 }
 
 impl Dispatch<ExtWorkspaceGroupHandleV1, ()> for State {
     fn request(_: &mut Self, _: &Client, _: &ExtWorkspaceGroupHandleV1, _: group::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+    fn destroyed(state: &mut Self, _: ClientId, group: &ExtWorkspaceGroupHandleV1, _: &()) {
+        state.workspaces.groups.retain(|(_, g)| g != group);
+    }
 }
 
 impl Dispatch<ExtWorkspaceHandleV1, ()> for State {

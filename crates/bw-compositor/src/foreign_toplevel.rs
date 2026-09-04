@@ -114,8 +114,11 @@ impl State {
                     let handles = self.foreign.managers.iter().filter_map(|m| new_handle(&self.dh, &self.output, m, &window, &info)).collect();
                     self.foreign.windows.insert(window, Entry { info, handles });
                 }
-                Some(entry) if entry.info != info => {
-                    entry.handles.retain(Resource::is_alive);
+                Some(entry) => {
+                    entry.handles.retain(Resource::is_alive); // taskbars come and go
+                    if entry.info == info {
+                        continue;
+                    }
                     for h in &entry.handles {
                         if entry.info.title != info.title {
                             h.title(info.title.clone());
