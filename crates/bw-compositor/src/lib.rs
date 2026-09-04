@@ -45,6 +45,7 @@ use smithay::{
         fractional_scale::FractionalScaleManagerState,
         output::OutputManagerState,
         pointer_constraints::PointerConstraintsState,
+        idle_inhibit::IdleInhibitManagerState,
         relative_pointer::RelativePointerManagerState,
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
         shell::{
@@ -165,6 +166,7 @@ pub struct State {
     pub fractional_scale_state: FractionalScaleManagerState,
     pub relative_pointer_state: RelativePointerManagerState,
     pub pointer_constraints_state: PointerConstraintsState,
+    pub idle_inhibit_state: IdleInhibitManagerState,
     pub xwayland_shell_state: XWaylandShellState,
     pub xwm: Option<X11Wm>,
     pub x11_display: Option<u32>,
@@ -284,6 +286,7 @@ impl State {
             fractional_scale_state: FractionalScaleManagerState::new::<State>(&dh),
             relative_pointer_state: RelativePointerManagerState::new::<State>(&dh),
             pointer_constraints_state: PointerConstraintsState::new::<State>(&dh),
+            idle_inhibit_state: IdleInhibitManagerState::new::<State>(&dh),
             xwayland_shell_state: XWaylandShellState::new::<State>(&dh),
             xwm: None,
             x11_display: None,

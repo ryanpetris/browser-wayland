@@ -552,3 +552,11 @@ delegate_viewporter!(State);
 delegate_fractional_scale!(State);
 delegate_relative_pointer!(State);
 delegate_pointer_constraints!(State);
+
+/// Clients (players, waybar's idle_inhibitor) can declare they inhibit idle. There is no screen to blank,
+/// so the state is accepted and nothing else happens.
+impl smithay::wayland::idle_inhibit::IdleInhibitHandler for State {
+    fn inhibit(&mut self, _surface: WlSurface) {}
+    fn uninhibit(&mut self, _surface: WlSurface) {}
+}
+smithay::delegate_idle_inhibit!(State);
