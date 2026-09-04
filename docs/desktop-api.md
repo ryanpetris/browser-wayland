@@ -127,13 +127,15 @@ the mechanism.
 ## Clipboard
 
 `clipboard.rs`. When a client takes the clipboard with a text mime type (`new_selection`, or the
-Xwayland path in `xwayland.rs`), the compositor asks the owner for the text through a pipe, reads it
-asynchronously on the event loop (calloop `Generic` on the non-blocking read end, 1 MiB cap) and sends
-`Event::Clipboard`; the server keeps the last text for `GET /api/clipboard` and the `Clipboard` message
-(replayed to a new viewer). `Command::SetClipboard` makes a compositor-owned selection whose user data
-carries the text; `send_selection` serves it from a thread so a slow reader never blocks the compositor,
-and X11 clients are offered it too. The selection user data distinguishes relayed X11 selections from
-our own. Text only; primary selection and images are not bridged.
+Xwayland path in `xwayland.rs`), the compositor asks the owner for the text through a pipe on the next
+loop idle (the request is deferred out of the selection handler and any read still in progress is
+dropped), reads it on the event loop (calloop `Generic` on the non-blocking read end, 1 MiB cap) and
+sends `Event::Clipboard`; the server keeps the last text for `GET /api/clipboard` and the `Clipboard`
+message (replayed to a new viewer). `Command::SetClipboard` makes a compositor-owned selection whose
+user data carries the text; `send_selection` writes it from a calloop source on the non-blocking pipe,
+so a slow reader never blocks the compositor, and X11 clients are offered it too. The selection user
+data distinguishes relayed X11 selections from our own. Text only; primary selection and images are not
+bridged; a write over 1 MiB gets 413.
 
 The page writes received text to the browser clipboard at once when it may, otherwise on the next
 gesture. Ctrl+V and Shift+Insert are not forwarded immediately: the browser's `paste` event (which

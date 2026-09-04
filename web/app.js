@@ -423,8 +423,9 @@ function flushPaste() {
 document.onpaste = e => {
   if (e.target instanceof HTMLInputElement) return;
   e.preventDefault();
-  const text = e.clipboardData?.getData('text/plain');
-  if (text) { const b = new TextEncoder().encode(text); send(SET_CLIPBOARD, b.length, dv => new Uint8Array(dv.buffer, 1).set(b)); }
+  const text = e.clipboardData?.getData('text/plain') ?? ''; // an empty browser clipboard clears the desktop's
+  const b = new TextEncoder().encode(text);
+  send(SET_CLIPBOARD, b.length, dv => new Uint8Array(dv.buffer, 1).set(b));
   flushPaste();
 };
 
@@ -440,6 +441,7 @@ const onKey = e => {
     return;
   }
   if (e.type === 'keyup' && pendingPaste === code) return; // the deferred press+release pair covers it
+  if (e.type === 'keyup') flushPaste(); // a modifier going up first would turn the deferred chord into a plain key
   e.preventDefault();
   resumeAudio();
   lastInput = performance.now();
@@ -447,7 +449,7 @@ const onKey = e => {
   sendKey(code, e.type === 'keydown');
 };
 window.onkeydown = window.onkeyup = onKey;
-window.onblur = () => send(BLUR, 0);
+window.onblur = () => { pendingPaste = null; send(BLUR, 0); };
 document.onvisibilitychange = () => { if (document.hidden) send(BLUR, 0); };
 
 let resizeTimer;

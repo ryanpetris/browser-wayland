@@ -186,7 +186,7 @@ fn mcp_service(app: Arc<App>) -> StreamableHttpService<mcp::Mcp, LocalSessionMan
 
 /// Unauthenticated until the first message (see `ws::session`).
 async fn websocket(ws: WebSocketUpgrade, State(app): State<Arc<App>>) -> Response {
-    ws.max_message_size(64 << 10).on_upgrade(move |socket| ws::session(socket, app))
+    ws.max_message_size(1 + (1 << 20)).on_upgrade(move |socket| ws::session(socket, app)) // a pasted clipboard can be 1 MiB
 }
 
 /// `Authorization: Bearer <token>` for everything under /api and /mcp; nothing else (no cookies, no query strings in logs).

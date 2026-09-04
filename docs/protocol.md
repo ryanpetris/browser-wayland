@@ -83,7 +83,7 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `GET /api/screenshot.png?scale=` | PNG of the whole output (layers included, cursor excluded); `scale` as for a window; `429`, `500`, `503` as for a window. |
 | `POST /api/input` | Body: an input message (below). `202`; `404` unknown window; `503` compositor gone. |
 | `GET /api/clipboard` | The last text a desktop application copied, as `text/plain`; `204` before any. |
-| `PUT /api/clipboard` | Body: UTF-8 text (at most 1 MiB) that becomes the desktop clipboard. `202`. |
+| `PUT /api/clipboard` | Body: UTF-8 text that becomes the desktop clipboard. `202`; `413` over 1 MiB. |
 | `POST /api/token/rotate` | Replaces the token: written to the data directory, printed as new URLs, returned as `{"token": …}`; the connected viewer is closed with `4001 token rotated` and the old token stops working. Not an MCP tool. |
 | `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` the tree couldn't be read: no D-Bus session or accessibility bus, the application went away, or 2 s passed (body: `{"error": …}`), `404` unknown id. |
 

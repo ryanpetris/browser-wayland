@@ -148,6 +148,7 @@ pub struct State {
     pub minimized: Vec<(Window, Point<i32, Logical>, usize)>,
     pub foreign: foreign_toplevel::ForeignToplevels,
     pub workspaces: workspace::Workspaces,
+    pub reading: clipboard::Reading,
     /// The window `focus_window` last activated.
     pub active: Option<Window>,
     /// What the viewer was last told (desktop API).
@@ -278,6 +279,7 @@ impl State {
             panels_hidden: false,
             foreign: Default::default(),
             workspaces: Default::default(),
+            reading: Default::default(),
             active: None,
             last_windows: Vec::new(),
             seat_state,

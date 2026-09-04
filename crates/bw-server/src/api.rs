@@ -25,6 +25,8 @@ pub enum ApiError {
     Busy,
     /// The compositor or the accessibility bus didn't answer.
     Unavailable(String),
+    /// The request body is over the limit.
+    TooLarge,
     /// Something on our side broke (a GL step of a snapshot, PNG encoding).
     Internal(String),
 }
@@ -37,6 +39,7 @@ impl ApiError {
             ApiError::NotFound => StatusCode::NOT_FOUND,
             ApiError::Busy => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -49,6 +52,7 @@ impl std::fmt::Display for ApiError {
             ApiError::Unauthorized => f.write_str("not the current token"),
             ApiError::NotFound => f.write_str("no such window"),
             ApiError::Busy => f.write_str("another snapshot is in flight"),
+            ApiError::TooLarge => f.write_str("over 1 MiB"),
             ApiError::Unavailable(why) | ApiError::Internal(why) => f.write_str(why),
         }
     }
@@ -136,7 +140,7 @@ impl App {
     /// Text becomes the desktop clipboard (and what `clipboard()` reports); fire-and-forget like control.
     pub fn set_clipboard(&self, text: String) -> Result<(), ApiError> {
         if text.len() > 1 << 20 {
-            return Err(ApiError::Internal("clipboard text over 1 MiB".into()));
+            return Err(ApiError::TooLarge);
         }
         self.viewer.lock().unwrap().clipboard = Some(text.clone());
         self.send(Command::SetClipboard(text))

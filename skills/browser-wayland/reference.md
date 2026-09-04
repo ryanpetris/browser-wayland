@@ -18,7 +18,7 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `POST /api/control` | **Control** | `202`; fire-and-forget; `503` compositor gone |
 | `POST /api/input` | **Input** | `202`; `404` unknown window; `503` compositor gone |
 | `GET /api/clipboard` | | the last text an application copied, `text/plain`; `204` before any |
-| `PUT /api/clipboard` | UTF-8 text body, at most 1 MiB | becomes the desktop clipboard; `202` |
+| `PUT /api/clipboard` | UTF-8 text body | becomes the desktop clipboard; `202`; `413` over 1 MiB |
 | `POST /api/token/rotate` | | `{"token": …}`: a new token replaces the old one at once (file, viewers, API); the server prints the new URLs |
 | `POST /mcp` | MCP Streamable HTTP | the tools below |
 | `GET /skill/SKILL.md`, `GET /skill/reference.md` | no token needed | this documentation |
