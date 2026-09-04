@@ -441,6 +441,12 @@ impl SeatHandler for State {
         &mut self.seat_state
     }
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        // A cursor surface is never in the space, so nothing else tells its client which output (and
+        // scale) it is on; without this GTK uploads 1× cursors whatever the output scale.
+        if let CursorImageStatus::Surface(s) = &image {
+            self.output.enter(s);
+            with_states(s, |states| with_fractional_scale(states, |f| f.set_preferred_scale(self.geometry.scale)));
+        }
         self.cursor_status = image;
         self.export_cursor();
     }

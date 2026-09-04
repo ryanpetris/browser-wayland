@@ -198,8 +198,11 @@ pub enum Event {
 pub struct CursorImage {
     pub width: u32,
     pub height: u32,
+    /// Hotspot in logical pixels.
     pub hot_x: i32,
     pub hot_y: i32,
+    /// The bitmap is `scale` × its logical size (a client's HiDPI cursor buffer); 1 for theme cursors.
+    pub scale: u32,
     /// Straight (non-premultiplied) RGBA.
     pub rgba: Vec<u8>,
 }

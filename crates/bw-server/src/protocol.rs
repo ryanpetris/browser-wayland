@@ -50,13 +50,14 @@ pub fn video(f: &EncodedFrame) -> Bytes {
 
 /// `[CURSOR][u16 w][u16 h][i16 hot_x][i16 hot_y][straight RGBA]`; `w == 0` hides the pointer.
 pub fn cursor(img: Option<&CursorImage>) -> Bytes {
-    let Some(img) = img else { return Bytes::from_static(&[CURSOR, 0, 0, 0, 0, 0, 0, 0, 0]) };
-    let mut b = Vec::with_capacity(9 + img.rgba.len());
+    let Some(img) = img else { return Bytes::from_static(&[CURSOR, 0, 0, 0, 0, 0, 0, 0, 0, 0]) };
+    let mut b = Vec::with_capacity(10 + img.rgba.len());
     b.push(CURSOR);
     b.extend_from_slice(&(img.width as u16).to_le_bytes());
     b.extend_from_slice(&(img.height as u16).to_le_bytes());
     b.extend_from_slice(&(img.hot_x as i16).to_le_bytes());
     b.extend_from_slice(&(img.hot_y as i16).to_le_bytes());
+    b.push(img.scale.clamp(1, 255) as u8);
     b.extend_from_slice(&img.rgba);
     b.into()
 }

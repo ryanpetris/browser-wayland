@@ -184,10 +184,18 @@ function onMessage(buf) {
       // The compositor doesn't draw the pointer; we do, with zero latency.
       const w = dv.getUint16(1, true), h = dv.getUint16(3, true);
       if (!w || !h) { canvas.style.cursor = 'none'; break; }
+      const hx = dv.getInt16(5, true), hy = dv.getInt16(7, true), scale = dv.getUint8(9) || 1;
       const c = document.createElement('canvas');
       c.width = w; c.height = h;
-      c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(buf, 9, w * h * 4), w, h), 0, 0);
-      canvas.style.cursor = `url(${c.toDataURL()}) ${dv.getInt16(5, true)} ${dv.getInt16(7, true)}, default`;
+      c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(buf, 10, w * h * 4), w, h), 0, 0);
+      // A HiDPI cursor buffer is `scale` × its logical size; image-set() tells the browser its density.
+      canvas.style.cursor = scale > 1 ? `image-set(url("${c.toDataURL()}") ${scale}x) ${hx} ${hy}, default` : `url(${c.toDataURL()}) ${hx} ${hy}, default`;
+      if (scale > 1 && !canvas.style.cursor.includes('image-set')) { // no image-set() in cursor: shrink the bitmap instead
+        const s = document.createElement('canvas');
+        s.width = Math.round(w / scale); s.height = Math.round(h / scale);
+        s.getContext('2d').drawImage(c, 0, 0, s.width, s.height);
+        canvas.style.cursor = `url(${s.toDataURL()}) ${hx} ${hy}, default`;
+      }
       break;
     }
     case POINTER_LOCK:

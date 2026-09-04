@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use bw_core::{CursorImage, Event};
 use smithay::{
+    wayland::compositor::SurfaceAttributes,
     backend::renderer::utils::with_renderer_surface_state,
     input::pointer::{CursorIcon, CursorImageStatus, CursorImageSurfaceData},
     reexports::wayland_server::protocol::{wl_shm, wl_surface::WlSurface},
@@ -43,6 +44,7 @@ impl CursorTheme {
                 height: img.height,
                 hot_x: img.xhot as i32,
                 hot_y: img.yhot as i32,
+                scale: 1,
                 rgba: unpremultiply(img.pixels_rgba.chunks_exact(4).map(|p| (p[0], p[1], p[2], p[3]))),
             })
     }
@@ -60,7 +62,10 @@ fn unpremultiply(pixels: impl Iterator<Item = (u8, u8, u8, u8)>) -> Vec<u8> {
 
 /// The client's cursor surface (a wl_shm buffer) as straight RGBA.
 fn surface_cursor(surface: &WlSurface) -> Option<CursorImage> {
-    let hotspot = with_states(surface, |s| s.data_map.get::<CursorImageSurfaceData>().map(|d| d.lock().unwrap().hotspot))?;
+    let (hotspot, scale) = with_states(surface, |s| {
+        let hotspot = s.data_map.get::<CursorImageSurfaceData>().map(|d| d.lock().unwrap().hotspot)?;
+        Some((hotspot, s.cached_state.get::<SurfaceAttributes>().current().buffer_scale.max(1) as u32))
+    })?;
     let buffer = with_renderer_surface_state(surface, |s| s.buffer().cloned())??;
     with_buffer_contents(&buffer, |ptr, len, data| {
         let opaque = match data.format {
@@ -78,7 +83,8 @@ fn surface_cursor(surface: &WlSurface) -> Option<CursorImage> {
             let p = ptr.add(i);
             (p.add(2).read_volatile(), p.add(1).read_volatile(), p.read_volatile(), if opaque { 255 } else { p.add(3).read_volatile() })
         });
-        Some(CursorImage { width: w as u32, height: h as u32, hot_x: hotspot.x, hot_y: hotspot.y, rgba: unpremultiply(pixels) })
+        tracing::debug!(w, h, scale, ?hotspot, "client cursor");
+        Some(CursorImage { width: w as u32, height: h as u32, hot_x: hotspot.x, hot_y: hotspot.y, scale, rgba: unpremultiply(pixels) })
     })
     .ok()
     .flatten()
