@@ -144,4 +144,13 @@ mod tests {
         assert_eq!(decode(&[0x85, 0x10]), None);
         assert_eq!(decode(&[]), None);
     }
+
+    /// Server → client media headers as `app.js` reads them: type, flags, u16 seq, u64 pts, payload from byte 12.
+    #[test]
+    fn media_layout() {
+        let v = video(&bw_core::EncodedFrame { stream_id: 7, keyframe: true, pts_us: 0x0102030405060708, data: bw_core::Bytes::from_static(&[9, 9]) }, 0xBEEF);
+        assert_eq!(&v[..], &[VIDEO, 1, 0xEF, 0xBE, 8, 7, 6, 5, 4, 3, 2, 1, 9, 9]);
+        let a = audio(0x11, &[4, 5, 6], 3);
+        assert_eq!(&a[..], &[AUDIO, 0, 3, 0, 0x11, 0, 0, 0, 0, 0, 0, 0, 4, 5, 6]);
+    }
 }
