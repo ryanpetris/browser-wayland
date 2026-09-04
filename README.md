@@ -63,6 +63,34 @@ icons with Font Awesome (`otf-font-awesome`); GTK only shows icons in the Xfce m
 The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps, and
 Firefox, with PipeWire for audio. Build and run instructions are in its header.
 
+## Desktop API
+
+The compositor is the window manager, so the viewer and outside scripts can see and drive the desktop.
+Everything is behind the same token as the stream: the cookie the `?token=` URL sets, `?token=` on the
+request, or `Authorization: Bearer <token>`.
+
+```sh
+curl -s -H "Authorization: Bearer $T" http://host:8443/api/windows | jq        # the window list
+curl -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+     http://host:8443/api/control -d '{"id":3,"op":"minimize"}'                # act on a window
+curl -X POST ... /api/control -d '{"op":"spawn","cmd":"firefox"}'             # start a program
+curl -o w.png -H "Authorization: Bearer $T" 'http://host:8443/api/windows/3/snapshot.png?scale=0.5'
+curl -o screen.png -H "Authorization: Bearer $T" http://host:8443/api/screenshot.png
+```
+
+Each window reports `id`, `title`, `app_id`, `x11`, `pid`, its geometry `x y w h` in logical pixels, its
+stacking index `z` (`null` while minimized), `maximized`, `fullscreen`, `minimized`, `focused`, and
+`updated_ms`, the time of its last commit. Ops: `activate`, `close`, `minimize`, `unminimize`, `maximize`,
+`unmaximize`, `fullscreen`, `unfullscreen`, `move` (`x`, `y`), `resize` (`w`, `h`), `spawn` (`cmd`, run
+with `sh -c` in the same environment as `--exec`). Requests are fire-and-forget; unknown ids are ignored.
+Snapshots are lossless PNGs of a window's own buffers, so they include covered and minimized windows;
+`scale` (0.05 to 2) is relative to the output scale and applies to windows only.
+
+The viewer page uses the same data over its WebSocket: the ☰ button opens a window list with thumbnails
+and maximize/minimize/close buttons (click a row to bring the window forward, type in the box to start a
+program), and ▢ draws colour-coded borders with the app id over every window. In the browser console,
+`bw.windows()`, `bw.activate(id)`, `bw.control({...})`, `bw.spawn(cmd)` and `bw.snapshot(id)` do the same.
+
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,
 then H.264), `--fake-source` (a test pattern instead of the compositor), `--socket-name`, `--render-node`.
