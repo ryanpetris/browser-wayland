@@ -8,7 +8,7 @@ mod gpu;
 mod grabs;
 mod handlers;
 mod input;
-mod render;
+pub(crate) mod render;
 mod xwayland;
 
 use std::{

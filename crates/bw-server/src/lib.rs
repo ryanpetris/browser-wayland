@@ -16,13 +16,13 @@ use std::{
 use anyhow::{Context, Result};
 use axum::{
     Router,
-    extract::{Query, State, ws::WebSocketUpgrade},
+    extract::{Path as UrlPath, Query, State, ws::WebSocketUpgrade},
     Json,
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
-use bw_core::{Bytes, Codec, Command, ControlMsg, Event, StreamControl, StreamInfo, StreamMsg};
+use bw_core::{Bytes, Codec, Command, ControlMsg, Event, Snapshot, SnapshotReply, StreamControl, StreamInfo, StreamMsg};
 use tokio::sync::mpsc;
 
 /// `None` = automatic: HEVC, then VP9, then H.264, first one the browser decodes in hardware.
@@ -102,6 +102,8 @@ pub async fn run(
         .route("/ws", get(websocket))
         .route("/api/windows", get(api_windows))
         .route("/api/control", post(api_control))
+        .route("/api/windows/{id}/snapshot.png", get(api_window_snapshot))
+        .route("/api/screenshot.png", get(api_screenshot))
         .with_state(app.clone());
 
     let tls_pem = if cfg.tls { Some(load_or_create_cert(&cfg.data_dir)?) } else { None };
@@ -175,6 +177,47 @@ async fn api_windows(Query(q): Query<HashMap<String, String>>, headers: HeaderMa
     }
     let body = app.viewer.lock().unwrap().windows.as_ref().map(|b| b.slice(1..)).unwrap_or_else(|| Bytes::from_static(b"[]"));
     ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+}
+
+async fn api_window_snapshot(UrlPath(id): UrlPath<u64>, Query(q): Query<HashMap<String, String>>, headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
+    snapshot(&app, &headers, &q, Some(id)).await
+}
+
+async fn api_screenshot(Query(q): Query<HashMap<String, String>>, headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
+    snapshot(&app, &headers, &q, None).await
+}
+
+/// `?scale=` (windows only, 0.05..=2, default 1) → PNG. 404 for an unknown window, 503 if the compositor doesn't answer.
+async fn snapshot(app: &App, headers: &HeaderMap, q: &HashMap<String, String>, id: Option<u64>) -> Response {
+    if !app.authorized(headers, q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let scale = q.get("scale").and_then(|s| s.parse::<f64>().ok()).unwrap_or(1.0).clamp(0.05, 2.0);
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<Snapshot>>();
+    let reply = SnapshotReply(Box::new(move |s| {
+        let _ = tx.send(s);
+    }));
+    if app.commands.send(Command::Snapshot { id, scale, reply }).is_err() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    let snap = match tokio::time::timeout(std::time::Duration::from_secs(2), rx).await {
+        Ok(Ok(Some(s))) => s,
+        Ok(Ok(None)) => return StatusCode::NOT_FOUND.into_response(),
+        _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let png = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, snap.width, snap.height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header()?.write_image_data(&snap.rgba)?;
+        Ok(out)
+    })
+    .await;
+    match png {
+        Ok(Ok(bytes)) => ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "no-store")], bytes).into_response(),
+        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 /// Fire-and-forget: the compositor ignores unknown ids and impossible requests.

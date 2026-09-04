@@ -8,6 +8,8 @@ const overlay = document.getElementById('overlay'), canvas = document.getElement
 
 export const getWindows = () => windows;
 export const control = obj => sendControl(obj);
+export const snapshotUrl = (id, scale = 1) => id == null ? `/api/screenshot.png?scale=${scale}` : `/api/windows/${id}/snapshot.png?scale=${scale}`;
+export const snapshot = async (id, scale = 1) => (await fetch(snapshotUrl(id, scale))).blob();
 
 export function initDesktop(send, size) {
   sendControl = send;
@@ -66,15 +68,18 @@ function renderList() {
   wins.replaceChildren(...order.map(w => {
     const row = document.createElement('div');
     row.className = 'win' + (w.focused ? ' focused' : '');
-    row.innerHTML = '<span class="dot"></span><span class="title"></span><span class="badge"></span>'
-      + '<button title="Maximize / restore">⤢</button><button title="Minimize / restore">⌄</button><button title="Close">✕</button>';
+    row.innerHTML = '<img class="thumb"><span class="dot"></span><span class="title"></span><span class="badge"></span>'
+      + '<button title="Snapshot (PNG)">📷</button><button title="Maximize / restore">⤢</button><button title="Minimize / restore">⌄</button><button title="Close">✕</button>';
     row.querySelector('.dot').style.background = color(w);
+    // the cache key only changes every 2 s, so a busy window costs at most one render per 2 s
+    row.querySelector('.thumb').src = snapshotUrl(w.id, 0.12) + `&t=${Math.floor(w.updated_ms / 2000)}`;
     const title = row.querySelector('.title');
     title.textContent = w.title || w.app_id || `#${w.id}`;
     title.title = `${w.app_id}${w.pid ? ' · pid ' + w.pid : ''} · ${w.w}×${w.h} at ${w.x},${w.y}`;
     row.querySelector('.badge').textContent = [w.fullscreen && 'full', w.maximized && 'max', w.minimized && 'min'].filter(Boolean).join(' ');
-    const [max, min, close] = row.querySelectorAll('button');
+    const [shot, max, min, close] = row.querySelectorAll('button');
     row.onclick = () => sendControl({ id: w.id, op: 'activate' });
+    shot.onclick = e => { e.stopPropagation(); window.open(snapshotUrl(w.id, 1)); };
     max.onclick = e => { e.stopPropagation(); sendControl({ id: w.id, op: w.maximized ? 'unmaximize' : 'maximize' }); };
     min.onclick = e => { e.stopPropagation(); sendControl({ id: w.id, op: w.minimized ? 'unminimize' : 'minimize' }); };
     close.onclick = e => { e.stopPropagation(); sendControl({ id: w.id, op: 'close' }); };

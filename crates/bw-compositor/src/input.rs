@@ -39,6 +39,7 @@ impl State {
             Command::RequestFullFrame => self.force_full_frame = true,
             Command::ReleasePointerLock => self.release_pointer_lock(),
             Command::Control(msg) => self.control(msg),
+            Command::Snapshot { id, scale, reply } => (reply.0)(self.snapshot(id, scale)),
             Command::Quit => self.running = false,
         }
     }

@@ -41,7 +41,24 @@ pub enum Command {
     ReleasePointerLock,
     /// A window action or spawn from the viewer page or the HTTP API.
     Control(ControlMsg),
+    /// Render one window (or the whole output) to pixels and hand them to `reply`.
+    /// `scale` is relative to the output scale and only applies to windows.
+    Snapshot { id: Option<u64>, scale: f64, reply: SnapshotReply },
     Quit,
+}
+
+/// Straight-alpha RGBA, top row first.
+pub struct Snapshot {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+pub struct SnapshotReply(pub Box<dyn FnOnce(Option<Snapshot>) + Send>);
+impl std::fmt::Debug for SnapshotReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SnapshotReply")
+    }
 }
 
 /// One window as the desktop API reports it.

@@ -10,7 +10,7 @@ use smithay::{
 
 use crate::State;
 
-const CLEAR: [f32; 4] = [0.12, 0.12, 0.14, 1.0];
+pub const CLEAR: [f32; 4] = [0.12, 0.12, 0.14, 1.0];
 
 /// Per-swapchain-slot id so the encoder can cache its import.
 struct SlotId(u32);
