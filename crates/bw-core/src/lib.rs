@@ -4,6 +4,7 @@
 use std::{any::Any, os::fd::OwnedFd, time::Duration};
 
 pub use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OutputGeometry {
@@ -38,7 +39,59 @@ pub enum Command {
     RequestFullFrame,
     /// The browser lost its pointer lock (Escape etc.): release the client's lock and don't re-lock until the next click.
     ReleasePointerLock,
+    /// A window action or spawn from the viewer page or the HTTP API.
+    Control(ControlMsg),
     Quit,
+}
+
+/// One window as the desktop API reports it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct WindowInfo {
+    pub id: u64,
+    pub title: String,
+    /// X11: the WM_CLASS
+    pub app_id: String,
+    pub x11: bool,
+    pub pid: Option<u32>,
+    /// xdg geometry in logical px
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    /// stacking index, 0 = bottom; `None` while minimized
+    pub z: Option<u32>,
+    pub maximized: bool,
+    pub fullscreen: bool,
+    pub minimized: bool,
+    pub focused: bool,
+    /// last commit, ms on the compositor clock
+    pub updated_ms: u64,
+}
+
+/// `{"id":3,"op":"move","x":10,"y":20}`, `{"op":"spawn","cmd":"foot"}`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ControlMsg {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(flatten)]
+    pub op: ControlOp,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+pub enum ControlOp {
+    Activate,
+    Close,
+    Minimize,
+    Unminimize,
+    Maximize,
+    Unmaximize,
+    Fullscreen,
+    Unfullscreen,
+    Move { x: i32, y: i32 },
+    Resize { w: i32, h: i32 },
+    /// `sh -c`, with the same environment as `--exec`
+    Spawn { cmd: String },
 }
 
 /// Compositor -> server.
@@ -48,6 +101,8 @@ pub enum Event {
     Cursor(Option<CursorImage>),
     /// A client locked (or released) the pointer; the browser should mirror it with the Pointer Lock API.
     PointerLock(bool),
+    /// The window list changed (full list, bottom to top, minimized last).
+    Windows(Vec<WindowInfo>),
 }
 
 #[derive(Debug)]

@@ -17,11 +17,12 @@ use anyhow::{Context, Result};
 use axum::{
     Router,
     extract::{Query, State, ws::WebSocketUpgrade},
+    Json,
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
-    routing::get,
+    routing::{get, post},
 };
-use bw_core::{Bytes, Codec, Command, Event, StreamControl, StreamInfo, StreamMsg};
+use bw_core::{Bytes, Codec, Command, ControlMsg, Event, StreamControl, StreamInfo, StreamMsg};
 use tokio::sync::mpsc;
 
 /// `None` = automatic: HEVC, then VP9, then H.264, first one the browser decodes in hardware.
@@ -69,6 +70,8 @@ pub(crate) struct Viewer {
     cursor: Option<Bytes>,
     /// Whether a client currently holds a pointer lock, replayed to a new viewer.
     locked: bool,
+    /// Last WINDOWS message, replayed to a new viewer and served on /api/windows.
+    windows: Option<Bytes>,
 }
 
 pub async fn run(
@@ -95,7 +98,10 @@ pub async fn run(
         .route("/", get(index))
         .route("/app.js", get(|| async { js(include_str!("../../../web/app.js")) }))
         .route("/keycodes.js", get(|| async { js(include_str!("../../../web/keycodes.js")) }))
+        .route("/desktop.js", get(|| async { js(include_str!("../../../web/desktop.js")) }))
         .route("/ws", get(websocket))
+        .route("/api/windows", get(api_windows))
+        .route("/api/control", post(api_control))
         .with_state(app.clone());
 
     let tls_pem = if cfg.tls { Some(load_or_create_cert(&cfg.data_dir)?) } else { None };
@@ -127,7 +133,7 @@ async fn index(Query(q): Query<HashMap<String, String>>, State(app): State<Arc<A
         Some(t) if app.token_ok(t) => {
             let secure = if app.tls { "; Secure" } else { "" };
             (
-                [(header::SET_COOKIE, format!("bw_token={t}; Path=/ws; HttpOnly; SameSite=Strict{secure}"))],
+                [(header::SET_COOKIE, format!("bw_token={t}; Path=/; HttpOnly; SameSite=Strict{secure}"))],
                 Redirect::to("/"),
             )
                 .into_response()
@@ -146,24 +152,54 @@ async fn websocket(
     headers: HeaderMap,
     State(app): State<Arc<App>>,
 ) -> Response {
-    // Same-site cookies still travel cross-origin from another port on this host: require a matching Origin.
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
-    let origin_host = headers.get(header::ORIGIN).and_then(|o| o.to_str().ok()).map(|o| o.trim_start_matches("https://").trim_start_matches("http://"));
-    if origin_host.is_some_and(|o| Some(o) != host) {
+    if !same_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let cookie_token = headers
-        .get(header::COOKIE)
-        .and_then(|c| c.to_str().ok())
-        .and_then(|c| c.split(';').find_map(|kv| kv.trim().strip_prefix("bw_token=")));
-    let ok = q.get("token").map(String::as_str).or(cookie_token).is_some_and(|t| app.token_ok(t));
-    if !ok {
+    if !app.authorized(&headers, &q) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     ws.max_message_size(64 << 10).on_upgrade(move |socket| ws::session(socket, app))
 }
 
+/// Same-site cookies still travel cross-origin from another port on this host: require a matching Origin.
+fn same_origin(headers: &HeaderMap) -> bool {
+    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+    let origin_host = headers.get(header::ORIGIN).and_then(|o| o.to_str().ok()).map(|o| o.trim_start_matches("https://").trim_start_matches("http://"));
+    origin_host.is_none_or(|o| Some(o) == host)
+}
+
+/// The current window list as JSON (what the viewer was last sent).
+async fn api_windows(Query(q): Query<HashMap<String, String>>, headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
+    if !app.authorized(&headers, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let body = app.viewer.lock().unwrap().windows.as_ref().map(|b| b.slice(1..)).unwrap_or_else(|| Bytes::from_static(b"[]"));
+    ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+}
+
+/// Fire-and-forget: the compositor ignores unknown ids and impossible requests.
+async fn api_control(Query(q): Query<HashMap<String, String>>, headers: HeaderMap, State(app): State<Arc<App>>, Json(msg): Json<ControlMsg>) -> Response {
+    if !same_origin(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !app.authorized(&headers, &q) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let _ = app.commands.send(Command::Control(msg));
+    StatusCode::ACCEPTED.into_response()
+}
+
 impl App {
+    /// `?token=`, the `bw_token` cookie, or `Authorization: Bearer` (for curl).
+    fn authorized(&self, headers: &HeaderMap, q: &HashMap<String, String>) -> bool {
+        let cookie = headers
+            .get(header::COOKIE)
+            .and_then(|c| c.to_str().ok())
+            .and_then(|c| c.split(';').find_map(|kv| kv.trim().strip_prefix("bw_token=")));
+        let bearer = headers.get(header::AUTHORIZATION).and_then(|a| a.to_str().ok()).and_then(|a| a.strip_prefix("Bearer "));
+        q.get("token").map(String::as_str).or(cookie).or(bearer).is_some_and(|t| self.token_ok(t))
+    }
+
     fn token_ok(&self, t: &str) -> bool {
         // constant-time compare, no dependency needed
         t.len() == self.token.len()

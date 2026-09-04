@@ -1,6 +1,6 @@
 //! Binary WebSocket messages, little-endian, byte 0 = type. Mirrored in web/app.js.
 
-use bw_core::{Bytes, CursorImage, EncodedFrame, StreamInfo};
+use bw_core::{Bytes, ControlMsg, CursorImage, EncodedFrame, StreamInfo, WindowInfo};
 
 // server -> client
 pub const CONFIG: u8 = 0x01;
@@ -8,6 +8,8 @@ pub const VIDEO: u8 = 0x02;
 pub const CURSOR: u8 = 0x03;
 pub const POINTER_LOCK: u8 = 0x04;
 pub const AUDIO: u8 = 0x05;
+/// `[WINDOWS][JSON array of WindowInfo]`
+pub const WINDOWS: u8 = 0x06;
 // client -> server
 /// `[HELLO][u8 hw][u8 sw]`: codec families the browser decodes (bit0 H.264, bit1 HEVC, bit2 VP9), with/without hardware.
 pub const HELLO: u8 = 0x81;
@@ -20,6 +22,8 @@ pub const KEY: u8 = 0x87;
 pub const REQUEST_KEYFRAME: u8 = 0x88;
 pub const BLUR: u8 = 0x89;
 pub const POINTER_LOCK_LOST: u8 = 0x8A;
+/// `[CONTROL][JSON ControlMsg]`
+pub const CONTROL: u8 = 0x8B;
 
 pub fn config(info: &StreamInfo) -> Bytes {
     let json = format!(
@@ -55,6 +59,12 @@ pub fn cursor(img: Option<&CursorImage>) -> Bytes {
     b.into()
 }
 
+pub fn windows(list: &[WindowInfo]) -> Bytes {
+    let mut b = vec![WINDOWS];
+    serde_json::to_writer(&mut b, list).expect("WindowInfo serializes");
+    b.into()
+}
+
 /// `[AUDIO][0][pts_us: u64][opus packet]`, same header shape as video.
 pub fn audio(pts_us: u64, data: &[u8]) -> Bytes {
     let mut b = Vec::with_capacity(10 + data.len());
@@ -78,6 +88,7 @@ pub enum ClientMsg {
     RequestKeyframe,
     Blur,
     PointerLockLost,
+    Control(ControlMsg),
 }
 
 /// Malformed messages decode to `None` and are ignored.
@@ -96,6 +107,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         REQUEST_KEYFRAME => ClientMsg::RequestKeyframe,
         BLUR => ClientMsg::Blur,
         POINTER_LOCK_LOST => ClientMsg::PointerLockLost,
+        CONTROL => ClientMsg::Control(serde_json::from_slice(&b[1..]).ok()?),
         _ => return None,
     })
 }
@@ -115,6 +127,13 @@ mod tests {
         assert_eq!(decode(&[0x87, 0x1e, 0x00, 0x00]), Some(ClientMsg::Key { evdev: 0x1e, pressed: false }));
         assert_eq!(decode(&[0x86, 0x01, 0, 0, 0, 0, 0, 0, 0x40, 0x40]), Some(ClientMsg::Axis { mode: 1, dx: 0.0, dy: 3.0 }));
         assert_eq!(decode(&[0x89]), Some(ClientMsg::Blur));
+        let control = |json: &str| decode(&[&[CONTROL][..], json.as_bytes()].concat());
+        assert_eq!(
+            control(r#"{"id":3,"op":"move","x":10,"y":-2}"#),
+            Some(ClientMsg::Control(bw_core::ControlMsg { id: 3, op: bw_core::ControlOp::Move { x: 10, y: -2 } }))
+        );
+        assert_eq!(control(r#"{"op":"spawn","cmd":"foot"}"#), Some(ClientMsg::Control(bw_core::ControlMsg { id: 0, op: bw_core::ControlOp::Spawn { cmd: "foot".into() } })));
+        assert_eq!(control(r#"{"op":"dance"}"#), None);
         assert_eq!(decode(&[0x85, 0x10]), None);
         assert_eq!(decode(&[]), None);
     }

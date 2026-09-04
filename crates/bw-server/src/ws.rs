@@ -77,6 +77,11 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                     v.locked = locked;
                     Bytes::from(vec![protocol::POINTER_LOCK, locked as u8])
                 }
+                Event::Windows(list) => {
+                    let msg = protocol::windows(&list);
+                    v.windows = Some(msg.clone());
+                    msg
+                }
             };
             (msg, v.tx.clone())
         };
@@ -91,7 +96,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     let (tx, mut rx) = mpsc::channel::<Bytes>(8);
     let (atx, mut arx) = mpsc::channel::<Bytes>(4);
     // Taking over drops the previous viewer's only sender, which ends its session below.
-    let (my_gen, cursor, locked) = {
+    let (my_gen, cursor, locked, windows) = {
         let mut v = app.viewer.lock().unwrap();
         if v.tx.is_some() {
             let _ = app.commands.send(Command::ReleaseAllInput); // whatever the old viewer still held
@@ -101,10 +106,13 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         v.audio_tx = Some(atx);
         v.announced = None;
         v.need_key = true;
-        (v.generation, v.cursor.clone(), v.locked)
+        (v.generation, v.cursor.clone(), v.locked, v.windows.clone())
     };
     if let Some(c) = cursor {
         let _ = socket.send(Message::Binary(c)).await;
+    }
+    if let Some(w) = windows {
+        let _ = socket.send(Message::Binary(w)).await;
     }
     if locked {
         let _ = socket.send(Message::Binary(Bytes::from(vec![protocol::POINTER_LOCK, 1]))).await;
@@ -224,6 +232,7 @@ impl App {
             ClientMsg::Key { evdev, pressed } => Command::Key { evdev: evdev as u32, pressed },
             ClientMsg::Blur => Command::ReleaseAllInput,
             ClientMsg::PointerLockLost => Command::ReleasePointerLock,
+            ClientMsg::Control(m) => Command::Control(m),
             ClientMsg::RequestKeyframe => {
                 v.need_key = true;
                 return (None, true);

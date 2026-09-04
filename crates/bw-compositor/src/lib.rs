@@ -2,6 +2,7 @@
 //! and takes input as [`Command`]s. Everything runs on one thread with one calloop loop.
 
 mod cursor;
+mod desktop;
 mod foreign_toplevel;
 mod gpu;
 mod grabs;
@@ -18,7 +19,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use bw_core::{Command, Event, FrameSink, OutputGeometry};
+use bw_core::{Command, Event, FrameSink, OutputGeometry, WindowInfo};
 use smithay::{
     backend::renderer::{ImportDma, damage::OutputDamageTracker},
     desktop::{PopupManager, Space, Window, WindowSurface, layer_map_for_output},
@@ -136,6 +137,10 @@ pub struct State {
     /// Minimized windows (unmapped from the space) with where to put them back.
     pub minimized: Vec<(Window, Point<i32, Logical>)>,
     pub foreign: foreign_toplevel::ForeignToplevels,
+    /// The window `focus_window` last activated.
+    pub active: Option<Window>,
+    /// What the viewer was last told (desktop API).
+    pub last_windows: Vec<WindowInfo>,
 
     pub seat_state: SeatState<State>,
     pub seat: Seat<State>,
@@ -257,6 +262,8 @@ impl State {
             popups: PopupManager::default(),
             minimized: Vec::new(),
             foreign: Default::default(),
+            active: None,
+            last_windows: Vec::new(),
             seat_state,
             seat,
             pointer_location: (0.0, 0.0).into(),
@@ -289,11 +296,18 @@ impl State {
 
     /// `--exec` runs once the first viewer has told us its size, so a nested desktop can match it.
     fn spawn_exec_once(&mut self, geo: OutputGeometry) {
-        let Some(cmd) = self.exec.take() else { return };
+        if let Some(cmd) = self.exec.take() {
+            self.spawn_client(&cmd, geo);
+        }
+    }
+
+    /// Run a shell command as a client of this compositor: WAYLAND_DISPLAY, DISPLAY,
+    /// BW_WIDTH/BW_HEIGHT (logical size of `geo`) and the toolkit backends set.
+    pub fn spawn_client(&self, cmd: &str, geo: OutputGeometry) {
         let mut command = std::process::Command::new("sh");
         command
             .arg("-c")
-            .arg(&cmd)
+            .arg(cmd)
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env("BW_WIDTH", ((geo.width_px as f64 / geo.scale).round() as u32).to_string())
             .env("BW_HEIGHT", ((geo.height_px as f64 / geo.scale).round() as u32).to_string())
@@ -312,9 +326,10 @@ impl State {
         };
         match command.spawn() {
             Ok(mut child) => {
-                std::thread::spawn(move || tracing::info!(status = ?child.wait(), "--exec client exited"));
+                let cmd = cmd.to_string();
+                std::thread::spawn(move || tracing::info!(cmd, status = ?child.wait(), "client exited"));
             }
-            Err(e) => tracing::error!("--exec {cmd:?}: {e}"),
+            Err(e) => tracing::error!("spawn {cmd:?}: {e}"),
         }
     }
 
@@ -340,6 +355,7 @@ impl State {
                 state.minimized.retain(|(w, _)| w.alive());
                 state.popups.cleanup();
                 state.refresh_foreign_toplevels();
+                state.refresh_windows();
                 if state.pointer_locked {
                     // constraints can go away without any input (client destroyed it, focus left)
                     let pointer = state.seat.get_pointer().unwrap();

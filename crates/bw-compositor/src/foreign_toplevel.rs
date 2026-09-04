@@ -15,7 +15,6 @@ use smithay::{
         wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource, backend::ClientId},
     },
     utils::SERIAL_COUNTER,
-    wayland::{compositor::with_states, shell::xdg::XdgToplevelSurfaceData},
 };
 
 use crate::State;
@@ -59,41 +58,25 @@ fn new_handle(dh: &DisplayHandle, output: &Output, manager: &ZwlrForeignToplevel
 
 impl State {
     fn toplevel_info(&self, window: &Window) -> Info {
-        let mut states = Vec::new();
-        let mut push = |s: handle::State| states.extend_from_slice(&(s as u32).to_ne_bytes());
-        let (title, app_id) = match window.underlying_surface() {
+        let (maximized, fullscreen, activated) = match window.underlying_surface() {
             WindowSurface::Wayland(t) => {
                 let st = t.current_state().states;
-                if st.contains(XdgState::Maximized) {
-                    push(handle::State::Maximized);
-                }
-                if st.contains(XdgState::Fullscreen) {
-                    push(handle::State::Fullscreen);
-                }
-                if st.contains(XdgState::Activated) {
-                    push(handle::State::Activated);
-                }
-                with_states(t.wl_surface(), |s| {
-                    let d = s.data_map.get::<XdgToplevelSurfaceData>().unwrap().lock().unwrap();
-                    (d.title.clone().unwrap_or_default(), d.app_id.clone().unwrap_or_default())
-                })
+                (st.contains(XdgState::Maximized), st.contains(XdgState::Fullscreen), st.contains(XdgState::Activated))
             }
-            WindowSurface::X11(x) => {
-                if x.is_maximized() {
-                    push(handle::State::Maximized);
-                }
-                if x.is_fullscreen() {
-                    push(handle::State::Fullscreen);
-                }
-                if x.is_activated() {
-                    push(handle::State::Activated);
-                }
-                (x.title(), x.class())
-            }
+            WindowSurface::X11(x) => (x.is_maximized(), x.is_fullscreen(), x.is_activated()),
         };
-        if self.minimized.iter().any(|(w, _)| w == window) {
-            push(handle::State::Minimized);
-        }
+        let minimized = self.minimized.iter().any(|(w, _)| w == window);
+        let states = [
+            (maximized, handle::State::Maximized),
+            (fullscreen, handle::State::Fullscreen),
+            (activated, handle::State::Activated),
+            (minimized, handle::State::Minimized),
+        ]
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .flat_map(|(_, s)| (s as u32).to_ne_bytes())
+        .collect();
+        let (title, app_id) = State::title_app_id(window);
         Info { title, app_id, states }
     }
 
@@ -142,7 +125,7 @@ impl State {
     }
 
     /// Maximize/fullscreen (or undo it) from a taskbar, through the same paths the clients' own requests take.
-    fn fill(&mut self, window: &Window, what: XdgState, set: bool) {
+    pub(crate) fn fill(&mut self, window: &Window, what: XdgState, set: bool) {
         let fullscreen = what == XdgState::Fullscreen;
         self.unminimize(window); // the fill paths only know mapped windows; a taskbar (un)maximizing one shows it anyway
         match window.underlying_surface() {

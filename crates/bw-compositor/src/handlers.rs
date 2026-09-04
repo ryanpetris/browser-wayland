@@ -161,6 +161,7 @@ impl CompositorHandler for State {
             }
             if let Some(window) = self.window_for(&root) {
                 window.on_commit();
+                self.touch_window(&window);
                 // wl_surface.offset: the client moved its buffer origin, so move the window with it.
                 // map_element always puts the window on top, so only do it for a real move: some
                 // clients attach with a zero offset on every frame.
@@ -239,11 +240,15 @@ impl XdgShellHandler for State {
                 s.states.set(xdg_toplevel::State::Fullscreen);
                 s.size = Some(size);
             });
-            self.space.map_element(Window::new_wayland_window(surface), (0, 0), true);
+            let window = Window::new_wayland_window(surface);
+            self.space.map_element(window.clone(), (0, 0), true);
+            self.active = Some(window);
             return;
         }
         let n = self.space.elements().count() as i32 % 10;
-        self.space.map_element(Window::new_wayland_window(surface), work.loc + Point::from((40 + 30 * n, 40 + 30 * n)), true);
+        let window = Window::new_wayland_window(surface);
+        self.space.map_element(window.clone(), work.loc + Point::from((40 + 30 * n, 40 + 30 * n)), true);
+        self.active = Some(window); // mapped activated: that is what the desktop API reports as focused
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {

@@ -1,9 +1,10 @@
 // Viewer: decodes the H.264 stream with WebCodecs and forwards input.
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
+import { initDesktop, onWindows, control, getWindows } from './desktop.js';
 
-const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05;
-const HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A;
+const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05, WINDOWS = 0x06;
+const HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87, REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A, CONTROL = 0x8B;
 const BTN = [0x110, 0x112, 0x111, 0x113, 0x114]; // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA
 
 const canvas = document.getElementById('c');
@@ -113,6 +114,12 @@ function send(type, size, fill) {
   ws.send(buf);
 }
 
+// A window action or spawn for the compositor, as JSON.
+function sendControl(obj) {
+  const body = new TextEncoder().encode(JSON.stringify(obj));
+  send(CONTROL, body.length, dv => new Uint8Array(dv.buffer, 1).set(body));
+}
+
 // Which codec families this browser decodes, in hardware and at all (bit0 H.264, bit1 HEVC, bit2 VP9).
 async function sendHello() {
   const probes = ['avc1.640028', 'hev1.1.6.L120.90', 'vp09.00.40.08'];
@@ -180,6 +187,9 @@ function onMessage(buf) {
       break;
     case AUDIO:
       onAudio(buf);
+      break;
+    case WINDOWS:
+      onWindows(JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1))));
       break;
     case VIDEO: {
       received++;
@@ -298,6 +308,7 @@ canvas.addEventListener('wheel', e => {
 }, { passive: false });
 
 const onKey = e => {
+  if (e.target instanceof HTMLInputElement) return; // typing in the page's own inputs
   const code = KEYCODES[e.code];
   if (!code || e.repeat) return; // clients repeat keys themselves (wl_keyboard.repeat_info)
   e.preventDefault();
@@ -328,4 +339,6 @@ function audioStats() {
   return { packets: audioPackets, decoded: audioDecoded, state: audioCtx.state, peakHz: Math.round(peak * audioCtx.sampleRate / 2 / bins.length), level: bins[peak] };
 }
 window.bw = () => ({ frames, received, fps, mbps, audio: audioStats(), keyframes, decodeErrors, dropped, connects, closes, latencyMs, renderer, stream, awaitingKey, lockRequests, lockError, locked: !!document.pointerLockElement, decoder: decoder?.state, queue: decoder?.decodeQueueSize });
+Object.assign(window.bw, { windows: getWindows, control, activate: id => control({ id, op: 'activate' }), spawn: cmd => control({ op: 'spawn', cmd }) });
+initDesktop(sendControl);
 initRenderer().then(connect);

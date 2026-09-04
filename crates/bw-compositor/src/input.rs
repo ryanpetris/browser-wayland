@@ -38,6 +38,7 @@ impl State {
             Command::ViewerDisconnected => self.viewer_connected = false,
             Command::RequestFullFrame => self.force_full_frame = true,
             Command::ReleasePointerLock => self.release_pointer_lock(),
+            Command::Control(msg) => self.control(msg),
             Command::Quit => self.running = false,
         }
     }
@@ -201,6 +202,7 @@ impl State {
 
     /// Raise and activate `window` (none: just deactivate everything) and give it the keyboard.
     pub fn focus_window(&mut self, window: Option<&Window>, serial: Serial) {
+        self.active = window.cloned();
         let keyboard = self.seat.get_keyboard().unwrap();
         for w in self.space.elements() {
             w.set_activated(false);

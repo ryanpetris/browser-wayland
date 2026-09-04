@@ -76,6 +76,7 @@ impl State {
     /// Move/resize an X11 window and tell X about it (so its own coordinates stay right).
     fn place_x11(&mut self, window: &Window, surface: &X11Surface, rect: Rectangle<i32, Logical>) {
         self.space.map_element(window.clone(), rect.loc, true);
+        self.active = Some(window.clone());
         let _ = surface.configure(rect);
         self.dirty = true;
     }
