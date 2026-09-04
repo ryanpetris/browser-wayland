@@ -12,7 +12,7 @@ use smithay::{
     backend::renderer::{Bind, utils::with_renderer_surface_state, element::{AsRenderElements, Id, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
     desktop::{
         WindowSurface, layer_map_for_output,
-        utils::{OutputPresentationFeedback, send_frames_surface_tree, surface_presentation_feedback_flags_from_states},
+        utils::{OutputPresentationFeedback, send_frames_surface_tree},
     },
     reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback,
     wayland::presentation::Refresh,
@@ -112,7 +112,8 @@ impl State {
         // surfaces that were actually drawn (not occluded, not a panel hidden under a fullscreen window).
         let mut feedback = OutputPresentationFeedback::new(&self.output);
         let drawn = |s: &WlSurface, _: &SurfaceData| states.element_was_presented(Id::from_wayland_resource(s)).then(|| self.output.clone());
-        let flags = |s: &WlSurface, _: &SurfaceData| surface_presentation_feedback_flags_from_states(s, &states);
+        // everything is composited into the swapchain: never zero-copy, no vsync, no hardware clock
+        let flags = |_: &WlSurface, _: &SurfaceData| wp_presentation_feedback::Kind::empty();
         for window in self.space.elements() {
             window.take_presentation_feedback(&mut feedback, drawn, flags);
         }
