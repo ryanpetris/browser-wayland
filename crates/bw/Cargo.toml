@@ -1,8 +1,28 @@
 [package]
 name = "browser-wayland"
-version = "0.1.0"
+version = "0.0.0" # releases are versioned by their git tag (see build.rs and .github/workflows/build.yml)
+description = "Headless Wayland compositor whose screen is a browser tab"
+authors = ["Ryan Petris <ryan@petris.net>"]
+repository = "https://github.com/ryanpetris/browser-wayland"
 edition.workspace = true
 license.workspace = true
+
+# `cargo deb -p browser-wayland --deb-version <tag>-1` (see .github/workflows/build.yml). $auto = library
+# dependencies from dpkg-shlibdeps; the GStreamer plugin packages are loaded at runtime, so they are listed by hand.
+[package.metadata.deb]
+section = "graphics"
+priority = "optional"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+A headless Wayland compositor whose output is hardware-encoded (VA-API) and shown in a browser tab \
+over a WebSocket with WebCodecs; mouse, keyboard and audio travel the same way. Runs Wayland and \
+X11 clients, layer-shell panels and taskbars, and exposes a window-management HTTP API."""
+depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad"
+recommends = "xwayland, pulseaudio-utils | pipewire-pulse, va-driver-all"
+assets = [
+    ["target/release/browser-wayland", "usr/bin/", "755"],
+    ["../../README.md", "usr/share/doc/browser-wayland/", "644"],
+]
 
 [[bin]]
 name = "browser-wayland"

@@ -1,0 +1,121 @@
+# Release builds, made only from a vX.Y.Z tag pushed by hand; the tag is the version everywhere.
+# Produces a Debian package (built on Debian stable, verified to install on Debian and Ubuntu), a
+# generic tarball from the same binary, and an Arch package, and attaches them to a GitHub release.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "tag $GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
+          test "$(git describe --tags --exact-match)" = "$GITHUB_REF_NAME" || { echo "HEAD is not at the tag"; exit 1; }
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "a release for $GITHUB_REF_NAME already exists; delete it first if this is intentional"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  debian:
+    needs: version
+    runs-on: ubuntu-latest
+    container: rust:1-trixie
+    env:
+      BW_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends pkg-config cmake libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev libgbm-dev libegl-dev libxkbcommon-dev
+      - uses: Swatinem/rust-cache@v2
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall -y cargo-deb
+      - name: Debian package
+        run: cargo deb -p browser-wayland --locked --deb-version "$BW_VERSION-1"
+      - name: Tarball
+        run: |
+          d=browser-wayland-$BW_VERSION-linux-x86_64
+          mkdir -p dist/$d
+          cp target/release/browser-wayland README.md LICENSE dist/$d/
+          strip dist/$d/browser-wayland
+          tar -C dist -czf dist/$d.tar.gz $d
+          cp target/debian/*.deb dist/
+          dist/$d/browser-wayland --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian
+          path: |
+            dist/*.deb
+            dist/*.tar.gz
+
+  # The .deb built on Debian stable must install and start on Debian and on the Ubuntu releases we
+  # care about (glibc and GStreamer versions differ).
+  install-test:
+    needs: debian
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:trixie', 'ubuntu:24.04', 'ubuntu:latest']
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: debian
+      - run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ./browser-wayland_*.deb
+          browser-wayland --version
+
+  arch:
+    needs: version
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Dependencies
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm --needed cargo gstreamer gst-plugins-base gst-plugins-good \
+            gst-plugins-bad gst-plugin-va mesa libxkbcommon git
+          useradd -m builder
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: makepkg
+        env:
+          BW_VERSION: ${{ needs.version.outputs.version }}
+          PACKAGER: Ryan Petris <ryan@petris.net>
+        run: |
+          sed -i "s/^pkgver=.*/pkgver=$BW_VERSION/" packaging/arch/PKGBUILD
+          chown -R builder .
+          su builder -c 'cd packaging/arch && PACKAGER="$PACKAGER" makepkg -f --noconfirm'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: packaging/arch/*.pkg.tar.zst
+
+  release:
+    needs: [debian, install-test, arch]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

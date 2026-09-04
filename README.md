@@ -7,6 +7,14 @@ browser decodes it with WebCodecs. Mouse and keyboard input flow back the same w
 Design notes: [docs/architecture.md](docs/architecture.md), [docs/protocol.md](docs/protocol.md),
 [docs/panels.md](docs/panels.md), [docs/desktop-api.md](docs/desktop-api.md).
 
+## Install
+
+Releases (made from `vX.Y.Z` tags; the tag is the version) carry a Debian package built on Debian
+stable that also installs on Ubuntu 24.04 and later, an Arch package, and a tarball with the binary.
+Building from source needs Rust stable and the development packages for GStreamer (core and base),
+libgbm, libEGL and libxkbcommon; `cargo build --release` produces `target/release/browser-wayland`,
+which reports `0.0.0-dev` unless `BW_VERSION` is set. The Arch `PKGBUILD` is in `packaging/arch`.
+
 ## Requirements
 
 - Linux with a GPU render node (`/dev/dri/renderD128`) and Mesa.

@@ -6,7 +6,7 @@ use clap::Parser;
 use tokio::sync::mpsc;
 
 #[derive(Parser)]
-#[command(about = "A Wayland compositor whose screen is a browser tab")]
+#[command(about = "A Wayland compositor whose screen is a browser tab", version = env!("BW_VERSION"))]
 struct Cli {
     /// Address to serve the viewer on.
     #[arg(long, default_value = "0.0.0.0:8443")]

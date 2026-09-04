@@ -1,0 +1,29 @@
+# Maintainer: Ryan Petris
+# Builds the checkout this file lives in (no source download): `cd packaging/arch && makepkg -f`.
+# The release workflow sets pkgver from the git tag; a local build stays at 0.0.0.
+pkgname=browser-wayland
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="Headless Wayland compositor whose screen is a browser tab"
+arch=('x86_64')
+url="https://github.com/ryanpetris/browser-wayland"
+license=('MIT')
+depends=('gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-plugin-va' 'mesa' 'libxkbcommon')
+makedepends=('cargo')
+optdepends=('xorg-xwayland: X11 clients'
+            'libpulse: audio to the browser (pactl)'
+            'intel-media-driver: VA-API on Intel GPUs'
+            'libva-mesa-driver: VA-API on AMD GPUs')
+options=('!lto')
+
+build() {
+    cd "$startdir/../.."
+    BW_VERSION="$pkgver" cargo build --release --locked
+}
+
+package() {
+    cd "$startdir/../.."
+    install -Dm755 target/release/browser-wayland "$pkgdir/usr/bin/browser-wayland"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
