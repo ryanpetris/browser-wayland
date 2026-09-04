@@ -44,8 +44,8 @@ use smithay::{
         drm_syncobj::{DrmSyncobjState, supports_syncobj_eventfd},
         fractional_scale::FractionalScaleManagerState,
         output::OutputManagerState,
-        pointer_constraints::PointerConstraintsState,
         idle_inhibit::IdleInhibitManagerState,
+        pointer_constraints::PointerConstraintsState,
         relative_pointer::RelativePointerManagerState,
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
         shell::{
@@ -419,6 +419,7 @@ impl State {
         self.output.change_current_state(Some(mode), None, Some(Scale::Fractional(geo.scale)), None);
         self.output.set_preferred(mode);
         self.gpu.swapchain.resize(geo.width_px, geo.height_px);
+        self.gpu.modifier_verified = false; // new buffers
         self.geometry = geo;
         layer_map_for_output(&self.output).arrange();
         self.relayout();

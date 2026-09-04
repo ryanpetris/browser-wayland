@@ -24,6 +24,8 @@ pub struct Gpu {
     pub swapchain: DmabufSwapchain,
     pub fourcc: Fourcc,
     pub modifier: Modifier,
+    /// The first buffer of each swapchain is checked against `modifier` (see `render_frame`).
+    pub modifier_verified: bool,
 }
 
 impl Gpu {
@@ -51,6 +53,6 @@ impl Gpu {
 
         let allocator = DmabufAllocator(GbmAllocator::new(gbm, GbmBufferFlags::RENDERING));
         let swapchain = Swapchain::new(allocator, geo.width_px, geo.height_px, fourcc, vec![modifier]);
-        Ok(Gpu { node, drm: fd, renderer, swapchain, fourcc, modifier })
+        Ok(Gpu { node, drm: fd, renderer, swapchain, fourcc, modifier, modifier_verified: false })
     }
 }

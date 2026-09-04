@@ -3,6 +3,7 @@ use std::{os::fd::AsFd, time::{Duration, Instant}};
 use anyhow::{Context, Result};
 use bw_core::DmabufFrame;
 use smithay::{
+    backend::allocator::Buffer as _,
     backend::renderer::{Bind, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer},
     desktop::{layer_map_for_output, space::render_output, utils::send_frames_surface_tree},
     input::pointer::CursorImageStatus,
@@ -31,6 +32,17 @@ impl State {
         let age = if self.force_full_frame { 0 } else { slot.age() as usize };
 
         let mut dmabuf = (*slot).clone();
+        if !self.gpu.modifier_verified {
+            // The allocator was asked for exactly the negotiated modifier, but GBM can fall back to another
+            // (or an implicit one); the encoder would then copy every frame through system memory, silently.
+            self.gpu.modifier_verified = true;
+            let got = dmabuf.format().modifier;
+            if got == self.gpu.modifier {
+                tracing::info!(modifier = ?got, "swapchain buffer modifier matches the encoder's");
+            } else {
+                tracing::warn!(?got, negotiated = ?self.gpu.modifier, "swapchain buffer modifier is not the negotiated one: the encoder will copy every frame");
+            }
+        }
         let (sync, damaged) = {
             let mut fb = self.gpu.renderer.bind(&mut dmabuf)?;
             // The pointer is drawn by the browser, so there are no custom elements.
