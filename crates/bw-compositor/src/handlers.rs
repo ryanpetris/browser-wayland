@@ -447,6 +447,11 @@ impl WlrLayerShellHandler for State {
         }
         drop(layers);
         self.relayout();
+        // a launcher that held the keyboard is gone: the active window gets it back
+        if self.seat.get_keyboard().and_then(|k| k.current_focus()).is_some_and(|f| f == *surface.wl_surface()) {
+            let active = self.active.clone();
+            self.focus_window(active.as_ref(), SERIAL_COUNTER.next_serial());
+        }
     }
 }
 delegate_layer_shell!(State);
