@@ -58,7 +58,8 @@ Audio from clients goes to the browser instead of the host speakers: the server 
 `--exec` get `PULSE_SINK` set; for others use `PULSE_SINK=<that name> some-app`. `--no-audio` turns this off.
 
 `--exec` runs at startup with `BW_WIDTH`/`BW_HEIGHT` set to the output size (1920×1080 until a viewer
-connects and resizes it), and `--kiosk` fullscreens every window. Together they run a whole nested desktop; with the
+connects and resizes it) and the environment of a Wayland session (`XDG_SESSION_TYPE`, the toolkits'
+backend switches, `DISPLAY` for X11 programs), and `--kiosk` fullscreens every window. Together they run a whole nested desktop; with the
 `mutter-devkit` package installed, GNOME:
 
 ```sh

@@ -340,13 +340,18 @@ impl State {
             .env("BW_WIDTH", ((geo.width_px as f64 / geo.scale).round() as u32).to_string())
             .env("BW_HEIGHT", ((geo.height_px as f64 / geo.scale).round() as u32).to_string())
             .env_remove("WAYLAND_SOCKET")
+            // the environment a Wayland session gives its programs: each toolkit's own switch, and the
+            // session type, which Chromium's and Electron's `auto` platform hints go by
+            .env("XDG_SESSION_TYPE", "wayland")
             .env("GDK_BACKEND", "wayland")
             // GTK 4.22's default Vulkan renderer intermittently draws hairline slivers from the window corner
             // (seen with gnome-text-editor and mutter-devkit, never with its GL renderer). Drop when GTK fixes it.
             .env("GSK_RENDERER", "ngl")
-            .env("QT_QPA_PLATFORM", "wayland")
+            .env("QT_QPA_PLATFORM", "wayland;xcb") // Xwayland when a Qt build has no wayland plugin
             .env("SDL_VIDEODRIVER", "wayland")
+            .env("SDL_VIDEO_DRIVER", "wayland") // SDL 3's name for it
             .env("MOZ_ENABLE_WAYLAND", "1")
+            .env("ELECTRON_OZONE_PLATFORM_HINT", "auto")
             .envs(self.exec_env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         match self.x11_display {
             Some(d) => command.env("DISPLAY", format!(":{d}")),
