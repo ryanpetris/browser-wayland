@@ -8,7 +8,8 @@
 # The desktop starts empty: the viewer's own menu lists the installed applications and launches them,
 # and its power menu shuts browser-wayland down. To have the Xfce panel as well, add
 # `--exec xfce4-panel` after the image name. Without a usable GPU encoder, add `--software-encoding`
-# (rendering still uses the GPU); without any GPU, drop `--device /dev/dri`: llvmpipe renders and the CPU encodes. For the browser's webcam, load v4l2loopback on the host
+# (rendering still uses the GPU); without any GPU, drop `--device /dev/dri`: llvmpipe renders and the CPU
+# encodes. For the browser's webcam, load v4l2loopback on the host
 # and add `--device /dev/videoN --group-add $(stat -c %g /dev/videoN)` to docker run and `--webcam /dev/videoN`
 # after the image name.
 # Open the https://<host>:8443/#token=... URL that `docker logs` prints, with <host> being the Docker

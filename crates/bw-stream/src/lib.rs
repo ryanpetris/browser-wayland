@@ -648,7 +648,7 @@ impl Inner {
             }
             // read back by a software renderer: the pixels themselves, for the (software) pipeline's plain raw caps
             FrameBuffer::Memory { data, stride } => {
-                let mut buffer = gst::Buffer::from_mut_slice(data);
+                let mut buffer = gst::Buffer::from_slice(data);
                 gst_video::VideoMeta::add_full(buffer.get_mut().unwrap(), gst_video::VideoFrameFlags::empty(), format, frame.width, frame.height, &[0], &[stride as i32])?;
                 buffer
             }

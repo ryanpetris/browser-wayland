@@ -321,8 +321,9 @@ pub enum FrameBuffer {
         /// Whatever keeps the buffer alive; dropping it frees the slot.
         lease: Box<dyn Any + Send + Sync>,
     },
-    /// Pixels read back from a software renderer: linear, rows of `stride` bytes, the top row first.
-    Memory { data: Vec<u8>, stride: u32 },
+    /// Pixels read back from a software renderer: linear, rows of `stride` bytes, the top row first;
+    /// shared between the viewers' sinks, copied by none.
+    Memory { data: Bytes, stride: u32 },
 }
 
 /// What one viewer's encoder aims for.

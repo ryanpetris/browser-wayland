@@ -33,9 +33,9 @@ struct Cli {
     /// `--exec 'dbus-run-session -- gnome-shell --devkit'`.
     #[arg(long)]
     kiosk: bool,
-    /// The GPU's render node. `none`, or a node that isn't there, renders with Mesa's llvmpipe (no GPU at
-    /// all: a VPS, a container without devices) and encodes in software.
-    #[arg(long, default_value = "/dev/dri/renderD128")]
+    /// The GPU's render node. `none`, or the default node not being there, renders with Mesa's llvmpipe
+    /// (no GPU at all: a VPS, a container without devices) and encodes in software.
+    #[arg(long, default_value = DEFAULT_RENDER_NODE)]
     render_node: PathBuf,
     #[arg(long, default_value = "wayland-browser")]
     socket_name: String,
@@ -55,6 +55,8 @@ struct Cli {
     #[arg(long)]
     files_dir: Option<PathBuf>,
 }
+
+const DEFAULT_RENDER_NODE: &str = "/dev/dri/renderD128";
 
 /// A private PulseAudio/PipeWire sink for this instance's clients; its monitor is what we stream.
 /// Per process, so two instances never hear each other; unloaded on drop.
@@ -136,7 +138,13 @@ fn main() -> Result<()> {
         "vp8" => Some(Codec::Vp8),
         _ => None,
     };
-    let render_node = (cli.render_node.as_os_str() != "none" && cli.render_node.exists()).then(|| cli.render_node.clone());
+    // a node given by hand must be there; only the default one may be missing (a machine without a GPU)
+    let render_node = match cli.render_node.as_os_str().to_str() {
+        Some("none") => None,
+        _ if cli.render_node.exists() => Some(cli.render_node.clone()),
+        Some(DEFAULT_RENDER_NODE) => None,
+        _ => anyhow::bail!("render node {} isn't there (--render-node none renders without a GPU)", cli.render_node.display()),
+    };
     if render_node.is_none() {
         tracing::info!("no GPU ({}): rendering in software, encoding in software", cli.render_node.display());
     }

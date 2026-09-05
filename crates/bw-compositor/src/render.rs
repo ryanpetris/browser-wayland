@@ -98,6 +98,7 @@ impl State {
         let force = self.force_full_frame; // render_frame clears it
         if let Err(e) = self.render_frame(refine) {
             tracing::warn!("render failed: {e:#}");
+            self.force_full_frame = true; // the damage tracker advanced: the retry draws everything
         }
         self.render_window_streams(force && !refine); // a refine is the desktop's; the windows didn't change
     }
@@ -197,7 +198,7 @@ impl State {
                 })
             }
             Target::Texture => {
-                let (data, stride) = (pixels.unwrap_or_default(), self.geometry.width_px * 4);
+                let (data, stride) = (bw_core::Bytes::from(pixels.unwrap()), self.geometry.width_px * 4); // read back above: damaged, with sinks
                 Box::new(move || Ok(FrameBuffer::Memory { data: data.clone(), stride }))
             }
         };

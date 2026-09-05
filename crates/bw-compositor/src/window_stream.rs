@@ -144,7 +144,7 @@ impl State {
                 let fd = dmabuf.handles().next().context("dmabuf has no plane")?.as_fd().try_clone_to_owned().context("dup dmabuf fd")?;
                 FrameBuffer::Dmabuf { fd, modifier: s.modifier, stride: dmabuf.strides().next().unwrap(), offset: dmabuf.offsets().next().unwrap(), slot_id, lease: Box::new(slot) }
             }
-            Target::Texture => FrameBuffer::Memory { data: pixels.unwrap_or_default(), stride: size.w as u32 * 4 },
+            Target::Texture => FrameBuffer::Memory { data: bw_core::Bytes::from(pixels.unwrap()), stride: size.w as u32 * 4 }, // read back above: damaged
         };
         let submitted = s.sink.submit(Frame { width: size.w as u32, height: size.h as u32, fourcc, pts: now.into(), seq: s.seq, refine: false, buffer });
         s.pending = !matches!(submitted, Ok(bw_core::Submit::Encoded)); // the tracker advanced: a retry redraws everything

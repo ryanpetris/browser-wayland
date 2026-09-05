@@ -19,7 +19,8 @@ GStreamer (core and base), libgbm, libEGL and libxkbcommon; `make` builds the vi
 
 ## Requirements
 
-- Linux with a GPU render node (`/dev/dri/renderD128`) and Mesa.
+- Linux, with a GPU render node (`/dev/dri/renderD128`) and Mesa for hardware rendering and encoding, or
+  none at all (Mesa's llvmpipe renders and the CPU encodes; see below).
 - GStreamer 1.24+ with the VA plugin: `gst-plugin-va` on Arch (`vapostproc`, `vah264enc`), for
   hardware encoding; or `--software-encoding` with the vpx (good), x264 (ugly), x265 or svtav1 (bad)
   plugins, which encodes on the CPU (the desktop then runs at 30 Hz) for machines without a usable GPU encoder.

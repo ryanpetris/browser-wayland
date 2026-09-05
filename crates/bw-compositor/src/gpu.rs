@@ -59,11 +59,11 @@ impl Gpu {
     pub fn new(render_node: Option<&Path>, geo: &OutputGeometry, accepted: &[(u32, u64)]) -> Result<Gpu> {
         let Some(render_node) = render_node else {
             // Safety: the display is only used from this thread and outlives the renderer through the context.
-            let egl = unsafe { EGLDisplay::new(EGLSurfacelessDisplay)? };
-            let renderer = unsafe { GlesRenderer::new(EGLContext::new(&egl)?)? };
+            let renderer = unsafe { EGLDisplay::new(EGLSurfacelessDisplay).and_then(|egl| EGLContext::new(&egl)).map_err(anyhow::Error::from).and_then(|ctx| Ok(GlesRenderer::new(ctx)?)) }
+                .context("Mesa's surfaceless EGL platform (no render node; LIBGL_ALWAYS_SOFTWARE=1 forces llvmpipe)")?;
             tracing::info!("no GPU: rendering with Mesa's surfaceless platform, frames read back into memory");
             let targets = Targets::Texture { texture: None, size: (geo.width_px as i32, geo.height_px as i32).into() };
-            return Ok(Gpu { device: None, renderer, targets, fourcc: Fourcc::Xrgb8888, modifier: Modifier::Linear, modifier_verified: true });
+            return Ok(Gpu { device: None, renderer, targets, fourcc: Fourcc::Xrgb8888, modifier: Modifier::Linear, modifier_verified: false });
         };
         let node = DrmNode::from_path(render_node)?;
         let file = OpenOptions::new().read(true).write(true).open(render_node)?;

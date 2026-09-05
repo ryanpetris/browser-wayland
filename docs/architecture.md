@@ -29,7 +29,7 @@ One process, three thread domains joined by channels:
 ```
  Wayland clients ──► $WAYLAND_DISPLAY socket           Xwayland (rootless; we are its window manager)
                               │
-  ┌───────────────────────────▼──────────────────┐  DmabufFrame (dmabuf + lease)  ┌──────────────────────────┐
+  ┌───────────────────────────▼──────────────────┐  Frame (dmabuf + lease, or pixels)  ┌─────────────────────┐
   │ compositor thread (calloop, Smithay)         │ ────────────────────────────► │ GStreamer, one pipeline   │
   │  wl_compositor · shm · linux-dmabuf · xdg     │      (every viewer's)          │ per viewer and window:    │
   │  layer-shell · foreign-toplevel · seat · ...  │ ◄── last lease dropped ⇒ free ─│  appsrc → vapostproc      │
@@ -64,11 +64,11 @@ small shared-types crate. That boundary keeps encoders and transports pluggable 
 
 | Crate | Role |
 |---|---|
-| `bw-core` | Plain types shared by everything: `Command` (server → compositor), `Event` (compositor → server), `DmabufFrame`, `FrameSink`, `StreamMsg`, `WindowInfo`, `ControlMsg`, `InputMsg`, `Snapshot`, the decoration layout. Serde and JSON schemas on the API types. |
-| `bw-compositor` | Smithay. `lib.rs` (state, loop, output, resize, spawn), `handlers.rs` (protocol delegates), `input.rs` (browser and API input → seat, focus, decorations), `render.rs` (frame), `gpu.rs` (render node, GBM, EGL, swapchains), `grabs.rs` (move/resize), `decor.rs` (title bars), `xwayland.rs`, `foreign_toplevel.rs`, `workspace.rs`, `desktop.rs` (window list, control, snapshots), `window_stream.rs`, `clipboard.rs`, `cursor.rs`. |
-| `bw-stream` | GStreamer. `GstSink: FrameSink` (dmabuf import, pipeline build/rebuild, keyframes, codec and size switch), `lease.rs` (a custom `GstMeta` whose `free` drops the swapchain lease), the Opus audio source. |
+| `bw-core` | Plain types shared by everything: `Command` (server → compositor), `Event` (compositor → server), `Frame`/`FrameBuffer`, `FrameSink`, `StreamMsg`, `WindowInfo`, `ControlMsg`, `InputMsg`, `Snapshot`, the decoration layout. Serde and JSON schemas on the API types. |
+| `bw-compositor` | Smithay. `lib.rs` (state, loop, output, resize, spawn), `handlers.rs` (protocol delegates), `input.rs` (browser and API input → seat, focus, decorations), `render.rs` (frame), `gpu.rs` (render node, GBM, EGL and dmabuf swapchains, or the surfaceless platform and a texture read back), `grabs.rs` (move/resize), `decor.rs` (title bars), `xwayland.rs`, `foreign_toplevel.rs`, `workspace.rs`, `desktop.rs` (window list, control, snapshots), `window_stream.rs`, `clipboard.rs`, `cursor.rs`. |
+| `bw-stream` | GStreamer. `GstSink: FrameSink` (dmabuf import or memory frames, pipeline build/rebuild, keyframes, codec and size switch), `lease.rs` (a custom `GstMeta` whose `free` drops the swapchain lease), the Opus audio source, the microphone and webcam sinks. |
 | `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`; its build script insists on a web build first), `/ws` (viewer sessions, roles) and `/ws/window/{id}` sessions, `/api` (`api.rs` holds the operations, `elements.rs` the accessibility walk), `/mcp` (`mcp.rs`), audio and event broadcast. |
-| `bw` | The `browser-wayland` binary: clap CLI, thread spawning, channel wiring, the audio null sink. |
+| `bw` | The `browser-wayland` binary: clap CLI, thread spawning, channel wiring, the audio devices, the render node or its absence. |
 
 `web/` is the viewer: React 19 and Tailwind CSS 4, built by Vite into `web/dist` by `make web` (the
 `Makefile` runs it before cargo; the Dockerfile and the release workflow do the same; `web/dist` is
@@ -92,7 +92,7 @@ damage tracker reports no damage, or no viewer is connected, nothing is encoded;
 goes to every viewer's encoder, each holding a share of the slot's lease (carried by copies that still
 hold the dmabuf, not by the converted frames the VPP or the CPU make of it, which the encoders keep). After rendering the
 GPU is waited on (`SyncPoint::wait`) before any early return, because the next commit releases client
-buffers. The rendered slot leaves as a `DmabufFrame` whose lease (the `Slot`) is attached to the
+buffers. The rendered slot leaves as a `Frame` whose lease (the `Slot`) is attached to the
 `gst::Buffer` as a custom meta; the slot is free again when GStreamer drops the buffer.
 
 **Client buffer safety.** A pre-commit hook blocks the commit until the client's GPU work is done:
