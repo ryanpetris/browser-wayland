@@ -68,7 +68,22 @@ fn encode_tail(codec: Codec, bitrate_kbps: u32) -> String {
              ! video/x-h265,stream-format=byte-stream,alignment=au"
         ),
         Codec::Vp9 => format!("vavp9enc {common} ! vp9parse ! video/x-vp9"),
+        // low-overhead OBUs, one temporal unit per buffer: what WebCodecs takes; the encoder puts a
+        // sequence header in every keyframe's unit
+        Codec::Av1 => format!("vaav1enc {common} ! av1parse ! video/x-av1,stream-format=obu-stream,alignment=tu"),
     }
+}
+
+/// The codecs the GPU encodes: those whose VA element the driver registered.
+pub fn hardware_codecs() -> Vec<Codec> {
+    if gst::init().is_err() {
+        return vec![];
+    }
+    [(Codec::H264, "vah264enc"), (Codec::Hevc, "vah265enc"), (Codec::Vp9, "vavp9enc"), (Codec::Av1, "vaav1enc")]
+        .into_iter()
+        .filter(|(_, e)| gst::ElementFactory::find(e).is_some())
+        .map(|(c, _)| c)
+        .collect()
 }
 
 static STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -104,6 +119,7 @@ fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<St
                             Codec::H264 => "avc1.640028",
                             Codec::Hevc => "hev1.1.6.L120.90",
                             Codec::Vp9 => "vp09.00.41.08",
+                            Codec::Av1 => "av01.0.09M.08",
                         }
                         .into()
                     });
@@ -175,6 +191,11 @@ fn codec_string(codec: Codec, au: &[u8], width: u32, height: u32) -> Option<Stri
             // profile 0, 8-bit; the level only has to be high enough for the picture size
             let level = if width * height <= 1920 * 1080 { "41" } else if width * height <= 4096 * 2176 { "51" } else { "61" };
             Some(format!("vp09.00.{level}.08"))
+        }
+        Codec::Av1 => {
+            // main profile, 8-bit, main tier; the level (4.1, 5.1, 6.1 at 60 fps) only has to cover the picture size
+            let level = if width * height <= 2048 * 1088 { "09" } else if width * height <= 4096 * 2176 { "13" } else { "17" };
+            Some(format!("av01.0.{level}M.08"))
         }
     }
 }

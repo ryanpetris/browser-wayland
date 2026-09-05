@@ -413,25 +413,24 @@ impl App {
     }
 
     /// Pick the codec for a browser whose `hw` mask passed the prefer-hardware probe and `sw` the plain one
-    /// (bit0 H.264, bit1 HEVC, bit2 VP9).
+    /// (bit0 H.264, bit1 HEVC, bit2 VP9, bit3 AV1), among those the GPU encodes.
     fn choose_codec(&self, hw: u8, sw: u8) -> Codec {
         let bit = |c: Codec| match c {
             Codec::H264 => 1,
             Codec::Hevc => 2,
             Codec::Vp9 => 4,
+            Codec::Av1 => 8,
         };
-        let preferred = [Codec::Hevc, Codec::Vp9, Codec::H264];
+        let can = |c: &Codec| self.codecs.contains(c);
+        let preferred = [Codec::Av1, Codec::Hevc, Codec::Vp9, Codec::H264].into_iter().filter(can);
+        let fallback = || self.codecs.first().copied().unwrap_or(Codec::H264);
         match self.policy {
-            Some(c) if sw & bit(c) != 0 => c,
+            Some(c) if sw & bit(c) != 0 && can(&c) => c,
             Some(c) => {
-                tracing::warn!(?c, "browser can't decode the requested codec; using H.264");
-                Codec::H264
+                tracing::warn!(?c, "the browser can't decode the requested codec or the GPU can't encode it; picking another");
+                fallback()
             }
-            None => preferred
-                .into_iter()
-                .find(|&c| hw & bit(c) != 0)
-                .or_else(|| preferred.into_iter().find(|&c| sw & bit(c) != 0))
-                .unwrap_or(Codec::H264),
+            None => preferred.clone().find(|&c| hw & bit(c) != 0).or_else(|| preferred.clone().find(|&c| sw & bit(c) != 0)).unwrap_or_else(fallback),
         }
     }
 

@@ -17,8 +17,9 @@ struct Cli {
     /// Encoder bitrate in kbit/s.
     #[arg(long, default_value_t = 8000)]
     bitrate: u32,
-    /// Video codec: auto picks HEVC, VP9 or H.264 by what the browser decodes in hardware.
-    #[arg(long, default_value = "auto", value_parser = ["auto", "h264", "hevc", "vp9"])]
+    /// Video codec: auto picks AV1, HEVC, VP9 or H.264 by what the browser decodes in hardware, among
+    /// what the GPU encodes.
+    #[arg(long, default_value = "auto", value_parser = ["auto", "h264", "hevc", "vp9", "av1"])]
     codec: String,
     /// Command to run (via `sh -c`) at startup, with WAYLAND_DISPLAY, DISPLAY, PULSE_SINK and a
     /// Wayland session's environment set for it.
@@ -87,8 +88,12 @@ fn main() -> Result<()> {
         "h264" => Some(Codec::H264),
         "hevc" => Some(Codec::Hevc),
         "vp9" => Some(Codec::Vp9),
+        "av1" => Some(Codec::Av1),
         _ => None,
     };
+    let codecs = bw_stream::hardware_codecs();
+    anyhow::ensure!(!codecs.is_empty(), "no VA-API video encoder found (gst-plugin-va and a driver for this GPU are needed)");
+    tracing::info!(?codecs, "hardware encoders");
     let (audio_tx, audio_rx) = mpsc::channel(16);
     let (events_tx, events_rx) = mpsc::unbounded_channel();
 
@@ -135,7 +140,7 @@ fn main() -> Result<()> {
         let _ = exited_tx.send(join.join().is_ok());
     });
 
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: cli.files_dir.unwrap_or_else(bw_server::files::default_dir), version: env!("BW_VERSION"), sinks };
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: cli.files_dir.unwrap_or_else(bw_server::files::default_dir), version: env!("BW_VERSION"), sinks };
     // Ctrl+C returns here so the audio sink gets unloaded and the pipelines stopped.
     let result = tokio::runtime::Runtime::new()?.block_on(async {
         tokio::select! {

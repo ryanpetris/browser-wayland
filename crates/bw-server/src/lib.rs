@@ -56,6 +56,8 @@ pub struct Config {
     pub listen: SocketAddr,
     pub tls: bool,
     pub codec: CodecPolicy,
+    /// What the encoder side can produce (`bw_stream::hardware_codecs`).
+    pub codecs: Vec<Codec>,
     /// Where `cert.pem`, `key.pem` and `token` live.
     pub data_dir: PathBuf,
     /// Serve /api/windows/{id}/elements (see `elements.rs`).
@@ -84,6 +86,7 @@ pub struct App {
     data_dir: PathBuf,
     commands: calloop::channel::Sender<Command>,
     policy: CodecPolicy,
+    codecs: Vec<Codec>,
     viewers: Mutex<Viewers>,
     sinks: SinkFactory,
     /// Event senders of the window-stream sessions (cursor, clipboard, window list go to them too).
@@ -147,6 +150,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         data_dir: cfg.data_dir.clone(),
         commands,
         policy: cfg.codec,
+        codecs: cfg.codecs,
         viewers: Mutex::default(),
         sinks: cfg.sinks,
         window_viewers: Mutex::default(),

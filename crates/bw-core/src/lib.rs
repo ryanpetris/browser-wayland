@@ -291,6 +291,7 @@ pub enum Codec {
     H264,
     Hevc,
     Vp9,
+    Av1,
 }
 
 /// What the server may ask of the running encoder.

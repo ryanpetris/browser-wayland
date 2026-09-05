@@ -1,8 +1,8 @@
 # browser-wayland
 
 A headless Wayland compositor whose screen is a browser tab. Clients render on the GPU, the
-composited frame is hardware-encoded with VA-API (HEVC, VP9 or H.264, whichever the browser decodes
-best) and streamed over a WebSocket, and the browser decodes it with WebCodecs. Mouse, keyboard,
+composited frame is hardware-encoded with VA-API (AV1, HEVC, VP9 or H.264, whichever the browser
+decodes best and the GPU encodes) and streamed over a WebSocket, and the browser decodes it with WebCodecs. Mouse, keyboard,
 audio and the clipboard travel the same way.
 
 Design notes: [docs/architecture.md](docs/architecture.md), [docs/protocol.md](docs/protocol.md),
@@ -199,8 +199,8 @@ viewer, and a `cargo build` without `web/dist` stops with that hint. `npm run de
 page with hot reload, proxying `/ws` and `/api` to a server started with `--no-tls --listen 127.0.0.1:8080`.
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
-`--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,
-then H.264), `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--socket-name`, `--render-node`. `--help`
+`--codec auto|h264|hevc|vp9|av1` (auto prefers whatever the browser decodes in hardware, among what the
+GPU encodes: AV1, then HEVC, VP9, H.264), `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--socket-name`, `--render-node`. `--help`
 lists them all.
 
 Games and other clients that lock the pointer get raw mouse deltas: the page mirrors the lock with the
