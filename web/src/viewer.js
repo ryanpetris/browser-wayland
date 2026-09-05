@@ -435,7 +435,7 @@ export function createViewer() {
       store.set({ upload: { name: file.name, index: index + 1, count: files.length } });
       try { await uploadFile(file); saved++; } catch {}
     }
-    store.set({ upload: null, filesRev: state().filesRev + 1, notice: saved ? `${saved} file${saved === 1 ? '' : 's'} saved to the desktop's Downloads` : 'upload failed' });
+    store.set({ upload: null, filesRev: state().filesRev + 1, notice: saved ? `${saved} file${saved === 1 ? '' : 's'} saved to the desktop's transfer folder` : 'upload failed' });
     clearTimeout(noticeTimer);
     noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
   }
@@ -444,6 +444,7 @@ export function createViewer() {
     if (!e.dataTransfer?.files.length) return;
     e.preventDefault();
     if (state().role !== 'viewer') uploadFiles(e.dataTransfer.files);
+    else { store.set({ notice: 'a view-only session cannot send files' }); clearTimeout(noticeTimer); noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000); }
   });
 
   // --- clipboard ---------------------------------------------------------------------------

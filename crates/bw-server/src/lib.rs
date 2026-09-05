@@ -26,7 +26,6 @@ use std::{
 use anyhow::{Context, Result};
 use api::ApiError;
 use axum::{
-    extract::DefaultBodyLimit,
     Extension, Json, Router,
     extract::{Path as UrlPath, Query, Request, State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode, header},
@@ -183,12 +182,12 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
                 .route("/api/windows/{id}/elements", get(api_window_elements))
                 .route("/api/windows/{id}/icon", get(api_window_icon))
                 .route("/api/files", get(api_files))
-                .route("/api/files/{name}", get(api_file).put(api_put_file).delete(api_delete_file).layer(DefaultBodyLimit::disable()))
+                .route("/api/files/{name}", get(api_file).put(api_put_file).delete(api_delete_file))
                 .route("/api/notifications", get(api_notifications))
                 .route("/api/notifications/{id}", post(api_notification_action))
                 .route("/api/notifications/{id}/icon", get(api_notification_icon))
                 .route("/api/token/rotate", post(api_token_rotate))
-                .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard).layer(DefaultBodyLimit::disable()))
+                .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard))
                 .nest_service("/mcp", mcp_service(app.clone()))
                 .layer(middleware::from_fn_with_state(app.clone(), bearer)),
         )
@@ -331,7 +330,7 @@ async fn api_file(UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>) -
             [
                 (header::CONTENT_TYPE, "application/octet-stream".to_string()),
                 (header::CONTENT_LENGTH, len.to_string()),
-                (header::CONTENT_DISPOSITION, format!("attachment; filename*=UTF-8''{}", files::percent(&name))),
+                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", name.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect::<String>(), files::percent(&name))),
             ],
             body,
         )

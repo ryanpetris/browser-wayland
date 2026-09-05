@@ -14,7 +14,7 @@ const ROUTES: &str = "\
 | `GET /api/applications` | | JSON array of **Application**: the installed launchers, for `launch` |
 | `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
 | `GET /api/windows/{id}/icon` | | the window's icon (its own, else its launcher's), SVG or PNG; `404` none |
-| `GET /api/files` | | JSON array of **File**: the transfer folder (dropped files, downloads) |
+| `GET /api/files` | | JSON array of **File**: the transfer folder (dropped files, downloads), newest first |
 | `PUT /api/files/{name}` | the file's bytes | saved in the folder under `name`, or `name (2)` if taken; `201` with `{\"name\"}` |
 | `GET /api/files/{name}` | | the file, as an attachment; `404` |
 | `DELETE /api/files/{name}` | | `204`; `404` |

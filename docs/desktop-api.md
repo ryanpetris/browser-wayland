@@ -167,9 +167,11 @@ the mechanism.
 `~/Downloads`) unless `--files-dir` names another, is the meeting point between the browser's machine and
 the desktop. `PUT /api/files/{name}` streams the body into it through a `.part` file renamed when the
 upload is complete (a taken name gets ` (2)` before its extension; the reply carries the name it got);
-`GET /api/files` lists the folder's files (no subfolders or hidden entries), `GET /api/files/{name}`
-streams one back as an attachment, `DELETE` removes one. A name is a single entry of the folder: anything
-with a `/` or a `..` is `404`. Listing and downloading work with the view-only token; uploads and
+`GET /api/files` lists the folder's files (no subfolders, hidden entries or symlinks), `GET
+/api/files/{name}` streams one back as an attachment (a symlink is not followed), `DELETE` removes one.
+A name is a single visible entry of the folder: anything with a `/` or starting with a `.` is `404`.
+Each upload writes its own `.part` file and claims the final name with a hard link, so two uploads of the
+same name can't collide. Listing and downloading work with the view-only token; uploads and
 deletions need the control token. There is no size limit beyond the disk.
 
 The page uploads whatever is dropped on it (any part of the page, one file after another, with progress

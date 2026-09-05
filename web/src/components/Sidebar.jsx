@@ -1,6 +1,6 @@
-// The side panel: the window list (with actions and a command box) or the statistics.
+// The side panel: the window list (with actions and a command box), the transfer folder, or the statistics.
 import { useEffect, useRef, useState } from 'react';
-import { Camera, ChevronDown, ChevronUp, Download, ExternalLink, Maximize2, Minimize2, Play, Trash2, Upload, X } from 'lucide-react';
+import { Camera, ChevronDown, ChevronUp, Download, ExternalLink, Maximize2, Minimize2, Play, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { useStore } from '../store.js';
 import { deleteFile, downloadFile, files, queuedSnapshot, snapshot, windowIcon } from '../api.js';
 import { codecName, windowColor } from './ui.jsx';
@@ -131,8 +131,9 @@ function FilesPanel({ viewer, open }) {
     <div className="flex flex-col">
       <div className="flex items-center gap-2 border-b border-zinc-800 px-2.5 py-2 text-xs text-zinc-500">
         {upload ? <span className="truncate">Uploading {upload.name} ({upload.index}/{upload.count})…</span> : <span className="truncate">Drop files on the page to send them to the desktop.</span>}
+        <Action icon={RefreshCw} label="Refresh" className="ml-auto shrink-0" onClick={refresh} />
         {acts && (
-          <label className="ml-auto inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-zinc-800 px-2 py-1 text-zinc-200 hover:bg-zinc-700">
+          <label className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-zinc-800 px-2 py-1 text-zinc-200 hover:bg-zinc-700">
             <Upload className="size-3.5" /> Upload
             <input type="file" multiple className="hidden" onChange={e => { viewer.uploadFiles(e.target.files); e.target.value = ''; }} />
           </label>
@@ -146,7 +147,7 @@ function FilesPanel({ viewer, open }) {
             <div className="text-[11px] text-zinc-500">{size(f.size)} · {new Date(f.modified_ms).toLocaleString()}</div>
           </div>
           <Action icon={Download} label="Download" onClick={() => downloadFile(f.name)} />
-          {acts && <Action icon={Trash2} label="Delete" className="hover:text-rose-300" onClick={() => deleteFile(f.name).then(refresh)} />}
+          {acts && <Action icon={Trash2} label="Delete" className="hover:text-rose-300" onClick={() => deleteFile(f.name).then(refresh, refresh)} />}
         </div>
       ))}
     </div>

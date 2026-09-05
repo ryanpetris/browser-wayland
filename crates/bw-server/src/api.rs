@@ -33,6 +33,8 @@ pub enum ApiError {
     NotFound,
     /// No such application (`launch`, icons).
     NoSuchApp,
+    /// No such file in the transfer folder (or a name that can't be one).
+    NoSuchFile,
     /// Another snapshot is in flight.
     Busy,
     /// The compositor or the accessibility bus didn't answer.
@@ -49,7 +51,7 @@ impl ApiError {
             ApiError::Disabled(_) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
             ApiError::Forbidden => StatusCode::FORBIDDEN,
-            ApiError::NotFound | ApiError::NoSuchApp => StatusCode::NOT_FOUND,
+            ApiError::NotFound | ApiError::NoSuchApp | ApiError::NoSuchFile => StatusCode::NOT_FOUND,
             ApiError::Busy => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -66,6 +68,7 @@ impl std::fmt::Display for ApiError {
             ApiError::Forbidden => f.write_str("read-only token"),
             ApiError::NotFound => f.write_str("no such window"),
             ApiError::NoSuchApp => f.write_str("no such application"),
+            ApiError::NoSuchFile => f.write_str("no such file"),
             ApiError::Busy => f.write_str("another snapshot is in flight"),
             ApiError::TooLarge => f.write_str("over the size limit"),
             ApiError::Unavailable(why) | ApiError::Internal(why) => f.write_str(why),

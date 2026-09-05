@@ -40,11 +40,12 @@ export const windowIcon = (id, key) => {
 };
 
 // The transfer folder: list, upload (the final name comes back), download through a blob (no token in URLs), delete.
-export const files = async () => (await api('/api/files')).json();
-export const uploadFile = async file => (await api(`/api/files/${encodeURIComponent(file.name)}`, { method: 'PUT', body: file })).json();
-export const deleteFile = name => api(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' });
+const ok = r => (r.ok ? r : Promise.reject(new Error(`HTTP ${r.status}`)));
+export const files = async () => ok(await api('/api/files')).json();
+export const uploadFile = async file => ok(await api(`/api/files/${encodeURIComponent(file.name)}`, { method: 'PUT', body: file })).json();
+export const deleteFile = async name => ok(await api(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' }));
 export const downloadFile = async name => {
-  const blob = await (await api(`/api/files/${encodeURIComponent(name)}`)).blob();
+  const blob = await ok(await api(`/api/files/${encodeURIComponent(name)}`)).blob();
   const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
