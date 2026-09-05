@@ -1,4 +1,4 @@
-import { Expand, LayoutList, Maximize, PanelRight, ScanSearch } from 'lucide-react';
+import { Expand, Eye, LayoutList, Maximize, MousePointer2, PanelRight, ScanSearch } from 'lucide-react';
 import { useStore } from '../store.js';
 import { WINDOW } from '../api.js';
 import { IconButton, codecName } from './ui.jsx';
@@ -8,7 +8,6 @@ const STATUS = {
   connecting: ['bg-amber-400 animate-pulse', 'Connecting…'],
   connected: ['bg-emerald-400', 'Connected'],
   retrying: ['bg-amber-400 animate-pulse', 'Reconnecting…'],
-  replaced: ['bg-rose-400', 'Replaced by another viewer'],
   unauthorized: ['bg-rose-400', 'Not authorized'],
   gone: ['bg-zinc-500', 'Window closed'],
 };
@@ -17,6 +16,7 @@ export function TopBar({ viewer, windowMode, borders, onBorders, elements, onEle
   const status = useStore(viewer.store, s => s.status);
   const stream = useStore(viewer.store, s => s.stream);
   const windowTitle = useStore(viewer.store, s => s.windowTitle);
+  const role = useStore(viewer.store, s => s.role);
   const [dot, text] = STATUS[status];
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-900 px-3">
@@ -34,6 +34,15 @@ export function TopBar({ viewer, windowMode, borders, onBorders, elements, onEle
         )}
       </div>
       <div className="ml-auto flex items-center gap-1">
+        {!windowMode && role === 'participant' && (
+          <button type="button" onClick={e => { viewer.takeControl(); e.currentTarget.blur(); }} title="Drive the desktop; it takes this window's size" className="mr-1 inline-flex items-center gap-1.5 rounded-md bg-indigo-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-400">
+            <MousePointer2 className="size-3.5" /> Take control
+          </button>
+        )}
+        {role === 'viewer' && (
+          <span className="mr-1 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400" title="The viewer token watches; it can't act"><Eye className="size-3.5" /> view only</span>
+        )}
+        {!windowMode && role === 'controller' && <span className="mr-1 text-xs text-emerald-400/80" title="Your pointer, keyboard and window size are the desktop's">controlling</span>}
         {!windowMode && (
           <>
             <IconButton icon={Maximize} label="Window borders" active={borders} onClick={onBorders} />

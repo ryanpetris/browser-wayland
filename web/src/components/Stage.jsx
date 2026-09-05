@@ -1,7 +1,7 @@
 // The display: the video canvas, sized by its container (the desktop's output takes that size), with
 // the overlays and status banners on top. Fullscreen is requested on this element, so the chrome goes away.
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, MonitorX, RefreshCw } from 'lucide-react';
+import { Loader2, MonitorX } from 'lucide-react';
 import { useStore } from '../store.js';
 import { hue, windowColor } from './ui.jsx';
 
@@ -83,18 +83,6 @@ function Banner({ viewer }) {
       <div className={`absolute ${card}`}>
         <Loader2 className="size-6 animate-spin text-indigo-400" />
         <div className="text-sm text-zinc-300">Connecting…</div>
-      </div>
-    );
-  }
-  if (status === 'replaced') {
-    return (
-      <div className={`absolute ${card}`}>
-        <MonitorX className="size-6 text-rose-400" />
-        <div className="text-sm text-zinc-200">Another viewer took over</div>
-        <div className="text-xs text-zinc-500">Only one viewer at a time; the newest wins.</div>
-        <button type="button" onClick={viewer.reconnect} className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-indigo-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-400">
-          <RefreshCw className="size-3.5" /> Take over
-        </button>
       </div>
     );
   }

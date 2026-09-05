@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::Result;
-use bw_core::{Codec, Command, FrameSink, StreamControl};
+use bw_core::{Codec, FrameSink, StreamControl};
 use clap::Parser;
 use tokio::sync::mpsc;
 
@@ -14,9 +14,6 @@ struct Cli {
     /// Plain HTTP (WebCodecs then only works from localhost).
     #[arg(long)]
     no_tls: bool,
-    /// Stream a test pattern instead of running the compositor.
-    #[arg(long)]
-    fake_source: bool,
     /// Encoder bitrate in kbit/s.
     #[arg(long, default_value_t = 8000)]
     bitrate: u32,
@@ -88,12 +85,12 @@ fn main() -> Result<()> {
         "vp9" => Some(Codec::Vp9),
         _ => None,
     };
-    let (stream_tx, stream_rx) = mpsc::channel(16);
+    let (audio_tx, audio_rx) = mpsc::channel(16);
     let (events_tx, events_rx) = mpsc::unbounded_channel();
 
     let mut audio = None;
-    if !cli.fake_source && !cli.no_audio {
-        match AudioSink::create().and_then(|sink| bw_stream::audio_source(&format!("{}.monitor", sink.name), stream_tx.clone()).map(|s| (sink, s))) {
+    if !cli.no_audio {
+        match AudioSink::create().and_then(|sink| bw_stream::audio_source(&format!("{}.monitor", sink.name), audio_tx).map(|s| (sink, s))) {
             Ok((sink, stream)) => {
                 tracing::info!("audio: clients started with PULSE_SINK={} play in the browser", sink.name);
                 audio = Some((sink, stream));
@@ -102,64 +99,43 @@ fn main() -> Result<()> {
         }
     }
 
+    // one encoder per viewer and per window stream, made when the session starts
     let bitrate = cli.bitrate;
-    let window_sinks: Option<bw_server::SinkFactory> = (!cli.fake_source).then(|| {
-        Box::new(move |tx| {
-            let sink = bw_stream::GstSink::new(bitrate, tx)?;
-            Ok((Box::new(sink.clone()) as Box<dyn FrameSink>, Box::new(sink.control()) as Box<dyn StreamControl>))
-        }) as bw_server::SinkFactory
+    let sinks: bw_server::SinkFactory = Box::new(move |tx| {
+        let sink = bw_stream::GstSink::new(bitrate, tx)?;
+        Ok((Box::new(sink.clone()) as Box<dyn FrameSink>, Box::new(sink.control()) as Box<dyn StreamControl>))
     });
-    let (commands, control): (calloop::channel::Sender<Command>, Box<dyn StreamControl>) = if cli.fake_source {
-        // No compositor: just log what the browser sends.
-        let (commands, rx) = calloop::channel::channel();
-        std::thread::spawn(move || {
-            let mut event_loop = calloop::EventLoop::<()>::try_new().unwrap();
-            event_loop
-                .handle()
-                .insert_source(rx, |ev, _, _| {
-                    if let calloop::channel::Event::Msg(cmd) = ev {
-                        tracing::info!(?cmd);
-                    }
-                })
-                .unwrap();
-            event_loop.run(None, &mut (), |_| {}).unwrap();
-        });
-        (commands, Box::new(bw_stream::fake_source(cli.bitrate, codec.unwrap_or(Codec::H264), stream_tx)?))
-    } else {
-        let sink = bw_stream::GstSink::new(cli.bitrate, stream_tx)?;
-        let mut exec_env: Vec<(String, String)> = audio.as_ref().map(|(sink, _)| ("PULSE_SINK".to_string(), sink.name.clone())).into_iter().collect();
-        if cli.elements {
-            // GTK always publishes its tree; Firefox and Qt only when asked. (Chromium needs --force-renderer-accessibility.)
-            exec_env.extend([("GNOME_ACCESSIBILITY", "1"), ("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1")].map(|(k, v)| (k.to_string(), v.to_string())));
-        }
-        let bw_compositor::CompositorHandle { commands, socket_name, x11_display, join } = bw_compositor::spawn(
-            bw_compositor::Config {
-                render_node: cli.render_node,
-                socket_name: cli.socket_name,
-                initial: bw_core::INITIAL_OUTPUT,
-                exec: cli.exec.clone(),
-                exec_env,
-                kiosk: cli.kiosk,
-            },
-            Box::new(sink.clone()),
-            events_tx,
-        )?;
-        tracing::info!(socket = %socket_name, x11_display = ?x11_display.map(|d| format!(":{d}")), "compositor ready");
-        std::thread::spawn(move || {
-            let _ = join.join();
-            tracing::error!("compositor thread exited; shutting down");
-            std::process::exit(1);
-        });
-        (commands, Box::new(sink))
-    };
+    let mut exec_env: Vec<(String, String)> = audio.as_ref().map(|(sink, _)| ("PULSE_SINK".to_string(), sink.name.clone())).into_iter().collect();
+    if cli.elements {
+        // GTK always publishes its tree; Firefox and Qt only when asked. (Chromium needs --force-renderer-accessibility.)
+        exec_env.extend([("GNOME_ACCESSIBILITY", "1"), ("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1")].map(|(k, v)| (k.to_string(), v.to_string())));
+    }
+    let accepted_formats = bw_stream::accepted_formats();
+    tracing::info!(?accepted_formats, "vapostproc dmabuf import formats (fourcc, modifier)");
+    let bw_compositor::CompositorHandle { commands, socket_name, x11_display, join } = bw_compositor::spawn(
+        bw_compositor::Config {
+            render_node: cli.render_node,
+            socket_name: cli.socket_name,
+            initial: bw_core::INITIAL_OUTPUT,
+            exec: cli.exec.clone(),
+            exec_env,
+            kiosk: cli.kiosk,
+            accepted_formats,
+        },
+        events_tx,
+    )?;
+    tracing::info!(socket = %socket_name, x11_display = ?x11_display.map(|d| format!(":{d}")), "compositor ready");
+    std::thread::spawn(move || {
+        let _ = join.join();
+        tracing::error!("compositor thread exited; shutting down");
+        std::process::exit(1);
+    });
 
-    // the fake source can't switch codecs, so its policy is whatever it was built with
-    let codec = if cli.fake_source { Some(codec.unwrap_or(Codec::H264)) } else { codec };
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, version: env!("BW_VERSION"), window_sinks };
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, version: env!("BW_VERSION"), sinks };
     // Ctrl+C returns here so the audio sink gets unloaded and the pipelines stopped.
     let result = tokio::runtime::Runtime::new()?.block_on(async {
         tokio::select! {
-            r = bw_server::run(server, commands, stream_rx, events_rx, control) => r,
+            r = bw_server::run(server, commands, audio_rx, events_rx) => r,
             _ = tokio::signal::ctrl_c() => Ok(()),
         }
     });

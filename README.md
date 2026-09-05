@@ -32,10 +32,16 @@ make run ARGS="--exec foot"                   # any Wayland client; WAYLAND_DISP
 
 (`make web` once, then plain `cargo run --release -- --exec foot` works too.)
 
-The server prints the certificate fingerprint and a URL like `https://<lan-ip>:8443/#token=…`.
-Open it in a browser on the LAN, compare the fingerprint before accepting the self-signed
-certificate, and the desktop appears. The desktop takes the size of the viewer's display area; the
-fullscreen button hands it the whole screen, with keyboard lock so shortcuts like Ctrl+W reach the desktop.
+The server prints the certificate fingerprint and two URLs like `https://<lan-ip>:8443/#token=…`: one
+with the control token, one with the view-only token. Open the first in a browser on the LAN, compare
+the fingerprint before accepting the self-signed certificate, and the desktop appears. The desktop takes
+the size of the controlling viewer's display area; the fullscreen button hands it the whole screen, with
+keyboard lock so shortcuts like Ctrl+W reach the desktop.
+
+Any number of people can watch at once, each with a stream scaled to their own window. The first to
+connect with the control token drives the pointer and keyboard; anyone else with that token sees a
+"Take control" button, and the desktop then takes their window's size. Whoever opens the view-only URL
+can watch, read the window list and elements, and take snapshots, but not act.
 Frames are painted on a 2D canvas. `?renderer=webgpu` in the URL uses a WebGPU external-texture path
 instead; it is opt-in because Chromium on Linux occasionally presents a blank frame that way, which looks like flicker.
 
@@ -85,9 +91,8 @@ Firefox and Chromium, with PipeWire for audio and Mesa's OpenGL and Vulkan drive
 panel, whose menu launches the rest. `make docker-run` builds the image and runs it; the details are
 in the Dockerfile's header.
 
-The page says when the server closed its socket: a token dialog ("wrong token" or "token rotated";
-the token changes with the data directory, e.g. a fresh container without a volume), or "Another
-viewer took over" with a button to take it back (one at a time, the newest wins).
+The page says when the server closed its socket with a token dialog ("wrong token" or "token
+rotated"; the tokens change with the data directory, e.g. a fresh container without a volume).
 
 ## Window streams
 
@@ -100,9 +105,11 @@ resizes the window, and the popup reports when the window closes. Each such popu
 The compositor is the window manager, so the viewer and outside scripts can see and drive the desktop.
 HTTP calls send the token as `Authorization: Bearer <token>`; the viewer page takes it from its URL
 fragment once (`#token=`, never sent to the server), keeps it in `sessionStorage` and drops it from the
-address bar, and sends it as the first message on its WebSocket. A tab without a token shows a paste box. There are no cookies and the token is never in a URL
-the server sees. `POST /api/token/rotate` (with the current token) issues a new one: the file, the API and
-the viewer switch at once and the server prints the new URLs.
+address bar, and sends it as the first message on its WebSocket. A tab without a token shows a dialog
+asking for one. There are no cookies and a token is never in a URL the server sees. The view-only token
+works for everything below that reads (the window list, elements, snapshots, the clipboard's text) and
+gets `403` for everything that acts. `POST /api/token/rotate` (with the control token) issues new
+tokens: the files, the API and every viewer switch at once and the server prints the new URLs.
 
 ```sh
 T=$(cat ~/.config/browser-wayland/token)
@@ -172,10 +179,10 @@ page with hot reload, proxying `/ws` and `/api` to a server started with `--no-t
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
 `--codec auto|h264|hevc|vp9` (auto prefers whatever the browser decodes in hardware: HEVC, then VP9,
-then H.264), `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--fake-source` (a test pattern instead of
-the compositor), `--socket-name`, `--render-node`. `--help` lists them all.
+then H.264), `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--socket-name`, `--render-node`. `--help`
+lists them all.
 
 Games and other clients that lock the pointer get raw mouse deltas: the page mirrors the lock with the
 Pointer Lock API; Escape releases it.
 
-Certificate and token live in `$XDG_CONFIG_HOME/browser-wayland/`; delete them to regenerate.
+Certificate and tokens live in `$XDG_CONFIG_HOME/browser-wayland/`; delete them to regenerate.

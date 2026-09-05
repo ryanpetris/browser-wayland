@@ -4,15 +4,18 @@
 import { KEYCODES } from './keycodes.js';
 import { TOKEN, WINDOW, api, elementsOf, snapshot } from './api.js';
 import { createStore } from './store.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, BTN } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, ROLES, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
 export function createViewer() {
   const store = createStore({
-    // 'no-token' | 'connecting' | 'connected' | 'retrying' | 'replaced' | 'unauthorized' | 'gone'
+    // 'no-token' | 'connecting' | 'connected' | 'retrying' | 'unauthorized' | 'gone'
     status: TOKEN ? 'connecting' : 'no-token',
     reason: '',
+    // 'controller' drives the desktop and sizes it; 'participant' (a control token) watches and may take
+    // control; 'viewer' (the viewer token) only watches
+    role: null,
     stream: null, // the last Config: {streamId, codec, width, height, scale}
     renderer: '2d',
     windows: [],
@@ -135,7 +138,6 @@ export function createViewer() {
         store.set({ status: 'unauthorized', reason: e.reason || 'wrong token', stream: null });
         return;
       }
-      if (e.code === 4002) { store.set({ status: 'replaced' }); return; }
       if (e.code === 4003) { store.set({ status: 'gone', reason: e.reason }); return; } // the window is gone
       store.set({ status: 'retrying' });
       setTimeout(connect, 1000);
@@ -185,10 +187,14 @@ export function createViewer() {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(sendResize, 150);
   }
-  // Window mode: the canvas at the window's size, centred, scaled down (never distorted) if the stage is smaller.
+  // The canvas at the stream's logical size, centred, scaled to the stage without distortion: for the
+  // controller that is the stage itself; another viewer sees the controller's desktop letterboxed; a
+  // window popup shows its window 1:1 unless smaller.
   function fitCanvas() {
-    if (!WINDOW || !stream || !canvas) return;
-    const w = stream.width / stream.scale, h = stream.height / stream.scale, k = Math.min(1, stage.w / w, stage.h / h);
+    if (!stream || !canvas || !stage.w) return;
+    const w = stream.width / stream.scale, h = stream.height / stream.scale;
+    let k = Math.min(stage.w / w, stage.h / h);
+    if (WINDOW) k = Math.min(1, k);
     canvas.style.width = `${w * k}px`;
     canvas.style.height = `${h * k}px`;
   }
@@ -266,6 +272,12 @@ export function createViewer() {
       case CLIPBOARD:
         onClipboard(new TextDecoder().decode(new Uint8Array(buf, 1)));
         break;
+      case ROLE: {
+        const role = ROLES[dv.getUint8(1)] ?? 'viewer';
+        store.set({ role });
+        if (role !== 'controller' && document.pointerLockElement) document.exitPointerLock(); // only the controller's pointer is the desktop's
+        break;
+      }
       case VIDEO: {
         if (dropNext) { dropNext = false; return; } // debug: bw.dropNext() simulates a lost message
         received++;
@@ -371,22 +383,26 @@ export function createViewer() {
   }
 
   // --- input -----------------------------------------------------------------------------
+  // Only the controller's pointer and keyboard are the desktop's (a window popup drives with any control token).
+  const driving = () => WINDOW ? state().role !== 'viewer' : state().role === 'controller';
   // Stream logical px per canvas CSS px (1 except while a resize is in flight).
   const scaleX = () => (stream ? stream.width / stream.scale / canvas.clientWidth : 1);
   const scaleY = () => (stream ? stream.height / stream.scale / canvas.clientHeight : 1);
   function onPointerMove(e) {
+    if (!driving()) return;
     if (document.pointerLockElement) send(MOTION_REL, 8, dv => { dv.setFloat32(1, e.movementX, true); dv.setFloat32(5, e.movementY, true); });
     else send(MOTION_ABS, 8, dv => { dv.setFloat32(1, e.offsetX * scaleX(), true); dv.setFloat32(5, e.offsetY * scaleY(), true); });
   }
   function onPointerButton(e) {
     const btn = BTN[e.button];
-    if (btn === undefined) return;
+    if (btn === undefined || !driving()) return;
     if (e.type === 'pointerdown') { canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); resumeAudio(); flushClipboard(); if (wantLock) requestLock(); }
     onPointerMove(e);
     send(BUTTON, 3, dv => { dv.setUint16(1, btn, true); dv.setUint8(3, e.type === 'pointerdown' ? 1 : 0); });
   }
   function onWheel(e) {
     e.preventDefault();
+    if (!driving()) return;
     send(AXIS, 9, dv => { dv.setUint8(1, e.deltaMode); dv.setFloat32(2, e.deltaX, true); dv.setFloat32(6, e.deltaY, true); });
   }
 
@@ -414,7 +430,7 @@ export function createViewer() {
     sendKey(code, true); sendKey(code, false);
   }
   document.addEventListener('paste', e => {
-    if (isFormField(e.target)) return;
+    if (isFormField(e.target) || state().role === 'viewer') return;
     e.preventDefault();
     sendText(SET_CLIPBOARD, e.clipboardData?.getData('text/plain') ?? ''); // an empty browser clipboard clears the desktop's
     flushPaste();
@@ -423,7 +439,7 @@ export function createViewer() {
   // Keys go to the desktop from anywhere in the page except its own controls (a focused button keeps Enter and Space).
   const isFormField = t => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLButtonElement;
   function onKey(e) {
-    if (isFormField(e.target)) return;
+    if (isFormField(e.target) || !driving()) return;
     const code = KEYCODES[e.code];
     if (!code || e.repeat) return; // clients repeat keys themselves (wl_keyboard.repeat_info)
     if (e.type === 'keydown' && isPasteKey(e)) {
@@ -505,7 +521,7 @@ export function createViewer() {
     setElementsOn(on) { store.set({ elementsOn: on }); fetchElements(); },
     setStatsOn(on) { store.set({ statsOn: on }); inflight.clear(); stage_.decode.length = stage_.paint.length = stage_.interval.length = 0; lastPaint = 0; },
     releaseInput: () => send(BLUR, 0), // a key held on the canvas must not stay held while a text field has the keyboard
-    reconnect: () => { store.set({ status: 'connecting' }); connect(); },
+    takeControl: () => send(TAKE_CONTROL, 0),
     clipboard: { read: () => api('/api/clipboard').then(r => r.text()), write: text => api('/api/clipboard', { method: 'PUT', body: text }) },
     windows: () => state().windows,
     dropNext: () => { dropNext = true; },

@@ -1,4 +1,4 @@
-use std::{os::fd::AsFd, time::{Duration, Instant}};
+use std::{os::fd::AsFd, sync::Arc, time::{Duration, Instant}};
 
 use anyhow::{Context, Result};
 use bw_core::DmabufFrame;
@@ -108,9 +108,11 @@ impl State {
             } else {
                 // The encoder was told the negotiated modifier and would read these buffers with the wrong
                 // layout. Tell it the real one; if it can't take it, the pipeline fails visibly.
-                tracing::warn!(?got, negotiated = ?self.gpu.modifier, "swapchain buffer modifier is not the negotiated one; rebuilding the encoder for it");
+                tracing::warn!(?got, negotiated = ?self.gpu.modifier, "swapchain buffer modifier is not the negotiated one; rebuilding the encoders for it");
                 self.gpu.modifier = got;
-                self.sink.output_changed(self.geometry, self.gpu.fourcc as u32, u64::from(got));
+                for (_, sink) in &mut self.viewer_sinks {
+                    sink.output_changed(self.geometry, self.gpu.fourcc as u32, u64::from(got));
+                }
             }
         }
         // The pointer is drawn by the browser, so there are no custom elements.
@@ -150,7 +152,7 @@ impl State {
         // ponytail: CPU wait for the GPU; export the fence instead if it ever shows up in profiles.
         // Done before any early return: the next commit releases client buffers, so our reads must be over.
         while sync.wait().is_err() {} // Interrupted: wait again
-        if !damaged || !self.viewer_connected {
+        if !damaged || self.viewer_sinks.is_empty() {
             self.dirty = false;
             self.force_full_frame = false;
             feedback.discarded(); // rendered, but nothing went out
@@ -162,41 +164,43 @@ impl State {
         let slot_id = slot.userdata().get::<SlotId>().unwrap().0;
         self.frame_seq += 1;
 
-        let fd = dmabuf.handles().next().context("dmabuf has no plane").and_then(|fd| fd.as_fd().try_clone_to_owned().context("dup dmabuf fd"));
-        let fd = match fd {
-            Ok(fd) => fd,
-            Err(e) => {
-                feedback.discarded();
-                return Err(e);
-            }
-        };
+        // one frame, every viewer's encoder: each gets its own dup of the fd and a share of the lease,
+        // so the slot is free again when the last of them is done with it
+        let lease = Arc::new(slot);
         let now = self.clock.now(); // after the GPU wait: when the frame really left
-        let submitted = self.sink.submit(DmabufFrame {
-            fd,
-            width: self.geometry.width_px,
-            height: self.geometry.height_px,
-            fourcc: self.gpu.fourcc as u32,
-            modifier: u64::from(self.gpu.modifier),
-            stride: dmabuf.strides().next().unwrap(),
-            offset: dmabuf.offsets().next().unwrap(),
-            slot_id,
-            pts: now.into(),
-            seq: self.frame_seq,
-            lease: Box::new(slot),
-        });
-        match submitted {
-            Ok(()) => {
-                self.dirty = false;
-                self.force_full_frame = false;
-                // the encoder has it: the closest thing to "presented" without a display; no MSC, so seq 0
-                feedback.presented(now, Refresh::Fixed(self.frame_interval), 0, wp_presentation_feedback::Kind::empty());
+        let mut encoded = 0;
+        for (key, sink) in &mut self.viewer_sinks {
+            let fd = dmabuf.handles().next().context("dmabuf has no plane").and_then(|fd| fd.as_fd().try_clone_to_owned().context("dup dmabuf fd"));
+            let submitted = fd.and_then(|fd| {
+                sink.submit(DmabufFrame {
+                    fd,
+                    width: self.geometry.width_px,
+                    height: self.geometry.height_px,
+                    fourcc: self.gpu.fourcc as u32,
+                    modifier: u64::from(self.gpu.modifier),
+                    stride: dmabuf.strides().next().unwrap(),
+                    offset: dmabuf.offsets().next().unwrap(),
+                    slot_id,
+                    pts: now.into(),
+                    seq: self.frame_seq,
+                    lease: Box::new(lease.clone()),
+                })
+                .map_err(|e| anyhow::anyhow!("{e}"))
+            });
+            match submitted {
+                Ok(()) => encoded += 1,
+                Err(e) => tracing::warn!(key, "frame not encoded: {e}"),
             }
-            Err(e) => {
-                // The damage tracker already advanced, so the retry must redraw everything.
-                tracing::warn!("frame not encoded: {e}");
-                self.force_full_frame = true;
-                feedback.discarded();
-            }
+        }
+        if encoded > 0 {
+            self.dirty = false;
+            self.force_full_frame = false;
+            // an encoder has it: the closest thing to "presented" without a display; no MSC, so seq 0
+            feedback.presented(now, Refresh::Fixed(self.frame_interval), 0, wp_presentation_feedback::Kind::empty());
+        } else {
+            // The damage tracker already advanced, so the retry must redraw everything.
+            self.force_full_frame = true;
+            feedback.discarded();
         }
         Ok(())
     }

@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 use base64::Engine;
 use bw_core::{Button, ControlMsg, ControlOp, InputMsg};
+use axum::http::request::Parts;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::{router::tool::ToolRouter, tool::Extension, wrapper::Parameters},
     model::*,
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -16,7 +17,7 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::{App, api::ApiError};
+use crate::{App, Key, api::ApiError};
 
 pub const SKILL: &str = include_str!("../../../skills/browser-wayland/SKILL.md");
 pub const REFERENCE: &str = include_str!("../../../skills/browser-wayland/reference.md");
@@ -166,12 +167,17 @@ impl Mcp {
         Mcp { app, tool_router: Self::tool_router() }
     }
 
-    fn control(&self, id: u64, op: ControlOp) -> ToolResult {
-        done(self.app.control(ControlMsg { id, op }))
+    /// The tools that act need the control token; the bearer middleware left which one it was in the request.
+    fn acting(&self, parts: &Parts) -> Result<(), ApiError> {
+        if parts.extensions.get::<Key>() == Some(&Key::Control) { Ok(()) } else { Err(ApiError::Forbidden) }
     }
 
-    fn input(&self, msg: InputMsg) -> ToolResult {
-        done(self.app.input(msg))
+    fn control(&self, parts: &Parts, id: u64, op: ControlOp) -> ToolResult {
+        done(self.acting(parts).and_then(|()| self.app.control(ControlMsg { id, op })))
+    }
+
+    fn input(&self, parts: &Parts, msg: InputMsg) -> ToolResult {
+        done(self.acting(parts).and_then(|()| self.app.input(msg)))
     }
 
     async fn png(&self, id: Option<u64>, scale: f64) -> ToolResult {
@@ -210,7 +216,7 @@ impl Mcp {
     }
 
     #[tool(description = "Change a window's state: activate (raise, focus, restore), close, minimize, unminimize, maximize, unmaximize, fullscreen, unfullscreen. Fire-and-forget; check `windows` afterwards.")]
-    fn window_control(&self, Parameters(WindowControlArgs { window, op }): Parameters<WindowControlArgs>) -> ToolResult {
+    fn window_control(&self, Extension(parts): Extension<Parts>, Parameters(WindowControlArgs { window, op }): Parameters<WindowControlArgs>) -> ToolResult {
         let op = match op {
             WindowOp::Activate => ControlOp::Activate,
             WindowOp::Close => ControlOp::Close,
@@ -221,47 +227,47 @@ impl Mcp {
             WindowOp::Fullscreen => ControlOp::Fullscreen,
             WindowOp::Unfullscreen => ControlOp::Unfullscreen,
         };
-        self.control(window, op)
+        self.control(&parts, window, op)
     }
 
     #[tool(description = "Move a floating window's geometry to x y (output logical px).")]
-    fn move_window(&self, Parameters(MoveWindowArgs { window, x, y }): Parameters<MoveWindowArgs>) -> ToolResult {
-        self.control(window, ControlOp::Move { x, y })
+    fn move_window(&self, Extension(parts): Extension<Parts>, Parameters(MoveWindowArgs { window, x, y }): Parameters<MoveWindowArgs>) -> ToolResult {
+        self.control(&parts, window, ControlOp::Move { x, y })
     }
 
     #[tool(description = "Resize a floating window's geometry to w h (logical px).")]
-    fn resize_window(&self, Parameters(ResizeWindowArgs { window, w, h }): Parameters<ResizeWindowArgs>) -> ToolResult {
-        self.control(window, ControlOp::Resize { w, h })
+    fn resize_window(&self, Extension(parts): Extension<Parts>, Parameters(ResizeWindowArgs { window, w, h }): Parameters<ResizeWindowArgs>) -> ToolResult {
+        self.control(&parts, window, ControlOp::Resize { w, h })
     }
 
     #[tool(description = "Start a program as a client of this desktop (`sh -c cmd`). Its window appears in `windows` after a moment.")]
-    fn spawn(&self, Parameters(SpawnArgs { cmd }): Parameters<SpawnArgs>) -> ToolResult {
-        self.control(0, ControlOp::Spawn { cmd })
+    fn spawn(&self, Extension(parts): Extension<Parts>, Parameters(SpawnArgs { cmd }): Parameters<SpawnArgs>) -> ToolResult {
+        self.control(&parts, 0, ControlOp::Spawn { cmd })
     }
 
     #[tool(description = "Move the pointer there and click. With `window`, x y are relative to that window, e.g. the centre of an element's rectangle.")]
-    fn click(&self, Parameters(ClickArgs { x, y, window, button, count }): Parameters<ClickArgs>) -> ToolResult {
-        self.input(InputMsg::Click { x, y, window, button, count })
+    fn click(&self, Extension(parts): Extension<Parts>, Parameters(ClickArgs { x, y, window, button, count }): Parameters<ClickArgs>) -> ToolResult {
+        self.input(&parts, InputMsg::Click { x, y, window, button, count })
     }
 
     #[tool(description = "Move the pointer without clicking (hover, or the middle of a drag).")]
-    fn move_pointer(&self, Parameters(PointArgs { x, y, window }): Parameters<PointArgs>) -> ToolResult {
-        self.input(InputMsg::Move { x, y, window })
+    fn move_pointer(&self, Extension(parts): Extension<Parts>, Parameters(PointArgs { x, y, window }): Parameters<PointArgs>) -> ToolResult {
+        self.input(&parts, InputMsg::Move { x, y, window })
     }
 
     #[tool(description = "Press or release a pointer button where the pointer is (for drags: press, move_pointer, release).")]
-    fn button(&self, Parameters(ButtonArgs { button, pressed }): Parameters<ButtonArgs>) -> ToolResult {
-        self.input(InputMsg::Button { button, pressed })
+    fn button(&self, Extension(parts): Extension<Parts>, Parameters(ButtonArgs { button, pressed }): Parameters<ButtonArgs>) -> ToolResult {
+        self.input(&parts, InputMsg::Button { button, pressed })
     }
 
     #[tool(description = "Scroll the wheel under the pointer by lines; positive dy scrolls down.")]
-    fn scroll(&self, Parameters(ScrollArgs { dx, dy }): Parameters<ScrollArgs>) -> ToolResult {
-        self.input(InputMsg::Scroll { dx, dy })
+    fn scroll(&self, Extension(parts): Extension<Parts>, Parameters(ScrollArgs { dx, dy }): Parameters<ScrollArgs>) -> ToolResult {
+        self.input(&parts, InputMsg::Scroll { dx, dy })
     }
 
     #[tool(description = "Press a key chord and release it: `ctrl+s`, `ctrl+shift+t`, `alt+F4`, `Return`, `Escape`, `Tab`, `Down`, `Prior`, `F5`. Goes to the focused window.")]
-    fn key(&self, Parameters(KeyArgs { keys }): Parameters<KeyArgs>) -> ToolResult {
-        self.input(InputMsg::Key { keys })
+    fn key(&self, Extension(parts): Extension<Parts>, Parameters(KeyArgs { keys }): Parameters<KeyArgs>) -> ToolResult {
+        self.input(&parts, InputMsg::Key { keys })
     }
 
     #[tool(description = "The last text a desktop application copied to the clipboard (empty if none yet).")]
@@ -270,13 +276,13 @@ impl Mcp {
     }
 
     #[tool(description = "Put text on the desktop clipboard, for pasting into an application.")]
-    fn clipboard_write(&self, Parameters(ClipboardWriteArgs { text }): Parameters<ClipboardWriteArgs>) -> ToolResult {
-        done(self.app.set_clipboard(text))
+    fn clipboard_write(&self, Extension(parts): Extension<Parts>, Parameters(ClipboardWriteArgs { text }): Parameters<ClipboardWriteArgs>) -> ToolResult {
+        done(self.acting(&parts).and_then(|()| self.app.set_clipboard(text)))
     }
 
     #[tool(name = "type", description = "Type text into the focused field through the keyboard layout (click it first). `\\n` is Return.")]
-    fn type_text(&self, Parameters(TextArgs { text }): Parameters<TextArgs>) -> ToolResult {
-        self.input(InputMsg::Text { text })
+    fn type_text(&self, Extension(parts): Extension<Parts>, Parameters(TextArgs { text }): Parameters<TextArgs>) -> ToolResult {
+        self.input(&parts, InputMsg::Text { text })
     }
 }
 

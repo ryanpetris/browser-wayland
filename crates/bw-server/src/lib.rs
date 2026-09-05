@@ -1,6 +1,7 @@
 //! HTTPS + WebSocket front end: serves the viewer page, authenticates the WebSocket in-band and the
-//! HTTP API with a bearer token (never a cookie), streams encoded video out and turns browser input
-//! into `Command`s.
+//! HTTP API with a bearer token (never a cookie), streams encoded video out (one encoder per viewer)
+//! and turns the controlling viewer's input into `Command`s. Two tokens: the control token acts, the
+//! viewer token only looks.
 
 mod api;
 mod elements;
@@ -22,22 +23,31 @@ use std::{
 use anyhow::{Context, Result};
 use api::ApiError;
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path as UrlPath, Query, Request, State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use bw_core::{Bytes, Codec, Command, ControlMsg, Event, FrameSink, InputMsg, StreamControl, StreamInfo, StreamMsg, WindowInfo};
+use bw_core::{Bytes, Codec, Command, ControlMsg, Event, FrameSink, InputMsg, OutputGeometry, StreamControl, StreamMsg, WindowInfo};
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager};
 use tokio::sync::mpsc;
 
 /// `None` = automatic: HEVC, then VP9, then H.264, first one the browser decodes in hardware.
 pub type CodecPolicy = Option<Codec>;
-/// Makes an encoder for one window stream: the sink the compositor feeds and a control handle that
-/// must not keep the pipeline alive (the stream ends when the compositor drops the sink).
+/// Makes an encoder for one viewer or window stream: the sink the compositor feeds and a control
+/// handle that must not keep the pipeline alive (the stream ends when the compositor drops the sink).
 pub type SinkFactory = Box<dyn Fn(mpsc::Sender<StreamMsg>) -> Result<(Box<dyn FrameSink>, Box<dyn StreamControl>)> + Send + Sync>;
+
+/// Which token a request came with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    /// Acts: input, windows, programs, the clipboard; may control the desktop.
+    Control,
+    /// Looks: the window list, elements, snapshots, the clipboard's text, the video.
+    Viewer,
+}
 
 pub struct Config {
     pub listen: SocketAddr,
@@ -49,8 +59,8 @@ pub struct Config {
     pub elements: bool,
     /// Reported to MCP clients.
     pub version: &'static str,
-    /// Per-window streams (`/ws/window/{id}`); `None` without a compositor.
-    pub window_sinks: Option<SinkFactory>,
+    /// One encoder per viewer and per window stream.
+    pub sinks: SinkFactory,
 }
 
 impl Config {
@@ -64,13 +74,13 @@ impl Config {
 }
 
 pub struct App {
-    token: RwLock<String>,
+    /// The control token and the viewer token.
+    tokens: RwLock<(String, String)>,
     data_dir: PathBuf,
     commands: calloop::channel::Sender<Command>,
-    control: Box<dyn StreamControl>,
     policy: CodecPolicy,
-    viewer: Mutex<Viewer>,
-    window_sinks: Option<SinkFactory>,
+    viewers: Mutex<Viewers>,
+    sinks: SinkFactory,
     /// Event senders of the window-stream sessions (cursor, clipboard, window list go to them too).
     window_viewers: Mutex<HashMap<u64, mpsc::Sender<Bytes>>>,
     snapshot_lock: tokio::sync::Semaphore,
@@ -80,17 +90,13 @@ pub struct App {
     port: u16,
 }
 
-#[derive(Default)]
-pub(crate) struct Viewer {
-    /// Bumped per connection so a replaced session can't act for the current one.
-    generation: u64,
-    tx: Option<mpsc::Sender<Bytes>>,
-    /// Audio has its own small queue so it can't push video into the keyframe path.
-    audio_tx: Option<mpsc::Sender<Bytes>>,
-    info: Option<StreamInfo>,
-    /// Stream id whose Config the current viewer has been sent.
-    announced: Option<u32>,
-    need_key: bool,
+/// The connected viewers and what they all see. One of them, the controller, drives the pointer and
+/// keyboard and sizes the output; the others watch the same desktop scaled to their own window.
+pub(crate) struct Viewers {
+    sessions: HashMap<u64, ViewerSession>,
+    controller: Option<u64>,
+    /// The output as the controller last sized it.
+    output: OutputGeometry,
     /// Last cursor message, replayed to a new viewer.
     cursor: Option<Bytes>,
     /// Whether a client currently holds a pointer lock, replayed to a new viewer.
@@ -98,30 +104,41 @@ pub(crate) struct Viewer {
     /// Last WINDOWS message, replayed to a new viewer, and the list it encodes (the API's view).
     windows: Option<Bytes>,
     window_list: Vec<WindowInfo>,
-    /// Per-stream message counters (every produced frame or packet, sent or dropped); wrap at u16.
-    video_seq: u16,
-    audio_seq: u16,
     /// The last clipboard text, from an application, the browser or the API (served on the API; not replayed to a viewer).
     clipboard: Option<String>,
+    next_id: u64,
 }
 
-pub async fn run(
-    cfg: Config,
-    commands: calloop::channel::Sender<Command>,
-    stream_rx: mpsc::Receiver<StreamMsg>,
-    events_rx: mpsc::UnboundedReceiver<Event>,
+impl Default for Viewers {
+    fn default() -> Self {
+        Viewers { sessions: HashMap::new(), controller: None, output: bw_core::INITIAL_OUTPUT, cursor: None, locked: false, windows: None, window_list: Vec::new(), clipboard: None, next_id: 1 }
+    }
+}
+
+pub(crate) struct ViewerSession {
+    key: Key,
+    /// State messages (cursor, windows, clipboard, role) and audio, each with a small queue of its own.
+    events: mpsc::Sender<Bytes>,
+    audio: mpsc::Sender<Bytes>,
+    audio_seq: u16,
+    /// The viewer's stage in device pixels, from its last Resize.
+    size: Option<OutputGeometry>,
+    /// Its encoder: codec, size and keyframes.
     control: Box<dyn StreamControl>,
-) -> Result<()> {
+}
+
+/// `audio_rx` carries the clients' Opus packets, for every viewer.
+pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio_rx: mpsc::Receiver<StreamMsg>, events_rx: mpsc::UnboundedReceiver<Event>) -> Result<()> {
     fs::create_dir_all(&cfg.data_dir)?;
     let token = load_or_create(&cfg.data_dir.join("token"), || Ok(random_hex(32)))?;
+    let viewer_token = load_or_create(&cfg.data_dir.join("viewer-token"), || Ok(random_hex(32)))?;
     let app = Arc::new(App {
-        token: RwLock::new(token),
+        tokens: RwLock::new((token, viewer_token)),
         data_dir: cfg.data_dir.clone(),
         commands,
-        control,
         policy: cfg.codec,
-        viewer: Mutex::default(),
-        window_sinks: cfg.window_sinks,
+        viewers: Mutex::default(),
+        sinks: cfg.sinks,
         window_viewers: Mutex::default(),
         snapshot_lock: tokio::sync::Semaphore::new(1),
         elements: cfg.elements,
@@ -129,7 +146,7 @@ pub async fn run(
         tls: cfg.tls,
         port: cfg.listen.port(),
     });
-    tokio::spawn(ws::distribute(app.clone(), stream_rx));
+    tokio::spawn(ws::distribute_audio(app.clone(), audio_rx));
     tokio::spawn(ws::forward_events(app.clone(), events_rx));
 
     let router = Router::new()
@@ -205,9 +222,21 @@ async fn window_websocket(ws: WebSocketUpgrade, UrlPath(id): UrlPath<u64>, State
     ws.max_message_size(1 + (1 << 20)).on_upgrade(move |socket| ws::window_session(socket, app, id))
 }
 
-/// `Authorization: Bearer <token>` for everything under /api and /mcp; nothing else (no cookies, no query strings in logs).
-async fn bearer(State(app): State<Arc<App>>, req: Request, next: Next) -> Response {
-    if app.authorized(req.headers()) { next.run(req).await } else { StatusCode::UNAUTHORIZED.into_response() }
+/// `Authorization: Bearer <token>` for everything under /api and /mcp; nothing else (no cookies, no query
+/// strings in logs). Which token it was rides along as a `Key` extension for the handlers and tools.
+async fn bearer(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Response {
+    match app.key_of(req.headers()) {
+        Some(key) => {
+            req.extensions_mut().insert(key);
+            next.run(req).await
+        }
+        None => StatusCode::UNAUTHORIZED.into_response(),
+    }
+}
+
+/// The viewer token may look but not act.
+fn writable(key: Key) -> Result<(), ApiError> {
+    if key == Key::Control { Ok(()) } else { Err(ApiError::Forbidden) }
 }
 
 const NO_STORE: [(header::HeaderName, &str); 1] = [(header::CACHE_CONTROL, "no-store")];
@@ -242,19 +271,19 @@ async fn api_window_elements(UrlPath(id): UrlPath<u64>, State(app): State<Arc<Ap
     }
 }
 
-async fn api_control(State(app): State<Arc<App>>, Json(msg): Json<ControlMsg>) -> Response {
-    match app.control(msg) {
+async fn api_control(Extension(key): Extension<Key>, State(app): State<Arc<App>>, Json(msg): Json<ControlMsg>) -> Response {
+    match writable(key).and_then(|()| app.control(msg)) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e) => e.into_response(),
     }
 }
 
-/// A new token: written to the data directory, printed like at startup, returned to the caller; the
-/// current viewer is closed with "wrong token" so a leaked link stops working at once.
+/// New tokens, both: written to the data directory, printed like at startup, returned to the caller;
+/// every viewer is closed with "token rotated" so a leaked link stops working at once.
 async fn api_token_rotate(headers: HeaderMap, State(app): State<Arc<App>>) -> Response {
     let presented = headers.get(header::AUTHORIZATION).and_then(|a| a.to_str().ok()).and_then(|a| a.strip_prefix("Bearer ")).unwrap_or_default();
-    match app.rotate_token(presented) {
-        Ok(token) => (NO_STORE, Json(serde_json::json!({ "token": token }))).into_response(),
+    match app.rotate_tokens(presented) {
+        Ok((token, viewer)) => (NO_STORE, Json(serde_json::json!({ "token": token, "viewer_token": viewer }))).into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -268,69 +297,76 @@ async fn api_clipboard(State(app): State<Arc<App>>) -> Response {
 }
 
 /// The body (UTF-8 text, up to 1 MiB) becomes the desktop clipboard.
-async fn api_set_clipboard(State(app): State<Arc<App>>, body: String) -> Response {
-    match app.set_clipboard(body) {
+async fn api_set_clipboard(Extension(key): Extension<Key>, State(app): State<Arc<App>>, body: String) -> Response {
+    match writable(key).and_then(|()| app.set_clipboard(body)) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e) => e.into_response(),
     }
 }
 
-async fn api_input(State(app): State<Arc<App>>, Json(msg): Json<InputMsg>) -> Response {
-    match app.input(msg) {
+async fn api_input(Extension(key): Extension<Key>, State(app): State<Arc<App>>, Json(msg): Json<InputMsg>) -> Response {
+    match writable(key).and_then(|()| app.input(msg)) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e) => e.into_response(),
     }
 }
 
 impl App {
-    fn authorized(&self, headers: &HeaderMap) -> bool {
-        let bearer = headers.get(header::AUTHORIZATION).and_then(|a| a.to_str().ok()).and_then(|a| a.strip_prefix("Bearer "));
-        bearer.is_some_and(|t| self.token_ok(t))
+    /// Which token the request carries, if a current one.
+    pub(crate) fn key_of(&self, headers: &HeaderMap) -> Option<Key> {
+        let bearer = headers.get(header::AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ")?;
+        self.key_for(bearer)
     }
 
-    pub(crate) fn token_ok(&self, t: &str) -> bool {
-        same(t, &self.token.read().unwrap())
+    pub(crate) fn key_for(&self, token: &str) -> Option<Key> {
+        let (control, viewer) = &*self.tokens.read().unwrap();
+        if same(token, control) {
+            Some(Key::Control)
+        } else if same(token, viewer) {
+            Some(Key::Viewer)
+        } else {
+            None
+        }
     }
 
-    /// The token rides in the URL fragment, which browsers never send, so no server or proxy logs it.
+    /// The tokens ride in the URL fragment, which browsers never send, so no server or proxy logs them.
     fn print_urls(&self) {
         let scheme = if self.tls { "https" } else { "http" };
-        let token = self.token.read().unwrap();
+        let (control, viewer) = &*self.tokens.read().unwrap();
         for ip in lan_ips() {
-            println!("{scheme}://{ip}:{}/#token={token}", self.port);
+            println!("{scheme}://{ip}:{}/#token={control}", self.port);
+            println!("{scheme}://{ip}:{}/#token={viewer}   (view only)", self.port);
         }
     }
 
-    /// Only the holder of the current token may rotate, checked again under the write lock so two
-    /// rotations with the same old token can't both go through.
-    fn rotate_token(&self, presented: &str) -> Result<String, ApiError> {
-        let mut current = self.token.write().unwrap();
-        if !same(presented, &current) {
-            return Err(ApiError::Unauthorized);
+    /// Only the holder of the current control token may rotate, checked again under the write lock so
+    /// two rotations with the same old token can't both go through. Both tokens change.
+    fn rotate_tokens(&self, presented: &str) -> Result<(String, String), ApiError> {
+        let mut current = self.tokens.write().unwrap();
+        if !same(presented, &current.0) {
+            return Err(if same(presented, &current.1) { ApiError::Forbidden } else { ApiError::Unauthorized });
         }
-        let token = random_hex(32);
-        // written next to the old file and renamed over it, so a crash leaves one whole token or the other
-        let path = self.data_dir.join("token");
-        let tmp = self.data_dir.join("token.new");
-        let _ = fs::remove_file(&tmp);
-        write_private(&tmp, token.as_bytes()).and_then(|()| fs::rename(&tmp, &path)).map_err(|e| ApiError::Internal(format!("token file: {e}")))?;
-        *current = token.clone();
+        let fresh = (random_hex(32), random_hex(32));
+        for (name, token) in [("token", &fresh.0), ("viewer-token", &fresh.1)] {
+            // written next to the old file and renamed over it, so a crash leaves one whole token or the other
+            let path = self.data_dir.join(name);
+            let tmp = self.data_dir.join(format!("{name}.new"));
+            let _ = fs::remove_file(&tmp);
+            write_private(&tmp, token.as_bytes()).and_then(|()| fs::rename(&tmp, &path)).map_err(|e| ApiError::Internal(format!("token file: {e}")))?;
+        }
+        *current = fresh.clone();
         drop(current);
+        // every session authenticated with an old token: dropping its senders ends it as "token rotated"
         {
-            // The connected viewer authenticated with the old token: its session ends as "token rotated",
-            // and the compositor hears what it would have on a disconnect.
-            let mut v = self.viewer.lock().unwrap();
-            v.generation += 1;
-            if v.tx.take().is_some() {
-                let _ = self.commands.send(Command::ReleaseAllInput);
-                let _ = self.commands.send(Command::ViewerDisconnected);
-            }
-            v.audio_tx = None;
+            let mut v = self.viewers.lock().unwrap();
+            v.sessions.clear();
+            v.controller = None;
         }
-        self.window_viewers.lock().unwrap().clear(); // each window session ends with "token rotated"
-        println!("token rotated; new viewer URLs:");
+        self.window_viewers.lock().unwrap().clear();
+        let _ = self.commands.send(Command::ReleaseAllInput);
+        println!("tokens rotated; new viewer URLs:");
         self.print_urls();
-        Ok(token)
+        Ok(fresh)
     }
 }
 

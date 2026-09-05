@@ -1,3 +1,6 @@
+//! WebSocket sessions: the viewers of the desktop (any number, each with its own encoder; one of them,
+//! the controller, drives the pointer and keyboard and sizes the output) and the per-window streams.
+
 use std::{
     sync::{Arc, atomic::{AtomicU64, Ordering}},
     time::Duration,
@@ -7,70 +10,27 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use bw_core::{AxisSource, Bytes, Codec, Command, ControlMsg, ControlOp, Event, InputMsg, OutputGeometry, StreamMsg};
 use tokio::sync::mpsc;
 
-use crate::{App, Viewer, protocol::{self, ClientMsg}};
+use crate::{App, Key, ViewerSession, Viewers, protocol::{self, ClientMsg, Role}};
 
-/// Forwards encoder output to whoever is the current viewer.
-pub async fn distribute(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
+/// Close codes the page understands.
+const UNAUTHORIZED: u16 = 4001;
+/// A stream that can't (re)start: no such window, the window closed, no encoder could be made.
+const GONE: u16 = 4003;
+
+/// The clients' Opus packets to every viewer; a dropped packet is a 20 ms glitch.
+pub async fn distribute_audio(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) {
     while let Some(msg) = rx.recv().await {
-        let mut v = app.viewer.lock().unwrap();
-        match msg {
-            StreamMsg::Info(info) => {
-                v.info = Some(info);
-                v.announced = None;
-                v.need_key = true;
-                v.video_seq = 0; // a new stream starts its count over (the page resets on Config)
-            }
-            StreamMsg::Audio { pts_us, data } => {
-                let seq = v.audio_seq;
-                v.audio_seq = seq.wrapping_add(1);
-                if let Some(tx) = &v.audio_tx {
-                    let _ = tx.try_send(protocol::audio(pts_us, &data, seq)); // a dropped packet is a 20 ms glitch
-                }
-            }
-            StreamMsg::Failed => {
-                v.need_key = true;
-                drop(v);
-                app.rekey(); // drops the dead pipeline and forces a frame, which rebuilds it
-            }
-            StreamMsg::Frame(f) => {
-                let (Some(tx), Some(info)) = (v.tx.clone(), v.info.clone()) else { continue };
-                if f.stream_id != info.stream_id {
-                    continue; // output of a pipeline that has since been rebuilt
-                }
-                let seq = v.video_seq;
-                v.video_seq = seq.wrapping_add(1);
-                if v.need_key && !f.keyframe {
-                    continue; // a keyframe request is outstanding; the page sees the gap in seq
-                }
-                // Config must reach the viewer before the first frame of its stream.
-                if v.announced != Some(f.stream_id) {
-                    if tx.try_send(protocol::config(&info)).is_err() {
-                        drop(v);
-                        app.rekey();
-                        continue;
-                    }
-                    v.announced = Some(f.stream_id);
-                }
-                match tx.try_send(protocol::video(&f, seq)) {
-                    Ok(()) => v.need_key = false,
-                    Err(_) => {
-                        // Viewer is slow: never send a delta after a gap. Ask for a keyframe once per gap,
-                        // and again only if the keyframe itself had to be dropped.
-                        tracing::debug!(keyframe = f.keyframe, "viewer queue full, frame dropped");
-                        let ask = !v.need_key || f.keyframe;
-                        v.need_key = true;
-                        drop(v);
-                        if ask {
-                            app.rekey();
-                        }
-                    }
-                }
+        if let StreamMsg::Audio { pts_us, data } = msg {
+            for s in app.viewers.lock().unwrap().sessions.values_mut() {
+                let seq = s.audio_seq;
+                s.audio_seq = seq.wrapping_add(1);
+                let _ = s.audio.try_send(protocol::audio(pts_us, &data, seq));
             }
         }
     }
 }
 
-/// Compositor events (cursor changes) to the current viewer.
+/// Compositor events (cursor, pointer lock, window list, clipboard) to every viewer and window session.
 pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event>) {
     while let Some(mut ev) = rx.recv().await {
         // Window lists supersede each other: a slow viewer gets the newest one, not the whole history.
@@ -80,59 +40,48 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 _ => break,
             }
         }
-        let (msg, tx, window_txs) = {
-            let mut v = app.viewer.lock().unwrap();
-            let msg = match ev {
-                Event::Cursor(img) => {
-                    let msg = protocol::cursor(img.as_ref());
-                    v.cursor = Some(msg.clone());
-                    msg
-                }
-                Event::PointerLock(locked) => {
-                    v.locked = locked;
-                    Bytes::from(vec![protocol::POINTER_LOCK, locked as u8])
-                }
-                Event::Windows(list) => {
-                    let msg = protocol::windows(&list);
-                    v.windows = Some(msg.clone());
-                    v.window_list = list;
-                    msg
-                }
-                Event::Clipboard(text) => {
-                    let msg = protocol::clipboard(&text);
-                    v.clipboard = Some(text);
-                    msg
-                }
-            };
-            (msg, v.tx.clone(), app.window_viewers.lock().unwrap().values().cloned().collect::<Vec<_>>())
+        let mut v = app.viewers.lock().unwrap();
+        let msg = match ev {
+            Event::Cursor(img) => {
+                let msg = protocol::cursor(img.as_ref());
+                v.cursor = Some(msg.clone());
+                msg
+            }
+            Event::PointerLock(locked) => {
+                v.locked = locked;
+                Bytes::from(vec![protocol::POINTER_LOCK, locked as u8])
+            }
+            Event::Windows(list) => {
+                let msg = protocol::windows(&list);
+                v.windows = Some(msg.clone());
+                v.window_list = list;
+                msg
+            }
+            Event::Clipboard(text) => {
+                let msg = protocol::clipboard(&text);
+                v.clipboard = Some(text);
+                msg
+            }
         };
-        // ponytail: a window tab that can't keep up misses a cursor change. Before the wait below, so a
-        // rotation isn't held up by these clones of senders it cleared.
-        for tx in window_txs {
-            let _ = tx.try_send(msg.clone());
+        // ponytail: a session that can't keep up misses a state change (it is dropped after ten seconds anyway)
+        for s in v.sessions.values() {
+            let _ = s.events.try_send(msg.clone());
         }
-        // State, not a frame: wait for room rather than drop it. A replaced viewer's sender just fails.
-        if let Some(tx) = tx {
-            let _ = tx.send(msg).await;
+        for tx in app.window_viewers.lock().unwrap().values() {
+            let _ = tx.try_send(msg.clone());
         }
     }
 }
 
-/// Close codes the page understands.
-const UNAUTHORIZED: u16 = 4001;
-const REPLACED: u16 = 4002;
-/// A window stream that can't (re)start: the window is gone, or there are no window streams.
-const GONE: u16 = 4003;
-
-/// The first message must be AUTH with the token; until then this socket is nobody. A wrong token,
-/// or five seconds of silence, ends it. Returns the token the session came in with.
-async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
-    let token = tokio::time::timeout(Duration::from_secs(5), async {
+/// The first message must be AUTH with a token; until then this socket is nobody. A wrong token, or
+/// five seconds of silence, ends it. Returns the token the session came in with and which one it is.
+async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<(String, Key)> {
+    let auth = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match socket.recv().await {
                 Some(Ok(Message::Binary(b))) => {
                     let t = std::str::from_utf8(b.get(1..).unwrap_or_default()).unwrap_or("");
-                    return (b.first() == Some(&protocol::AUTH) && app.token_ok(t)).then(|| t.to_string());
+                    return (b.first() == Some(&protocol::AUTH)).then(|| app.key_for(t).map(|k| (t.to_string(), k))).flatten();
                 }
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return None,
                 _ => {}
@@ -142,158 +91,74 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     .await
     .ok()
     .flatten();
-    if token.is_none() {
+    if auth.is_none() {
         let _ = socket.send(Message::Close(Some(CloseFrame { code: UNAUTHORIZED, reason: "unauthorized".into() }))).await;
     }
-    token
+    auth
 }
 
-pub async fn session(mut socket: WebSocket, app: Arc<App>) {
-    // Until the token arrives this socket can't take the stream over.
-    let Some(token) = authenticate(&mut socket, &app).await else { return };
-
-    let (tx, mut rx) = mpsc::channel::<Bytes>(8);
-    let (atx, mut arx) = mpsc::channel::<Bytes>(4);
-    // Taking over drops the previous viewer's only sender, which ends its session below.
-    let (my_gen, cursor, locked, windows) = {
-        let mut v = app.viewer.lock().unwrap();
-        if !app.token_ok(&token) {
-            // rotated between the check above and now: this socket authenticated with a dead token
-            drop(v);
-            let _ = socket.send(Message::Close(Some(CloseFrame { code: UNAUTHORIZED, reason: "token rotated".into() }))).await;
-            return;
-        }
-        if v.tx.is_some() {
-            let _ = app.commands.send(Command::ReleaseAllInput); // whatever the old viewer still held
-        }
-        v.generation += 1;
-        v.tx = Some(tx);
-        v.audio_tx = Some(atx);
-        v.announced = None;
-        v.need_key = true;
-        (v.generation, v.cursor.clone(), v.locked, v.windows.clone())
-    };
-    if let Some(c) = cursor {
-        let _ = socket.send(Message::Binary(c)).await;
-    }
-    if let Some(w) = windows {
-        let _ = socket.send(Message::Binary(w)).await;
-    }
-    if locked {
-        let _ = socket.send(Message::Binary(Bytes::from(vec![protocol::POINTER_LOCK, 1]))).await;
-    }
-    // Frames start once Hello has picked the codec (see command_for).
-
-    let mut ping = tokio::time::interval(Duration::from_secs(5));
-    let mut unanswered = 0;
+/// Hello, which picks the codec, before the pipeline exists.
+async fn hello(socket: &mut WebSocket) -> Option<(u8, u8)> {
     loop {
-        tokio::select! {
-            out = rx.recv() => match out {
-                Some(b) => if socket.send(Message::Binary(b)).await.is_err() { break },
-                None => {
-                    // replaced by a newer viewer, or the token this session came in with was rotated away:
-                    // tell the page so it stops retrying (or asks for the new token)
-                    let (code, reason) = if app.token_ok(&token) { (REPLACED, "replaced by another viewer") } else { (UNAUTHORIZED, "token rotated") };
-                    let _ = socket.send(Message::Close(Some(CloseFrame { code, reason: reason.into() }))).await;
-                    break;
-                }
-            },
-            Some(b) = arx.recv() => if socket.send(Message::Binary(b)).await.is_err() { break },
-            msg = socket.recv() => match msg {
-                Some(Ok(Message::Binary(b))) => {
-                    // Hold the viewer lock from the generation check through the send, so a takeover
-                    // can't slip its ReleaseAllInput in between.
-                    let mut v = app.viewer.lock().unwrap();
-                    if v.generation != my_gen {
-                        break; // replaced: stop acting on this socket at all
-                    }
-                    let (cmd, rekey) = protocol::decode(&b).map(|m| app.command_for(m, &mut v)).unwrap_or((None, false));
-                    if let Some(cmd) = cmd {
-                        let _ = app.commands.send(cmd);
-                    }
-                    drop(v);
-                    if rekey {
-                        app.rekey();
-                    }
-                }
-                Some(Ok(Message::Pong(_))) => unanswered = 0,
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                _ => {}
-            },
-            _ = ping.tick() => {
-                if unanswered >= 3 || socket.send(Message::Ping(Bytes::new())).await.is_err() {
-                    break; // dead peer
-                }
-                unanswered += 1;
-            }
-        }
-    }
-
-    let mut v = app.viewer.lock().unwrap();
-    if v.generation == my_gen {
-        v.tx = None;
-        v.audio_tx = None;
-        drop(v);
-        let _ = app.commands.send(Command::ReleaseAllInput);
-        let _ = app.commands.send(Command::ViewerDisconnected);
-    }
-}
-
-/// One window as its own stream (`/ws/window/{id}`): the same messages as `/ws`, except that pointer
-/// positions are relative to the window's geometry, a Resize resizes the window rather than the
-/// output, and there is no audio. Any number of these can run beside the viewer; each has its own
-/// encoder, which the compositor stops when the session ends or the window goes away.
-pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
-    let Some(token) = authenticate(&mut socket, &app).await else { return };
-    let close = async |socket: &mut WebSocket, code: u16, reason: &str| {
-        let _ = socket.send(Message::Close(Some(CloseFrame { code, reason: reason.into() }))).await;
-    };
-    let Some(factory) = &app.window_sinks else { return close(&mut socket, GONE, "no window streams").await };
-    if !app.viewer.lock().unwrap().window_list.iter().any(|w| w.id == id) {
-        return close(&mut socket, GONE, "no such window").await;
-    }
-    // Hello picks the codec, before the pipeline exists
-    let (hw, sw) = loop {
-        match socket.recv().await {
-            Some(Ok(Message::Binary(b))) => {
+        match socket.recv().await? {
+            Ok(Message::Binary(b)) => {
                 if let Some(ClientMsg::Hello { hw, sw }) = protocol::decode(&b) {
-                    break (hw, sw);
+                    return Some((hw, sw));
                 }
             }
-            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+            Ok(Message::Close(_)) | Err(_) => return None,
             _ => {}
         }
-    };
+    }
+}
+
+async fn close(socket: &mut WebSocket, code: u16, reason: &str) {
+    let _ = socket.send(Message::Close(Some(CloseFrame { code, reason: reason.into() }))).await;
+}
+
+/// A send that gives up on a peer that stopped reading, so its session ends (and with it the encoder
+/// waiting on it) instead of sitting on a full socket for good.
+async fn send(socket: &mut WebSocket, msg: Bytes) -> bool {
+    tokio::time::timeout(Duration::from_secs(10), socket.send(Message::Binary(msg))).await.is_ok_and(|r| r.is_ok())
+}
+
+/// A viewer of the desktop. The first one with a control token controls; the rest watch the same
+/// desktop scaled to their own window, and one with a control token may take control.
+pub async fn session(mut socket: WebSocket, app: Arc<App>) {
+    let Some((token, key)) = authenticate(&mut socket, &app).await else { return };
+    let Some((hw, sw)) = hello(&mut socket).await else { return };
     let (tx, mut rx) = mpsc::channel::<StreamMsg>(16);
-    let (sink, control) = match factory(tx) {
+    let (sink, control) = match (app.sinks)(tx) {
         Ok(x) => x,
         Err(e) => {
-            tracing::warn!("window stream: {e:#}");
+            tracing::warn!("viewer stream: {e:#}");
             return close(&mut socket, GONE, "no encoder").await;
         }
     };
     control.set_codec(app.choose_codec(hw, sw));
-    static KEY: AtomicU64 = AtomicU64::new(1);
-    let key = KEY.fetch_add(1, Ordering::Relaxed);
-    let (etx, mut erx) = mpsc::channel::<Bytes>(8);
-    {
-        // registered under the lock a rotation clears, so a session that came in with the old token
-        // is either cleared by it or refused here
-        let mut viewers = app.window_viewers.lock().unwrap();
-        if !app.token_ok(&token) {
-            drop(viewers);
+    let (etx, mut erx) = mpsc::channel::<Bytes>(32);
+    let (atx, mut arx) = mpsc::channel::<Bytes>(4);
+    let (id, replay) = {
+        // registered under the lock a rotation clears, so a session that came in with an old token is
+        // either cleared by it or refused here
+        let mut v = app.viewers.lock().unwrap();
+        if app.key_for(&token).is_none() {
+            drop(v);
             return close(&mut socket, UNAUTHORIZED, "token rotated").await;
         }
-        viewers.insert(key, etx);
-    }
-    let (cursor, locked, windows) = {
-        let v = app.viewer.lock().unwrap();
-        (v.cursor.clone(), v.locked, v.windows.clone())
+        let id = v.next_id;
+        v.next_id += 1;
+        v.sessions.insert(id, ViewerSession { key, events: etx, audio: atx, audio_seq: 0, size: None, control });
+        if key == Key::Control && v.controller.is_none() {
+            v.controller = Some(id);
+        }
+        let replay: Vec<Bytes> = [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id)))].into_iter().flatten().collect();
+        (id, replay)
     };
-    for msg in [cursor, windows, locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1]))].into_iter().flatten() {
+    for msg in replay {
         let _ = socket.send(Message::Binary(msg)).await;
     }
-    let _ = app.commands.send(Command::WindowStream { key, window: id, sink: Some(sink) });
+    let _ = app.commands.send(Command::ViewerStream { key: id, sink: Some(sink) });
 
     let (mut info, mut seq) = (None::<bw_core::StreamInfo>, 0u16);
     let mut ping = tokio::time::interval(Duration::from_secs(5));
@@ -314,29 +179,136 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                         seq = seq.wrapping_add(1);
                     }
                 }
+                Some(StreamMsg::Failed) | None => break None, // the page reconnects and gets a fresh pipeline
+                Some(StreamMsg::Audio { .. }) => {}
+            },
+            ev = erx.recv() => match ev {
+                Some(b) => if !send(&mut socket, b).await { break None },
+                None => break Some((UNAUTHORIZED, "token rotated")), // rotate_tokens dropped every session
+            },
+            Some(b) = arx.recv() => if !send(&mut socket, b).await { break None },
+            msg = socket.recv() => match msg {
+                Some(Ok(Message::Binary(b))) => {
+                    if app.key_for(&token).is_none() {
+                        break Some((UNAUTHORIZED, "token rotated")); // a queued command must not get through after a rotation
+                    }
+                    if let Some(m) = protocol::decode(&b) {
+                        app.viewer_message(id, key, m);
+                    }
+                }
+                Some(Ok(Message::Pong(_))) => unanswered = 0,
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break None,
+                _ => {}
+            },
+            _ = ping.tick() => {
+                if unanswered >= 3 || socket.send(Message::Ping(Bytes::new())).await.is_err() {
+                    break None; // dead peer
+                }
+                unanswered += 1;
+            }
+        }
+    };
+    {
+        let mut v = app.viewers.lock().unwrap();
+        v.sessions.remove(&id);
+        if v.controller == Some(id) {
+            // the oldest remaining control-token session takes over
+            let next = v.sessions.iter().filter(|(_, s)| s.key == Key::Control).map(|(id, _)| *id).min();
+            app.set_controller(&mut v, next);
+        }
+    }
+    let _ = app.commands.send(Command::ViewerStream { key: id, sink: None });
+    if let Some((code, reason)) = ended {
+        close(&mut socket, code, reason).await;
+    }
+}
+
+/// One window as its own stream (`/ws/window/{id}`): the same messages as `/ws`, except that pointer
+/// positions are relative to the window's geometry, a Resize resizes the window rather than the
+/// output, there is no audio, and a control token drives regardless of who controls the desktop. Any
+/// number of these can run; each has its own encoder, which the compositor stops when the session ends
+/// or the window goes away.
+pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
+    let Some((token, key)) = authenticate(&mut socket, &app).await else { return };
+    if !app.viewers.lock().unwrap().window_list.iter().any(|w| w.id == id) {
+        return close(&mut socket, GONE, "no such window").await;
+    }
+    let Some((hw, sw)) = hello(&mut socket).await else { return };
+    let (tx, mut rx) = mpsc::channel::<StreamMsg>(16);
+    let (sink, control) = match (app.sinks)(tx) {
+        Ok(x) => x,
+        Err(e) => {
+            tracing::warn!("window stream: {e:#}");
+            return close(&mut socket, GONE, "no encoder").await;
+        }
+    };
+    control.set_codec(app.choose_codec(hw, sw));
+    static KEY: AtomicU64 = AtomicU64::new(1);
+    let stream = KEY.fetch_add(1, Ordering::Relaxed);
+    let (etx, mut erx) = mpsc::channel::<Bytes>(32);
+    {
+        let mut viewers = app.window_viewers.lock().unwrap();
+        if app.key_for(&token).is_none() {
+            drop(viewers);
+            return close(&mut socket, UNAUTHORIZED, "token rotated").await;
+        }
+        viewers.insert(stream, etx);
+    }
+    let replay: Vec<Bytes> = {
+        let v = app.viewers.lock().unwrap();
+        let role = if key == Key::Control { Role::Controller } else { Role::Viewer };
+        [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(role))].into_iter().flatten().collect()
+    };
+    for msg in replay {
+        let _ = socket.send(Message::Binary(msg)).await;
+    }
+    let _ = app.commands.send(Command::WindowStream { key: stream, window: id, sink: Some(sink) });
+
+    let (mut info, mut seq) = (None::<bw_core::StreamInfo>, 0u16);
+    let mut ping = tokio::time::interval(Duration::from_secs(5));
+    let mut unanswered = 0;
+    let ended = loop {
+        tokio::select! {
+            msg = rx.recv() => match msg {
+                Some(StreamMsg::Info(i)) => {
+                    seq = 0;
+                    if !send(&mut socket, protocol::config(&i)).await { break None }
+                    info = Some(i);
+                }
+                Some(StreamMsg::Frame(f)) => {
+                    if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
+                        if !send(&mut socket, protocol::video(&f, seq)).await { break None }
+                        seq = seq.wrapping_add(1);
+                    }
+                }
                 Some(StreamMsg::Failed) => break None, // the page reconnects and gets a fresh pipeline
                 Some(StreamMsg::Audio { .. }) => {}
                 None => break Some((GONE, "window closed")), // the compositor dropped the stream: the window is gone
             },
             ev = erx.recv() => match ev {
                 Some(b) => if !send(&mut socket, b).await { break None },
-                None => break Some((UNAUTHORIZED, "token rotated")), // rotate_token dropped every window session's sender
+                None => break Some((UNAUTHORIZED, "token rotated")),
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) => {
-                    if !app.token_ok(&token) {
-                        break Some((UNAUTHORIZED, "token rotated")); // a queued command must not get through after a rotation
+                    if app.key_for(&token).is_none() {
+                        break Some((UNAUTHORIZED, "token rotated"));
                     }
                     let cmd = match protocol::decode(&b) {
-                        // window-relative, resolved against the live geometry on the compositor thread
-                        Some(ClientMsg::MotionAbs { x, y }) => Some(Command::Input(InputMsg::Move { x: x as f64, y: y as f64, window: Some(id) })),
-                        Some(ClientMsg::Resize { css_w, css_h, .. }) => Some(Command::Control(ControlMsg { id, op: ControlOp::Resize { w: css_w as i32, h: css_h as i32 } })),
                         Some(ClientMsg::RequestKeyframe) => {
                             control.request_keyframe();
                             Some(Command::RequestFullFrame)
                         }
-                        Some(ClientMsg::Hello { .. }) | None => None,
-                        Some(m) => app.command_for(m, &mut app.viewer.lock().unwrap()).0,
+                        Some(_) if key != Key::Control => None, // the viewer token watches
+                        // window-relative, resolved against the live geometry on the compositor thread
+                        Some(ClientMsg::MotionAbs { x, y }) => Some(Command::Input(InputMsg::Move { x: x as f64, y: y as f64, window: Some(id) })),
+                        Some(ClientMsg::Resize { css_w, css_h, .. }) => Some(Command::Control(ControlMsg { id, op: ControlOp::Resize { w: css_w as i32, h: css_h as i32 } })),
+                        Some(ClientMsg::SetClipboard(text)) => {
+                            app.viewers.lock().unwrap().clipboard = Some(text.clone());
+                            Some(Command::SetClipboard(text))
+                        }
+                        Some(m) => input_command(m),
+                        None => None,
                     };
                     if let Some(cmd) = cmd {
                         let _ = app.commands.send(cmd);
@@ -354,27 +326,29 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
             }
         }
     };
-    app.window_viewers.lock().unwrap().remove(&key);
-    let _ = app.commands.send(Command::WindowStream { key, window: id, sink: None });
-    let _ = app.commands.send(Command::ReleaseAllInput);
+    app.window_viewers.lock().unwrap().remove(&stream);
+    let _ = app.commands.send(Command::WindowStream { key: stream, window: id, sink: None });
+    if key == Key::Control {
+        let _ = app.commands.send(Command::ReleaseAllInput);
+    }
     if let Some((code, reason)) = ended {
         close(&mut socket, code, reason).await;
     }
 }
 
-/// A send that gives up on a peer that stopped reading, so its session ends (and with it the encoder
-/// waiting on it) instead of sitting on a full socket for good.
-async fn send(socket: &mut WebSocket, msg: Bytes) -> bool {
-    tokio::time::timeout(Duration::from_secs(10), socket.send(Message::Binary(msg))).await.is_ok_and(|r| r.is_ok())
+impl Viewers {
+    pub(crate) fn role_of(&self, id: u64) -> Role {
+        if self.controller == Some(id) {
+            Role::Controller
+        } else if self.sessions.get(&id).is_some_and(|s| s.key == Key::Control) {
+            Role::Participant
+        } else {
+            Role::Viewer
+        }
+    }
 }
 
 impl App {
-    /// Ask for a keyframe. The compositor only renders on damage, so also force a frame.
-    pub fn rekey(&self) {
-        self.control.request_keyframe();
-        let _ = self.commands.send(Command::RequestFullFrame);
-    }
-
     /// Pick the codec for a browser whose `hw` mask passed the prefer-hardware probe and `sw` the plain one
     /// (bit0 H.264, bit1 HEVC, bit2 VP9).
     fn choose_codec(&self, hw: u8, sw: u8) -> Codec {
@@ -398,52 +372,115 @@ impl App {
         }
     }
 
-    /// Runs with the viewer lock held; returns the command to forward and whether to rekey after unlocking.
-    fn command_for(&self, m: ClientMsg, v: &mut Viewer) -> (Option<Command>, bool) {
+    /// A message from a viewer session: its size always counts (the output's if it controls, its own
+    /// stream's scale otherwise); input only from the controller; window actions and the clipboard
+    /// from any control token.
+    fn viewer_message(&self, id: u64, key: Key, m: ClientMsg) {
+        let mut v = self.viewers.lock().unwrap();
+        let controls = v.controller == Some(id);
         let cmd = match m {
-            ClientMsg::Hello { hw, sw } => {
-                let codec = self.choose_codec(hw, sw);
-                tracing::info!(?codec, hw, sw, "viewer codec");
-                self.control.set_codec(codec); // non-blocking: the old pipeline is dropped elsewhere
-                v.need_key = true;
-                return (Some(Command::ViewerConnected), true);
-            }
             // dpr bounds keep a bogus value from turning into a giant dmabuf allocation
             ClientMsg::Resize { css_w, css_h, dpr } if (0.5..=8.0).contains(&dpr) => {
-                Command::Resize(geometry(css_w, css_h, dpr as f64))
+                let geo = geometry(css_w, css_h, dpr as f64);
+                if let Some(s) = v.sessions.get_mut(&id) {
+                    s.size = Some(geo);
+                }
+                if controls {
+                    v.output = geo;
+                    self.retarget(&v);
+                    Some(Command::Resize(geo))
+                } else {
+                    if let Some(s) = v.sessions.get(&id) {
+                        s.control.set_size(fit(&v.output, &geo));
+                    }
+                    None
+                }
             }
-            ClientMsg::MotionAbs { x, y } => Command::PointerMotionAbsolute { x: x as f64, y: y as f64 },
-            ClientMsg::MotionRel { dx, dy } => Command::PointerMotionRelative { dx: dx as f64, dy: dy as f64 },
-            ClientMsg::Button { button, pressed } => Command::PointerButton { button: button as u32, pressed },
-            ClientMsg::Axis { mode: 1, dx, dy } => Command::wheel(dx as f64, dy as f64),
-            // ponytail: pixel (and page) deltas go out as finger scroll with no axis_stop;
-            // add a stop timer if clients need kinetic scrolling.
-            ClientMsg::Axis { dx, dy, .. } => Command::PointerAxis {
-                source: AxisSource::Finger,
-                dx: dx as f64,
-                dy: dy as f64,
-                v120: None,
-            },
-            ClientMsg::Key { evdev, pressed } => Command::Key { evdev: evdev as u32, pressed },
-            ClientMsg::Blur => Command::ReleaseAllInput,
-            ClientMsg::PointerLockLost => Command::ReleasePointerLock,
-            ClientMsg::Control(m) => Command::Control(m),
-            ClientMsg::SetClipboard(text) => {
-                v.clipboard = Some(text.clone());
-                Command::SetClipboard(text)
+            ClientMsg::TakeControl => {
+                if key == Key::Control {
+                    self.set_controller(&mut v, Some(id));
+                }
+                None
             }
             ClientMsg::RequestKeyframe => {
-                v.need_key = true;
-                return (None, true);
+                if let Some(s) = v.sessions.get(&id) {
+                    s.control.request_keyframe();
+                }
+                Some(Command::RequestFullFrame)
             }
-            ClientMsg::Resize { .. } => return (None, false),
+            ClientMsg::Control(m) if key == Key::Control => Some(Command::Control(m)),
+            ClientMsg::SetClipboard(text) if key == Key::Control => {
+                v.clipboard = Some(text.clone());
+                Some(Command::SetClipboard(text))
+            }
+            m if controls => input_command(m),
+            _ => None,
         };
-        (Some(cmd), false)
+        drop(v);
+        if let Some(cmd) = cmd {
+            let _ = self.commands.send(cmd);
+        }
     }
+
+    /// Hand control to `next` (none: nobody drives). The desktop takes the new controller's size, every
+    /// stream is re-fitted, and the two sessions concerned learn their roles.
+    fn set_controller(&self, v: &mut Viewers, next: Option<u64>) {
+        let old = v.controller;
+        if old == next {
+            return;
+        }
+        v.controller = next;
+        let _ = self.commands.send(Command::ReleaseAllInput); // whatever the old controller held
+        if let Some(size) = next.and_then(|id| v.sessions.get(&id)).and_then(|s| s.size) {
+            v.output = size;
+            let _ = self.commands.send(Command::Resize(size));
+        }
+        self.retarget(v);
+        for id in [old, next].into_iter().flatten() {
+            if let Some(s) = v.sessions.get(&id) {
+                let _ = s.events.try_send(protocol::role(v.role_of(id)));
+            }
+        }
+    }
+
+    /// Every viewer's encoder scales the output to that viewer's window (the controller's is the output itself).
+    fn retarget(&self, v: &Viewers) {
+        for s in v.sessions.values() {
+            if let Some(size) = s.size {
+                s.control.set_size(fit(&v.output, &size));
+            }
+        }
+    }
+}
+
+/// Pointer, keyboard and window messages as compositor commands (the ones any driving session sends the same way).
+fn input_command(m: ClientMsg) -> Option<Command> {
+    Some(match m {
+        ClientMsg::MotionAbs { x, y } => Command::PointerMotionAbsolute { x: x as f64, y: y as f64 },
+        ClientMsg::MotionRel { dx, dy } => Command::PointerMotionRelative { dx: dx as f64, dy: dy as f64 },
+        ClientMsg::Button { button, pressed } => Command::PointerButton { button: button as u32, pressed },
+        ClientMsg::Axis { mode: 1, dx, dy } => Command::wheel(dx as f64, dy as f64),
+        // ponytail: pixel (and page) deltas go out as finger scroll with no axis_stop;
+        // add a stop timer if clients need kinetic scrolling.
+        ClientMsg::Axis { dx, dy, .. } => Command::PointerAxis { source: AxisSource::Finger, dx: dx as f64, dy: dy as f64, v120: None },
+        ClientMsg::Key { evdev, pressed } => Command::Key { evdev: evdev as u32, pressed },
+        ClientMsg::Blur => Command::ReleaseAllInput,
+        ClientMsg::PointerLockLost => Command::ReleasePointerLock,
+        ClientMsg::Control(m) => Command::Control(m),
+        _ => return None,
+    })
 }
 
 /// CSS size × devicePixelRatio, rounded down to even (4:2:0 encoders), capped at 8K.
 fn geometry(css_w: u16, css_h: u16, dpr: f64) -> OutputGeometry {
     let px = |css: u16| (((css as f64 * dpr).round() as u32).min(8192) & !1).max(2);
     OutputGeometry { width_px: px(css_w), height_px: px(css_h), scale: dpr, refresh_mhz: 60_000 }
+}
+
+/// The output scaled to fit a viewer's window (never up), even-sized for the encoders. A viewer whose
+/// window is the output's size, the controller, gets the frames as they are.
+fn fit(output: &OutputGeometry, stage: &OutputGeometry) -> (u32, u32) {
+    let k = (stage.width_px as f64 / output.width_px as f64).min(stage.height_px as f64 / output.height_px as f64).min(1.0);
+    let even = |px: f64| ((px.round() as u32) & !1).max(2);
+    (even(output.width_px as f64 * k), even(output.height_px as f64 * k))
 }

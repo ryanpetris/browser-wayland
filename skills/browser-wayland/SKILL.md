@@ -76,6 +76,7 @@ curl -s -H "$H" https://host:8443/api/windows | jq
 | Status | Meaning | What to do |
 |---|---|---|
 | 401 | missing or wrong bearer token | check `Authorization: Bearer` |
+| 403 | the token is the view-only one (`read-only token`) | it can list windows, read elements, take snapshots and read the clipboard, nothing else; ask for the control token |
 | 404 | no such window | the window closed; list again |
 | 429 | another snapshot is in flight | one at a time; retry after it returns |
 | 500 | the snapshot render failed, or the requested size is out of range (the body says which) | a retry only helps the former; lower `scale` for the latter |

@@ -5,6 +5,8 @@ Generated from the code (`UPDATE_REFERENCE=1 cargo test -p bw-server reference`)
 ## HTTP API
 
 Every `/api` request carries `Authorization: Bearer <token>`; `401` (empty body) otherwise. The
+viewer token (the server prints it as "view only") reads: the acting routes and tools answer `403`
+`read-only token` to it. The
 statuses in the table come with a JSON body `{"error": "..."}`. A request body the server can't read is
 rejected before that with a plain-text message: `400` invalid JSON, `415` missing
 `Content-Type: application/json`, `422` wrong shape. Coordinates are logical pixels.
@@ -19,7 +21,7 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `POST /api/input` | **Input** | `202`; `404` unknown window; `503` compositor gone |
 | `GET /api/clipboard` | | the last text an application copied, `text/plain`; `204` before any |
 | `PUT /api/clipboard` | UTF-8 text body | becomes the desktop clipboard; `202`; `413` over 1 MiB |
-| `POST /api/token/rotate` | | `{"token": …}`: a new token replaces the old one at once (file, viewers, API); the server prints the new URLs |
+| `POST /api/token/rotate` | | `{"token": …, "viewer_token": …}`: new tokens replace both at once (files, viewers, API); the server prints the new URLs |
 | `POST /mcp` | MCP Streamable HTTP | the tools below |
 | `GET /skill/SKILL.md`, `GET /skill/reference.md` | no token needed | this documentation |
 

@@ -13,6 +13,8 @@ of a window, and a small desktop UI in the viewer built on the same data. Wire f
 | Window identity | `u64` from a counter, stored in the `Window` user data on first sight. Stable, never reused. |
 | Where the page talks | The existing WebSocket: `Windows` (server → client) and `Control` (client → server) JSON messages. |
 | Where scripts talk | `/api/...` on the same axum router, bearer token. |
+| Two tokens | The control token acts; the viewer token (`viewer-token`, printed as "view only") reads: window list, elements, snapshots, clipboard text, the video. Acting routes answer `403`, acting MCP tools a tool error. |
+| Several viewers | Each session has its own encoder (codec and size of its own); one controller at a time drives input and sizes the output, the first control-token session or whoever took control last; the rest watch letterboxed. |
 | "Focused" | The compositor's intent: the window `focus_window` last activated (or that was just mapped), not the client-acknowledged xdg state, which lags a round trip and is wrong for a hung client. |
 | Update timestamps | Whole-second resolution. It is part of the diffed list, so finer resolution would turn a 60 fps client into sixty lists a second. |
 | Snapshot content | The window's xdg geometry (shadows clipped), popups included, minimized windows included, rendered offscreen at `scale` × output scale. The full screenshot builds the output's elements itself (`output_elements`) at the same kind of scale. |
@@ -177,6 +179,27 @@ needs no permission) delivers the text, that goes to the desktop as `SetClipboar
 press and release follow, so the application pastes the browser's content. If no paste event comes
 within 150 ms the key goes through on its own.
 
+## Viewers
+
+`ws.rs`. `Viewers` holds every session (`ViewerSession`: which token, its event and audio senders, its
+last size, and the `StreamControl` of its own encoder) and the shared state they all see (cursor,
+pointer lock, window list, clipboard text, the output as the controller last sized it). A session
+authenticates, sends `Hello` (which picks its codec), gets an encoder from the server's `SinkFactory`
+and hands the sink to the compositor with `Command::ViewerStream`; the compositor submits every
+output frame to every viewer sink (each with its own dup of the dmabuf fd and a share of the swapchain
+lease, so the slot is free when the last encoder is done) and encodes nothing while there is none.
+Frames go from each session's own channel to its socket in order, with a ten-second send deadline, the
+way window streams do; audio and events are broadcast with `try_send`.
+
+The controller's `Resize` becomes `Command::Resize` and re-fits everyone else (`retarget`); another
+session's `Resize` only sets its own encoder's size (`fit`: the output's aspect within its window, never
+enlarged, even-sized). `set_size` on a `GstSink` puts a caps filter after `vapostproc`, which scales on
+the GPU on the way to NV12, and the stream's `scale` becomes `output scale × target / output width`, so
+the page's logical mapping still holds. `TakeControl` from a control-token session, or the controller
+leaving (the oldest remaining control-token session inherits), goes through `set_controller`: release
+all input, resize the output to the new controller's size, re-fit, tell both sessions their `Role`. A
+token rotation drops every session's senders, which ends them with `4001`.
+
 ## Window streams
 
 `window_stream.rs`. `Command::WindowStream { key, window, sink }` starts (or, with no sink, stops) one
@@ -241,20 +264,27 @@ read it with `useSyncExternalStore` and send actions back through the engine.
 
 ## Security model
 
-There are no cookies, so there is no ambient credential to ride on: every HTTP request carries the
-bearer token and the WebSocket authenticates with its first message. `spawn` is remote code execution
-for whoever holds the token, which the viewer already implied (it can type into a terminal). Snapshot
+There are no cookies, so there is no ambient credential to ride on: every HTTP request carries a
+bearer token and the WebSocket authenticates with its first message. Two tokens: the control token can
+do everything (`spawn` is remote code execution for whoever holds it, which the viewer already implied,
+since it can type into a terminal); the viewer token is for showing the desktop to someone who should
+only watch: it gets the video, the window list, elements, snapshots and the clipboard's text, and `403`
+(or a tool error) for anything that acts, including taking control. The bearer middleware tags each
+request with which token it carried; handlers and MCP tools check the tag. Snapshot
 rendering is bounded by the one-in-flight rule and the pixel cap. The viewer receives the token once in
 its URL fragment (so it never reaches the server's or a proxy's log), moves it into `sessionStorage` (this
 tab only) and strips it from the address bar, so the URL can be shared or bookmarked without it; a tab with no token shows a dialog asking for one. `POST /api/token/rotate`
-replaces the token everywhere at once and closes the connected viewer with `4001 token rotated`; the
-server prints the new URLs. Per-viewer tokens with individual revocation are not implemented. Window streams (`/ws/window/{id}`)
+(control token) replaces both tokens everywhere at once and closes every session with `4001 token
+rotated`; the server prints the new URLs. Per-person tokens with individual revocation are not implemented. Window streams (`/ws/window/{id}`)
 cost an encoder and a swapchain each and are not limited: the token holder is trusted with that.
 
 ## Deferred
 
 - Window streams: audio, a bitrate scaled to the window's size, sharing one render between two
   viewers of the same window.
+- Viewers: showing the controller's pointer to the others; a bitrate scaled to each stream's size;
+  the shared swapchain has four slots, so a viewer whose pipeline stalls holds up to three of them for
+  the ten seconds until its session is dropped.
 - Decorations: hover highlights on the buttons, a right-click menu, borders around the client area.
 - Elements: acting on an element through AT-SPI (activate, set text) instead of clicking its rectangle;
   element states (checked, focused, disabled); Flatpak applications, whose pid on the bus is the sandbox's.

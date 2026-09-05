@@ -18,7 +18,7 @@ const ROUTES: &str = "\
 | `POST /api/input` | **Input** | `202`; `404` unknown window; `503` compositor gone |
 | `GET /api/clipboard` | | the last text an application copied, `text/plain`; `204` before any |
 | `PUT /api/clipboard` | UTF-8 text body | becomes the desktop clipboard; `202`; `413` over 1 MiB |
-| `POST /api/token/rotate` | | `{\"token\": …}`: a new token replaces the old one at once (file, viewers, API); the server prints the new URLs |
+| `POST /api/token/rotate` | | `{\"token\": …, \"viewer_token\": …}`: new tokens replace both at once (files, viewers, API); the server prints the new URLs |
 | `POST /mcp` | MCP Streamable HTTP | the tools below |
 | `GET /skill/SKILL.md`, `GET /skill/reference.md` | no token needed | this documentation |
 ";
@@ -31,7 +31,7 @@ pub fn markdown() -> String {
     let mut out = String::new();
     out.push_str("# browser-wayland API and MCP reference\n\n");
     out.push_str("Generated from the code (`UPDATE_REFERENCE=1 cargo test -p bw-server reference`); do not edit.\n\n");
-    out.push_str("## HTTP API\n\nEvery `/api` request carries `Authorization: Bearer <token>`; `401` (empty body) otherwise. The\nstatuses in the table come with a JSON body `{\"error\": \"...\"}`. A request body the server can't read is\nrejected before that with a plain-text message: `400` invalid JSON, `415` missing\n`Content-Type: application/json`, `422` wrong shape. Coordinates are logical pixels.\n\n");
+    out.push_str("## HTTP API\n\nEvery `/api` request carries `Authorization: Bearer <token>`; `401` (empty body) otherwise. The\nviewer token (the server prints it as \"view only\") reads: the acting routes and tools answer `403`\n`read-only token` to it. The\nstatuses in the table come with a JSON body `{\"error\": \"...\"}`. A request body the server can't read is\nrejected before that with a plain-text message: `400` invalid JSON, `415` missing\n`Content-Type: application/json`, `422` wrong shape. Coordinates are logical pixels.\n\n");
     out.push_str(ROUTES);
     for (name, s) in [("Window", schema::<WindowInfo>()), ("Control", schema::<ControlMsg>()), ("Input", schema::<InputMsg>()), ("Elements", schema::<Page>())] {
         out.push_str(&format!("\n## {name}\n\n```json\n{s}\n```\n"));

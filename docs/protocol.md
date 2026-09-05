@@ -1,20 +1,23 @@
 # Protocol and HTTP API
 
 The server speaks two things: a binary WebSocket protocol for the viewer page and a JSON/PNG HTTP API
-for scripts. Both are guarded by the one shared token from the data directory (`token`).
+for scripts. Both are guarded by two shared tokens from the data directory: `token`, the control token,
+which may do everything, and `viewer-token`, which may only look (the server prints its URL as "view
+only"): the video, the window list, elements, snapshots and the clipboard's text, but no input, window
+actions, programs or clipboard writes.
 
 ## Authentication
 
 - **Viewer page** (`/`, `/app.js`, `/app.css`): public. The token arrives once in the
-  URL fragment (`/#token=…`, the URL the server prints; `?token=` is accepted too), is moved into
-  `sessionStorage` and stripped from the address bar; a page with no token shows a paste box.
-- **WebSocket** (`/ws`): the first message must be `AUTH` with the token. Until then the socket is
-  nobody: nothing is processed, and it cannot take the stream over. A wrong token, or five seconds of
-  silence, closes it with code **4001** `unauthorized`.
+  URL fragment (`/#token=…`, the URLs the server prints; `?token=` is accepted too), is moved into
+  `sessionStorage` and stripped from the address bar; a page with no token shows a dialog asking for one.
+- **WebSocket** (`/ws`): the first message must be `AUTH` with a token. Until then the socket is
+  nobody: nothing is processed. A wrong token, or five seconds of silence, closes it with code **4001**
+  `unauthorized`. Which token it was decides the session's role (below).
 - **Window streams** (`/ws/window/{id}`): authenticated like `/ws`; see below.
 - **HTTP API** (`/api/...`): `Authorization: Bearer <token>`. Nothing else is accepted, so the token
-  never appears in a URL the server or a proxy logs.
-- `POST /api/token/rotate` (bearer) replaces the token everywhere at once.
+  never appears in a URL the server or a proxy logs. The viewer token gets `403` from the routes that act.
+- `POST /api/token/rotate` (control token) replaces both tokens everywhere at once.
 
 No cookies are used anywhere.
 
@@ -34,6 +37,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x05` | Audio | `u8 0` `u16 seq` `u64 pts_us` then one 20 ms Opus packet. `seq` counts every packet, sent or not. |
 | `0x06` | Windows | JSON array of window objects (see below), the whole list, whenever anything in it changed. Replayed to a new viewer. |
 | `0x07` | Clipboard | UTF-8 text a desktop application put on the clipboard (text mime types only, at most 1 MiB). Not replayed: a viewer that reconnects keeps its browser clipboard. |
+| `0x08` | Role | `u8`: what this session may do. 0 watch only (the viewer token); 1 act but not drive (a control token while another session controls); 2 control: its pointer, keyboard and window size are the desktop's. Sent after `AUTH` and whenever it changes. |
 
 ### Client → server
 
@@ -51,18 +55,31 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x89` | Blur | none. Window blur, page hidden: releases every held key and button. |
 | `0x8A` | PointerLockLost | none. The browser lost its lock (Escape): the client's lock is released and not re-taken until the next click. |
 | `0x8B` | Control | JSON control message (below). |
-| `0x8C` | SetClipboard | UTF-8 text the browser pasted; it becomes the desktop clipboard, offered to Wayland and X11 clients. |
+| `0x8C` | SetClipboard | UTF-8 text the browser pasted; it becomes the desktop clipboard, offered to Wayland and X11 clients. Control token only. |
+| `0x8D` | TakeControl | none. A control-token session becomes the controller; the desktop takes its size. |
 
 ### Close codes
 
 | Code | Meaning |
 |---|---|
-| 4001 | unauthorized: no or wrong token within five seconds, or the token was rotated |
-| 4002 | replaced by another viewer (one at a time; the newest wins) |
-| 4003 | a window stream that can't run: no such window, the window closed, no encoder could be made, or no window streams (`--fake-source`) |
+| 4001 | unauthorized: no or wrong token within five seconds, or the tokens were rotated |
+| 4003 | a stream that can't run: no such window, the window closed, or no encoder could be made |
 
-The page shows these (a token dialog for 4001, a card for the other two) and stops retrying; on any
-other close it reconnects after a second.
+The page shows these (a token dialog for 4001, a card for 4003) and stops retrying; on any other close
+it reconnects after a second.
+
+### Viewers
+
+Any number of sessions may watch the desktop at once; each has its own encoder, so each gets the
+codec its browser decodes best and a stream scaled to fit its own window. One session at a time is the
+**controller**: the first control-token session to connect, until it leaves (then the oldest
+remaining control-token session) or another control-token session sends `TakeControl`. The
+controller's pointer and keyboard messages drive the desktop, and its `Resize` sizes the output; the
+others' pointer and keyboard messages are ignored and their `Resize` only sets the size their own
+stream is scaled to (the output's aspect, never enlarged; the page letterboxes it). A control-token
+session that isn't controlling still acts through `Control` and `SetClipboard`, and through the API;
+a viewer-token session can't. Control changes send `Role` to the two sessions concerned and release
+whatever the old controller held.
 
 ### Window streams (`/ws/window/{id}`)
 
@@ -74,14 +91,14 @@ the viewer's panel opens one, sized to the window). The same messages as `/ws`, 
   only, like `resize` below).
 - Pointer positions are relative to the window's geometry, as in the input message (they are forwarded
   as one, resolved against the live geometry). Keys and buttons go where they always go (the focused
-  window, the pointer).
-  Focusing the tab activates the window.
+  window, the pointer). Any control-token session drives its popup, whoever controls the desktop; a
+  viewer-token session only watches. Focusing the tab activates the window.
 - `Cursor`, `PointerLock`, `Windows` and `Clipboard` arrive as on `/ws`; there is no audio. The page
   uses the window list only for the tab title.
 - Any number can run beside the viewer, each with its own encoder (one `--bitrate` each). The
   compositor renders a window stream only when that window changed; it drops the stream when the
   window closes (close code 4003) or the socket ends. `Hello` still picks the codec. A token rotation
-  ends them all with 4001. A tab that stops reading for ten seconds is dropped.
+  ends them all with 4001. A tab that stops reading for ten seconds is dropped, as is a viewer.
 
 ## HTTP API
 
@@ -106,11 +123,12 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `POST /api/input` | Body: an input message (below). `202`; `404` unknown window; `503` compositor gone. |
 | `GET /api/clipboard` | The last text a desktop application copied, as `text/plain`; `204` before any. |
 | `PUT /api/clipboard` | Body: UTF-8 text that becomes the desktop clipboard. `202`; `413` over 1 MiB. |
-| `POST /api/token/rotate` | Replaces the token: written to the data directory, printed as new URLs, returned as `{"token": …}`; the connected viewer is closed with `4001 token rotated` and the old token stops working. Not an MCP tool. |
+| `POST /api/token/rotate` | Replaces both tokens: written to the data directory, printed as new URLs, returned as `{"token": …, "viewer_token": …}`; every session is closed with `4001 token rotated` and the old tokens stop working. Control token only; not an MCP tool. |
 | `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` the tree couldn't be read: no D-Bus session or accessibility bus, the application went away, or 2 s passed (body: `{"error": …}`), `404` unknown id. |
 
-Status codes: `401` (empty body) missing or wrong bearer token; the statuses above come with
-`{"error": "..."}`. A body axum can't read is rejected with a plain-text message: `400` invalid JSON,
+Status codes: `401` (empty body) missing or wrong bearer token; `403` `read-only token` from `POST
+/api/control`, `POST /api/input`, `PUT /api/clipboard` and `POST /api/token/rotate` with the viewer
+token; the statuses above come with `{"error": "..."}`. A body axum can't read is rejected with a plain-text message: `400` invalid JSON,
 `415` missing `Content-Type: application/json`, `422` wrong shape; bodies are limited to 2 MiB.
 
 Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; see [mcp.md](mcp.md)) and

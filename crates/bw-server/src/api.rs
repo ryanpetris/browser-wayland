@@ -19,6 +19,8 @@ pub enum ApiError {
     Disabled(&'static str),
     /// The presented token isn't the current one (rotation).
     Unauthorized,
+    /// The viewer token: it can look, not act.
+    Forbidden,
     /// No such window.
     NotFound,
     /// Another snapshot is in flight.
@@ -36,6 +38,7 @@ impl ApiError {
         match self {
             ApiError::Disabled(_) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
+            ApiError::Forbidden => StatusCode::FORBIDDEN,
             ApiError::NotFound => StatusCode::NOT_FOUND,
             ApiError::Busy => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
@@ -50,6 +53,7 @@ impl std::fmt::Display for ApiError {
         match self {
             ApiError::Disabled(what) => f.write_str(what),
             ApiError::Unauthorized => f.write_str("not the current token"),
+            ApiError::Forbidden => f.write_str("read-only token"),
             ApiError::NotFound => f.write_str("no such window"),
             ApiError::Busy => f.write_str("another snapshot is in flight"),
             ApiError::TooLarge => f.write_str("over 1 MiB"),
@@ -65,16 +69,16 @@ impl IntoResponse for ApiError {
 }
 
 impl App {
-    /// The window list the viewer was last sent.
+    /// The window list the viewers were last sent.
     pub fn windows(&self) -> Vec<WindowInfo> {
-        self.viewer.lock().unwrap().window_list.clone()
+        self.viewers.lock().unwrap().window_list.clone()
     }
 
     /// One window and the current output scale.
     fn window(&self, id: u64) -> Result<(WindowInfo, f64), ApiError> {
-        let v = self.viewer.lock().unwrap();
+        let v = self.viewers.lock().unwrap();
         let win = v.window_list.iter().find(|w| w.id == id).cloned().ok_or(ApiError::NotFound)?;
-        Ok((win, v.info.as_ref().map_or(1.0, |i| i.scale)))
+        Ok((win, v.output.scale))
     }
 
     /// The window's UI elements from its accessibility tree (see `elements.rs`).
@@ -126,15 +130,17 @@ impl App {
     pub fn fit_scale(&self, id: Option<u64>, px: f64) -> f64 {
         let long_side = match id {
             Some(id) => self.window(id).map(|(w, scale)| w.w.max(w.h) as f64 * scale).ok(),
-            // no stream yet (no viewer has connected): the output is still the initial one
-            None => Some(self.viewer.lock().unwrap().info.as_ref().map_or(bw_core::INITIAL_OUTPUT.width_px.max(bw_core::INITIAL_OUTPUT.height_px), |i| i.width.max(i.height)) as f64),
+            None => Some({
+                let out = self.viewers.lock().unwrap().output;
+                out.width_px.max(out.height_px) as f64
+            }),
         };
         long_side.map_or(1.0, |side| (px / side.max(1.0)).min(1.0))
     }
 
     /// The last text a desktop application copied.
     pub fn clipboard(&self) -> Option<String> {
-        self.viewer.lock().unwrap().clipboard.clone()
+        self.viewers.lock().unwrap().clipboard.clone()
     }
 
     /// Text becomes the desktop clipboard (and what `clipboard()` reports); fire-and-forget like control.
@@ -142,7 +148,7 @@ impl App {
         if text.len() > 1 << 20 {
             return Err(ApiError::TooLarge);
         }
-        self.viewer.lock().unwrap().clipboard = Some(text.clone());
+        self.viewers.lock().unwrap().clipboard = Some(text.clone());
         self.send(Command::SetClipboard(text))
     }
 

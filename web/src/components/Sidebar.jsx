@@ -29,12 +29,13 @@ export function Sidebar({ viewer, tab, onTab, hidden }) {
 
 function WindowList({ viewer }) {
   const windows = useStore(viewer.store, s => s.windows);
+  const acts = useStore(viewer.store, s => s.role) !== 'viewer'; // the viewer token only watches
   const order = windows.slice().sort((a, b) => a.minimized - b.minimized || b.z - a.z); // top-most first, minimized last
   return (
     <div className="flex flex-col">
-      <Spawn viewer={viewer} />
-      {order.length === 0 && <div className="px-4 py-8 text-center text-sm text-zinc-600">No windows yet. Run a command above.</div>}
-      {order.map(w => <WindowRow key={w.id} viewer={viewer} w={w} />)}
+      {acts && <Spawn viewer={viewer} />}
+      {order.length === 0 && <div className="px-4 py-8 text-center text-sm text-zinc-600">{acts ? 'No windows yet. Run a command above.' : 'No windows.'}</div>}
+      {order.map(w => <WindowRow key={w.id} viewer={viewer} w={w} acts={acts} />)}
     </div>
   );
 }
@@ -62,12 +63,12 @@ function Spawn({ viewer }) {
   );
 }
 
-function WindowRow({ viewer, w }) {
+function WindowRow({ viewer, w, acts }) {
   const badges = [w.fullscreen && 'fullscreen', w.maximized && 'maximized', w.minimized && 'minimized'].filter(Boolean);
   const act = (op, e) => { e.stopPropagation(); e.currentTarget.blur(); viewer.control({ id: w.id, op }); };
   return (
     <div
-      onClick={() => viewer.activate(w.id)}
+      onClick={() => acts && viewer.activate(w.id)}
       className={`group relative flex cursor-pointer items-center gap-2.5 border-b border-zinc-800/70 px-2.5 py-2 transition-colors hover:bg-zinc-800/60 ${w.focused ? 'bg-indigo-500/10' : ''} ${w.minimized ? 'opacity-60' : ''}`}
     >
       <Thumb id={w.id} updated={w.updated_ms} />
@@ -94,9 +95,9 @@ function WindowRow({ viewer, w }) {
           const tab = window.open('', '_blank'); // opened now, inside the click, so popup blockers allow it
           snapshot(w.id, 1).then(b => { tab.location = URL.createObjectURL(b); }).catch(() => tab.close());
         }} />
-        <Action icon={w.maximized ? Minimize2 : Maximize2} label={w.maximized ? 'Restore' : 'Maximize'} onClick={e => act(w.maximized ? 'unmaximize' : 'maximize', e)} />
-        <Action icon={w.minimized ? ChevronUp : ChevronDown} label={w.minimized ? 'Restore' : 'Minimize'} onClick={e => act(w.minimized ? 'activate' : 'minimize', e)} />
-        <Action icon={X} label="Close" onClick={e => act('close', e)} className="hover:text-rose-300" />
+        {acts && <Action icon={w.maximized ? Minimize2 : Maximize2} label={w.maximized ? 'Restore' : 'Maximize'} onClick={e => act(w.maximized ? 'unmaximize' : 'maximize', e)} />}
+        {acts && <Action icon={w.minimized ? ChevronUp : ChevronDown} label={w.minimized ? 'Restore' : 'Minimize'} onClick={e => act(w.minimized ? 'activate' : 'minimize', e)} />}
+        {acts && <Action icon={X} label="Close" onClick={e => act('close', e)} className="hover:text-rose-300" />}
       </div>
     </div>
   );

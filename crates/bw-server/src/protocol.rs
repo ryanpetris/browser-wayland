@@ -12,6 +12,9 @@ pub const AUDIO: u8 = 0x05;
 pub const WINDOWS: u8 = 0x06;
 /// UTF-8 text a desktop application put on the clipboard.
 pub const CLIPBOARD: u8 = 0x07;
+/// `[ROLE][u8]`: what this session may do: 0 watch only (the viewer token), 1 act but not drive (a control
+/// token while someone else controls), 2 control (its pointer, keyboard and size are the desktop's).
+pub const ROLE: u8 = 0x08;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
@@ -30,6 +33,20 @@ pub const POINTER_LOCK_LOST: u8 = 0x8A;
 pub const CONTROL: u8 = 0x8B;
 /// UTF-8 text the browser pasted: becomes the desktop clipboard.
 pub const SET_CLIPBOARD: u8 = 0x8C;
+/// A session with a control token asks to become the controller.
+pub const TAKE_CONTROL: u8 = 0x8D;
+
+/// What a session may do, as sent in `ROLE`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Viewer = 0,
+    Participant = 1,
+    Controller = 2,
+}
+
+pub fn role(role: Role) -> Bytes {
+    Bytes::from(vec![ROLE, role as u8])
+}
 
 pub fn config(info: &StreamInfo) -> Bytes {
     let json = format!(
@@ -108,6 +125,7 @@ pub enum ClientMsg {
     PointerLockLost,
     Control(ControlMsg),
     SetClipboard(String),
+    TakeControl,
 }
 
 /// Malformed messages decode to `None` and are ignored.
@@ -128,6 +146,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         POINTER_LOCK_LOST => ClientMsg::PointerLockLost,
         CONTROL => ClientMsg::Control(serde_json::from_slice(&b[1..]).ok()?),
         SET_CLIPBOARD => ClientMsg::SetClipboard(String::from_utf8(b[1..].to_vec()).ok()?),
+        TAKE_CONTROL => ClientMsg::TakeControl,
         _ => return None,
     })
 }
@@ -147,6 +166,8 @@ mod tests {
         assert_eq!(decode(&[0x87, 0x1e, 0x00, 0x00]), Some(ClientMsg::Key { evdev: 0x1e, pressed: false }));
         assert_eq!(decode(&[0x86, 0x01, 0, 0, 0, 0, 0, 0, 0x40, 0x40]), Some(ClientMsg::Axis { mode: 1, dx: 0.0, dy: 3.0 }));
         assert_eq!(decode(&[0x89]), Some(ClientMsg::Blur));
+        assert_eq!(decode(&[0x8D]), Some(ClientMsg::TakeControl));
+        assert_eq!(role(Role::Controller).as_ref(), &[0x08, 2]);
         let control = |json: &str| decode(&[&[CONTROL][..], json.as_bytes()].concat());
         assert_eq!(
             control(r#"{"id":3,"op":"move","x":10,"y":-2}"#),

@@ -37,8 +37,8 @@ pub enum Command {
     PointerButton { button: u32, pressed: bool },
     PointerAxis { source: AxisSource, dx: f64, dy: f64, v120: Option<(i32, i32)> },
     Resize(OutputGeometry),
-    ViewerConnected,
-    ViewerDisconnected,
+    /// A viewer's encoder: every output frame goes to each of these (`None` stops one). `key` names it.
+    ViewerStream { key: u64, sink: Option<Box<dyn FrameSink>> },
     /// Render a frame even if nothing changed (keyframe on connect).
     RequestFullFrame,
     /// The browser lost its pointer lock (Escape etc.): release the client's lock and don't re-lock until the next click.
@@ -288,6 +288,8 @@ pub trait StreamControl: Send + Sync {
     fn request_keyframe(&self);
     /// Switch codecs; the stream restarts with a new id.
     fn set_codec(&self, codec: Codec);
+    /// Encode at this size (the frames are scaled to it); the stream restarts with a new id.
+    fn set_size(&self, size: (u32, u32));
 }
 
 pub type SinkError = Box<dyn std::error::Error + Send + Sync>;

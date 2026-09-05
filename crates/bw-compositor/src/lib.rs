@@ -80,6 +80,8 @@ pub struct Config {
     pub exec_env: Vec<(String, String)>,
     /// Every new window is fullscreened (for running a nested desktop).
     pub kiosk: bool,
+    /// `(fourcc, modifier)` pairs the encoders import zero-copy: what the output is rendered into.
+    pub accepted_formats: Vec<(u32, u64)>,
 }
 
 pub struct CompositorHandle {
@@ -91,10 +93,10 @@ pub struct CompositorHandle {
 }
 
 /// Start the compositor on its own thread. Returns once the Wayland socket exists.
-pub fn spawn(cfg: Config, sink: Box<dyn FrameSink>, events: tokio::sync::mpsc::UnboundedSender<Event>) -> Result<CompositorHandle> {
+pub fn spawn(cfg: Config, events: tokio::sync::mpsc::UnboundedSender<Event>) -> Result<CompositorHandle> {
     let (commands, rx) = channel::channel();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
-    let join = std::thread::Builder::new().name("compositor".into()).spawn(move || match State::new(cfg, sink, events) {
+    let join = std::thread::Builder::new().name("compositor".into()).spawn(move || match State::new(cfg, events) {
         Ok((mut event_loop, mut state)) => {
             // Give Xwayland a moment to come up so --exec children can get DISPLAY.
             state.start_xwayland();
@@ -131,7 +133,8 @@ pub struct State {
     pub dmabuf_state: DmabufState,
     pub syncobj_state: Option<DrmSyncobjState>,
     pub dmabuf_feedback: DmabufFeedback,
-    pub sink: Box<dyn FrameSink>,
+    /// The viewers' encoders, by the server's key: every output frame goes to each of them.
+    pub viewer_sinks: Vec<(u64, Box<dyn FrameSink>)>,
     pub events: tokio::sync::mpsc::UnboundedSender<Event>,
     pub frame_seq: u64,
     pub frame_interval: Duration,
@@ -142,7 +145,6 @@ pub struct State {
     pub panels_hidden: bool,
     /// Next render redraws everything (age 0), e.g. after a viewer connects.
     pub force_full_frame: bool,
-    pub viewer_connected: bool,
 
     pub space: Space<Window>,
     pub popups: PopupManager,
@@ -210,15 +212,13 @@ fn mode_for(geo: &OutputGeometry) -> Mode {
 }
 
 impl State {
-    fn new(cfg: Config, sink: Box<dyn FrameSink>, events: tokio::sync::mpsc::UnboundedSender<Event>) -> Result<(EventLoop<'static, State>, State)> {
+    fn new(cfg: Config, events: tokio::sync::mpsc::UnboundedSender<Event>) -> Result<(EventLoop<'static, State>, State)> {
         let event_loop: EventLoop<'static, State> = EventLoop::try_new()?;
         let handle = event_loop.handle();
         let display: Display<State> = Display::new()?;
         let dh = display.handle();
 
-        let mut sink = sink;
-        let gpu = gpu::Gpu::new(&cfg.render_node, &cfg.initial, &sink.accepted_formats())?;
-        sink.output_changed(cfg.initial, gpu.fourcc as u32, u64::from(gpu.modifier));
+        let gpu = gpu::Gpu::new(&cfg.render_node, &cfg.initial, &cfg.accepted_formats)?;
 
         let output = Output::new(
             "BROWSER-1".into(),
@@ -276,14 +276,13 @@ impl State {
             dmabuf_state,
             syncobj_state,
             dmabuf_feedback,
-            sink,
+            viewer_sinks: Vec::new(),
             events,
             frame_seq: 0,
             frame_interval: Duration::from_nanos(1_000_000_000_000 / cfg.initial.refresh_mhz as u64),
             last_render: Instant::now(),
             dirty: true,
             force_full_frame: true,
-            viewer_connected: false,
             space,
             popups: PopupManager::default(),
             minimized: Vec::new(),
@@ -506,9 +505,23 @@ impl State {
         self.geometry = geo;
         layer_map_for_output(&self.output).arrange();
         self.relayout();
-        self.sink.output_changed(geo, self.gpu.fourcc as u32, u64::from(self.gpu.modifier));
+        for (_, sink) in &mut self.viewer_sinks {
+            sink.output_changed(geo, self.gpu.fourcc as u32, u64::from(self.gpu.modifier));
+        }
         self.force_full_frame = true;
         self.dirty = true;
+    }
+
+    /// A viewer arrived: its encoder gets every frame from now on, starting with a whole one.
+    pub fn start_viewer_stream(&mut self, key: u64, mut sink: Box<dyn FrameSink>) {
+        sink.output_changed(self.geometry, self.gpu.fourcc as u32, u64::from(self.gpu.modifier));
+        self.viewer_sinks.push((key, sink));
+        self.force_full_frame = true;
+        self.dirty = true;
+    }
+
+    pub fn stop_viewer_stream(&mut self, key: u64) {
+        self.viewer_sinks.retain(|(k, _)| *k != key); // dropping the sink stops its pipeline
     }
 
     /// Re-arrange the panels; re-fit the windows if that moved the work area.

@@ -1,8 +1,5 @@
-//! GStreamer capture → VA-API H.264 encode → encoded frames on a channel.
-//!
-//! Two front ends share one encode tail:
-//! - [`fake_source`] feeds `videotestsrc` (no compositor needed) for end-to-end testing.
-//! - [`GstSink`] implements [`FrameSink`]: compositor dmabufs go into an `appsrc` zero-copy.
+//! GStreamer: compositor dmabufs into an `appsrc` zero-copy, VA-API scaling and encoding, encoded
+//! frames on a channel. One [`GstSink`] per viewer, each at its own size and codec.
 
 mod lease;
 
@@ -50,14 +47,6 @@ impl Stream {
     }
 }
 
-/// The fake source only ever speaks H.264.
-impl StreamControl for Stream {
-    fn request_keyframe(&self) {
-        Stream::request_keyframe(self)
-    }
-    fn set_codec(&self, _codec: Codec) {}
-}
-
 struct EncodeOpts {
     width: u32,
     height: u32,
@@ -80,17 +69,6 @@ fn encode_tail(codec: Codec, bitrate_kbps: u32) -> String {
         ),
         Codec::Vp9 => format!("vavp9enc {common} ! vp9parse ! video/x-vp9"),
     }
-}
-
-/// Test source: an animated pattern, no compositor. Emits `StreamMsg` on `tx`.
-pub fn fake_source(bitrate_kbps: u32, codec: Codec, tx: mpsc::Sender<StreamMsg>) -> Result<Stream> {
-    gst::init()?;
-    let (width, height) = (1920, 1080);
-    let head = format!(
-        "videotestsrc is-live=true pattern=ball ! video/x-raw,format=BGRA,width={width},height={height},framerate=60/1 \
-         ! timeoverlay ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12"
-    );
-    build(&head, EncodeOpts { width, height, scale: 1.0, bitrate_kbps, codec }, tx)
 }
 
 static STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -278,6 +256,8 @@ struct Inner {
     accepted: Vec<(u32, u64)>,
     /// Set by `output_changed`; the pipeline is (re)built lazily on the next frame.
     geo: Option<(OutputGeometry, u32, u64)>,
+    /// The viewer's size: frames are scaled to it (none: the frames' own size).
+    target: Option<(u32, u32)>,
     stream: Option<(Stream, gst_app::AppSrc)>,
     /// One imported memory per compositor swapchain slot, so VA keeps its surface import.
     mems: HashMap<u32, gst::Memory>,
@@ -299,6 +279,11 @@ impl StreamControl for GstControl {
             GstSink(inner).set_codec(codec);
         }
     }
+    fn set_size(&self, size: (u32, u32)) {
+        if let Some(inner) = self.0.upgrade() {
+            GstSink(inner).set_size(size);
+        }
+    }
 }
 
 impl GstSink {
@@ -308,14 +293,13 @@ impl GstSink {
 
     pub fn new(bitrate_kbps: u32, tx: mpsc::Sender<StreamMsg>) -> Result<GstSink> {
         gst::init()?;
-        let accepted = vapostproc_dmabuf_formats();
-        tracing::info!(?accepted, "vapostproc dmabuf import formats (fourcc, modifier)");
         Ok(GstSink(Arc::new(Mutex::new(Inner {
             tx,
             bitrate_kbps,
             codec: Codec::H264,
-            accepted,
+            accepted: accepted_formats(),
             geo: None,
+            target: None,
             stream: None,
             mems: HashMap::new(),
             alloc: gst_allocators::DmaBufAllocator::new(),
@@ -350,6 +334,17 @@ impl StreamControl for GstSink {
             return;
         }
         i.codec = codec;
+        let old = i.take_stream();
+        drop(i);
+        discard(old);
+    }
+
+    fn set_size(&self, size: (u32, u32)) {
+        let mut i = self.0.lock().unwrap();
+        if i.target == Some(size) {
+            return;
+        }
+        i.target = Some(size);
         let old = i.take_stream();
         drop(i);
         discard(old);
@@ -401,15 +396,19 @@ impl Inner {
 
     fn start(&mut self) -> Result<()> {
         let (geo, fourcc, modifier) = self.geo.context("output_changed was never called")?;
+        // vapostproc scales the frame to the viewer's size on the way to NV12; the stream's scale then
+        // maps its pixels to the desktop's logical pixels
+        let (width, height) = self.target.unwrap_or((geo.width_px, geo.height_px));
         let head = format!(
             "appsrc name=src is-live=true format=time do-timestamp=true block=false max-buffers=2 leaky-type=downstream \
              caps=\"video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format={},width={},height={},framerate=60/1\" \
-             ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12",
+             ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={width},height={height}",
             drm_format_string(fourcc, modifier),
             geo.width_px,
             geo.height_px
         );
-        let opts = EncodeOpts { width: geo.width_px, height: geo.height_px, scale: geo.scale, bitrate_kbps: self.bitrate_kbps, codec: self.codec };
+        let scale = geo.scale * width as f64 / geo.width_px as f64;
+        let opts = EncodeOpts { width, height, scale, bitrate_kbps: self.bitrate_kbps, codec: self.codec };
         let stream = build(&head, opts, self.tx.clone())?;
         let appsrc = stream.pipeline.by_name("src").unwrap().downcast::<gst_app::AppSrc>().unwrap();
         self.stream = Some((stream, appsrc));
@@ -457,8 +456,11 @@ fn drm_format_string(fourcc: u32, modifier: u64) -> String {
     if modifier == 0 { code } else { format!("{code}:0x{modifier:016x}") }
 }
 
-/// `(fourcc, modifier)` pairs vapostproc advertises for `memory:DMABuf` input.
-fn vapostproc_dmabuf_formats() -> Vec<(u32, u64)> {
+/// `(fourcc, modifier)` pairs vapostproc advertises for `memory:DMABuf` input: what the compositor may render into.
+pub fn accepted_formats() -> Vec<(u32, u64)> {
+    if gst::init().is_err() {
+        return vec![];
+    }
     let Some(factory) = gst::ElementFactory::find("vapostproc") else { return vec![] };
     let mut out = vec![];
     for tmpl in factory.static_pad_templates() {

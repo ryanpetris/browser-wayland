@@ -17,10 +17,10 @@ snapshots, browser UI).
 | Stack | Rust + Smithay 0.7; no wlroots, no C. GStreamer (via gstreamer-rs) for encoding. axum for HTTP/WebSocket. |
 | Transport | WebSocket + WebCodecs. WebCodecs needs a secure context, so the server speaks HTTPS with a self-signed certificate unless `--no-tls` (localhost development). |
 | Windowing | Floating desktop: stacking, click-to-focus, decorations by the client or, for those that draw none, by the compositor, xdg move/resize, maximize/fullscreen, minimize, layer-shell panels. `--kiosk` fullscreens every window for nested desktops. |
-| Viewers | One at a time; a new connection takes over and the old one is told so. |
+| Viewers | Any number, each with its own encoder at its own size and codec. One controls (input and output size): the first control-token session, or whoever took control last. A second, read-only token lets people watch. |
 | Cursor | Drawn by the browser (CSS cursor from the compositor's image), never composited: pointer motion costs no frames. |
 | Rendering cadence | Damage-driven. No commit, no frame, no bandwidth. |
-| Auth | One shared token, handed to the viewer once in the URL fragment and kept in `sessionStorage`; rotatable through the API. WebSocket authenticates with its first message; HTTP API uses `Authorization: Bearer`. No cookies. |
+| Auth | Two shared tokens (control and view-only), handed to a viewer once in the URL fragment and kept in `sessionStorage`; rotatable through the API. WebSocket authenticates with its first message; HTTP API uses `Authorization: Bearer`. No cookies. |
 
 ## Process layout
 
@@ -30,10 +30,10 @@ One process, three thread domains joined by channels:
  Wayland clients ──► $WAYLAND_DISPLAY socket           Xwayland (rootless; we are its window manager)
                               │
   ┌───────────────────────────▼──────────────────┐  DmabufFrame (dmabuf + lease)  ┌──────────────────────────┐
-  │ compositor thread (calloop, Smithay)         │ ────────────────────────────► │ GStreamer streaming       │
-  │  wl_compositor · shm · linux-dmabuf · xdg     │                                │  appsrc(memory:DMABuf)    │
-  │  layer-shell · foreign-toplevel · seat · ...  │ ◄── lease dropped ⇒ slot free ─│  → vapostproc → va*enc    │
-  │  desktop::Space<Window>  (floating WM)        │                                │  → parse → appsink        │
+  │ compositor thread (calloop, Smithay)         │ ────────────────────────────► │ GStreamer, one pipeline   │
+  │  wl_compositor · shm · linux-dmabuf · xdg     │      (every viewer's)          │ per viewer and window:    │
+  │  layer-shell · foreign-toplevel · seat · ...  │ ◄── last lease dropped ⇒ free ─│  appsrc → vapostproc      │
+  │  desktop::Space<Window>  (floating WM)        │                                │  (scale) → va*enc → sink  │
   │  GlesRenderer on GBM/EGL (render node)        │                                └────────────┬─────────────┘
   │  OutputDamageTracker → 4-slot dmabuf swapchain│                                             │ StreamMsg
   └──────────────▲───────────────────────────────┘                                             ▼
@@ -43,7 +43,7 @@ One process, three thread domains joined by channels:
   └──────────────────────────────────────────────────────────────▲──────────────────────────────────────────┘
                                                                  │ wss (binary frames both ways)
   ┌──────────────────────────────────────────────────────────────┴──────────────────────────────────────────┐
-  │ browser: VideoDecoder → canvas · AudioDecoder → Web Audio · input → binary messages · React UI around it │
+  │ browsers: VideoDecoder → canvas · AudioDecoder → Web Audio · the controller's input → messages · React UI │
   └─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -61,8 +61,8 @@ small shared-types crate. That boundary keeps encoders and transports pluggable 
 |---|---|
 | `bw-core` | Plain types shared by everything: `Command` (server → compositor), `Event` (compositor → server), `DmabufFrame`, `FrameSink`, `StreamMsg`, `WindowInfo`, `ControlMsg`, `InputMsg`, `Snapshot`, the decoration layout. Serde and JSON schemas on the API types. |
 | `bw-compositor` | Smithay. `lib.rs` (state, loop, output, resize, spawn), `handlers.rs` (protocol delegates), `input.rs` (browser and API input → seat, focus, decorations), `render.rs` (frame), `gpu.rs` (render node, GBM, EGL, swapchains), `grabs.rs` (move/resize), `decor.rs` (title bars), `xwayland.rs`, `foreign_toplevel.rs`, `workspace.rs`, `desktop.rs` (window list, control, snapshots), `window_stream.rs`, `clipboard.rs`, `cursor.rs`. |
-| `bw-stream` | GStreamer. `GstSink: FrameSink` (dmabuf import, pipeline build/rebuild, keyframes, codec switch), `lease.rs` (a custom `GstMeta` whose `free` drops the swapchain lease), the Opus audio source, and a `videotestsrc` fake source for `--fake-source`. |
-| `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`; its build script insists on a web build first), `/ws` and `/ws/window/{id}` sessions, `/api` (`api.rs` holds the operations, `elements.rs` the accessibility walk), `/mcp` (`mcp.rs`), frame/audio/event distribution. |
+| `bw-stream` | GStreamer. `GstSink: FrameSink` (dmabuf import, pipeline build/rebuild, keyframes, codec and size switch), `lease.rs` (a custom `GstMeta` whose `free` drops the swapchain lease), the Opus audio source. |
+| `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`; its build script insists on a web build first), `/ws` (viewer sessions, roles) and `/ws/window/{id}` sessions, `/api` (`api.rs` holds the operations, `elements.rs` the accessibility walk), `/mcp` (`mcp.rs`), audio and event broadcast. |
 | `bw` | The `browser-wayland` binary: clap CLI, thread spawning, channel wiring, the audio null sink. |
 
 `web/` is the viewer: React 19 and Tailwind CSS 4, built by Vite into `web/dist` by `make web` (the
@@ -83,7 +83,8 @@ Each slot's `Dmabuf` is bound directly (the renderer caches FBOs by dmabuf ident
 
 **Frame loop.** A calloop timer at the output refresh, plus on-demand rendering right after input or
 commits once a frame period has passed. `render_frame` renders only if something is dirty; if the
-damage tracker reports no damage, or no viewer is connected, nothing is encoded. After rendering the
+damage tracker reports no damage, or no viewer is connected, nothing is encoded; otherwise the frame
+goes to every viewer's encoder, each holding a share of the slot's lease. After rendering the
 GPU is waited on (`SyncPoint::wait`) before any early return, because the next commit releases client
 buffers. The rendered slot leaves as a `DmabufFrame` whose lease (the `Slot`) is attached to the
 `gst::Buffer` as a custom meta; the slot is free again when GStreamer drops the buffer.
@@ -124,20 +125,22 @@ make waybar and xfce4-panel work as ordinary clients. Details in [panels.md](pan
 
 ## Streaming
 
-`GstSink` builds, per output size and codec, a pipeline of the shape
+One `GstSink` per viewer (and per window stream) builds, per frame size, target size and codec, a
+pipeline of the shape
 
 ```
-appsrc (memory:DMABuf, DMA_DRM caps) ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12
+appsrc (memory:DMABuf, DMA_DRM caps) ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width=W,height=H
   ! va{h264,h265,vp9}enc ! {h264,h265,vp9}parse ! appsink
 ```
 
-with low-latency encoder settings (constant bitrate from `--bitrate`, no B-frames, one reference).
-The appsink never blocks and never drops: every encoded access unit reaches the server, which alone
-decides what to drop. A viewer gap is followed by a keyframe request (`UpstreamForceKeyUnitEvent`)
+with low-latency encoder settings (constant bitrate from `--bitrate`, no B-frames, one reference);
+`vapostproc` scales the shared frame to the viewer's size on the GPU. Frames are sent to each viewer in
+order; while a socket is busy, `appsrc` drops raw frames before the encoder, so no delta ever refers to
+a frame the viewer missed. A decoder error on the page asks for a keyframe (`UpstreamForceKeyUnitEvent`)
 plus `Command::RequestFullFrame`, since without damage no frame would be produced. Codec choice comes
-from the browser's `VideoDecoder.isConfigSupported` probes: hardware HEVC, then VP9, then H.264, unless
-`--codec` pins one. A resize or codec change tears the pipeline down and rebuilds it with a new stream
-id; the viewer resets its decoder when it sees a new id. Pipeline errors reach the server through a bus
+from each browser's `VideoDecoder.isConfigSupported` probes: hardware HEVC, then VP9, then H.264, unless
+`--codec` pins one. A resize, size or codec change tears the pipeline down and rebuilds it with a new
+stream id; the page resets its decoder when it sees a new id. Pipeline errors reach the server through a bus
 sync handler (freed with the pipeline; a watching thread would outlive it).
 
 Window streams (`/ws/window/{id}`, see [desktop-api.md](desktop-api.md)) are further `GstSink`s, one
@@ -154,10 +157,11 @@ axum with rustls. On first start the server writes a self-signed certificate (ev
 token into the data directory (`$XDG_CONFIG_HOME/browser-wayland`, or `~/.config/...`). ALPN is pinned to
 HTTP/1.1 because WebSocket upgrades need it.
 
-A session becomes the viewer only after it sends the token (see [protocol.md](protocol.md)). The
-current viewer's queue is small (8 frames); when it is full, frames are dropped and a keyframe is
-requested, so a delta is never sent after a gap. State messages (cursor, pointer lock, window list) wait
-for room instead. Encoder output belonging to a superseded stream id is discarded.
+A session becomes a viewer only after it sends a token (see [protocol.md](protocol.md)); which of the
+two tokens decides whether it may act. Each session forwards its own encoder's output with a
+ten-second send deadline; state messages and audio are broadcast to every session. Encoder output
+belonging to a superseded stream id is discarded. The controller and the sizing rules are in
+[desktop-api.md](desktop-api.md).
 
 ## Web viewer
 
@@ -182,5 +186,5 @@ directory should be persisted in containers or every start prints a new token.
 
 ## Known limitations
 
-- One workspace, one output, one viewer (plus any number of window streams).
+- One workspace, one output; one pointer and keyboard, driven by one viewer at a time.
 - Window streams carry no audio.
