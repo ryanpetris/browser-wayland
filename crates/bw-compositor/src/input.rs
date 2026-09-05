@@ -17,7 +17,6 @@ use smithay::{
     utils::{Logical, Point, SERIAL_COUNTER, Serial},
     wayland::{
         pointer_constraints::{PointerConstraint, with_pointer_constraint},
-        seat::WaylandFocus,
         shell::wlr_layer::Layer,
     },
 };
@@ -26,6 +25,7 @@ use crate::{
     State,
     decor::{Hit, Under, maximized, resize_cursor},
     desktop::window_id,
+    handlers::KeyboardFocus,
 };
 
 const BTN_LEFT: u32 = 0x110;
@@ -254,10 +254,10 @@ impl State {
 
     pub(crate) fn pointer_motion(&mut self, location: Point<f64, Logical>) {
         let pointer = self.seat.get_pointer().unwrap();
-        let delta = location - self.pointer_location;
-        let relative = RelativeMotionEvent { delta, delta_unaccel: delta, utime: self.clock.now().as_micros() };
         if self.locked(&pointer) {
             // Locked: the pointer stays put and the client only gets deltas.
+            let delta = location - self.pointer_location;
+            let relative = RelativeMotionEvent { delta, delta_unaccel: delta, utime: self.clock.now().as_micros() };
             let under = self.surface_under(self.pointer_location);
             pointer.relative_motion(self, under, &relative);
             pointer.frame(self);
@@ -270,8 +270,9 @@ impl State {
         ));
         self.pointer_location = location;
         let under = self.surface_under(location);
+        // the absolute motion is the whole story; a relative one on top of it makes Xwayland move its
+        // pointer by the delta a second time when a button follows in the same frame
         pointer.motion(self, under.clone(), &MotionEvent { location, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
-        pointer.relative_motion(self, under.clone(), &relative);
         pointer.frame(self);
         if under.is_none() && !pointer.is_grabbed() {
             // over our decorations or the bare desktop: the cursor is ours to set
@@ -346,7 +347,7 @@ impl State {
                 // a panel: the windows under it stay where they are; it gets the keyboard only if it asked
                 if layer.can_receive_keyboard_focus() {
                     self.focus_window(None, serial);
-                    keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);
+                    keyboard.set_focus(self, Some(layer.wl_surface().clone().into()), serial);
                 }
             } else if let Some((window, hit)) = self.decoration_under(self.pointer_location) {
                 // our title bar (a higher window's surfaces, resize handles and popups included, would have won):
@@ -394,11 +395,15 @@ impl State {
                 if !pointer.is_grabbed() {
                     // click-to-focus and raise
                     let clicked = self.space.element_under(self.pointer_location).map(|(w, _)| w.clone());
-                    self.focus_window(clicked.as_ref(), serial);
+                    if clicked.as_ref().is_some_and(|w| w.x11_surface().is_some_and(|x| x.is_override_redirect())) {
+                        // an X11 menu or tooltip: its client holds the grab, the focus stays with its window
+                    } else {
+                        self.focus_window(clicked.as_ref(), serial);
+                    }
                     if clicked.is_none() {
                         // empty desktop: a bottom/background layer may want the keyboard (on-demand panels)
                         if let Some((layer, _, _)) = self.layer_under(self.pointer_location, false).filter(|(l, _, _)| l.can_receive_keyboard_focus()) {
-                            keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);
+                            keyboard.set_focus(self, Some(layer.wl_surface().clone().into()), serial);
                         }
                     }
                 }
@@ -460,7 +465,7 @@ impl State {
                 }
             }
         }
-        keyboard.set_focus(self, window.and_then(|w| w.wl_surface().map(|s| s.into_owned())), serial);
+        keyboard.set_focus(self, window.map(KeyboardFocus::of), serial);
         for w in self.space.elements() {
             match w.underlying_surface() {
                 WindowSurface::Wayland(t) => {

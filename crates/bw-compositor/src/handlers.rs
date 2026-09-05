@@ -1,6 +1,6 @@
 //! Wayland protocol handlers and their delegate macros.
 
-use std::{cell::RefCell, os::unix::io::OwnedFd};
+use std::{borrow::Cow, cell::RefCell, os::unix::io::OwnedFd};
 
 use smithay::{
     backend::renderer::utils::with_renderer_surface_state,
@@ -12,12 +12,14 @@ use smithay::{
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale, delegate_layer_shell,
     delegate_output, delegate_pointer_constraints, delegate_primary_selection, delegate_relative_pointer, delegate_seat,
     delegate_shm, delegate_drm_syncobj, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
+    backend::input::KeyState,
     desktop::{
-        LayerSurface, PopupKind, Window, WindowSurfaceType, find_popup_root_surface, get_popup_toplevel_coords,
+        LayerSurface, PopupKind, Window, WindowSurface, WindowSurfaceType, find_popup_root_surface, get_popup_toplevel_coords,
         layer_map_for_output,
     },
     input::{
         Seat, SeatHandler, SeatState,
+        keyboard::{KeyboardTarget, KeysymHandle, ModifiersState},
         pointer::{CursorImageStatus, Focus, GrabStartData, PointerHandle},
     },
     reexports::{
@@ -31,7 +33,7 @@ use smithay::{
             protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
         },
     },
-    utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
+    utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
     wayland::{
         buffer::BufferHandler,
         seat::WaylandFocus,
@@ -64,9 +66,94 @@ use smithay::{
     },
 };
 
-use smithay::xwayland::XWaylandClientData;
+use smithay::xwayland::{X11Surface, XWaylandClientData};
 
 use crate::{ClientState, State, grabs};
+
+/// What the keyboard focuses. An X11 window is focused as itself rather than as its surface: Smithay's
+/// target for it also sets the X input focus, without which X11 clients see no FocusIn and Chromium,
+/// for one, opens no menus.
+#[derive(Clone, Debug, PartialEq)]
+pub enum KeyboardFocus {
+    Wayland(WlSurface),
+    X11(X11Surface),
+}
+
+impl KeyboardFocus {
+    pub fn of(window: &Window) -> Self {
+        match window.underlying_surface() {
+            WindowSurface::Wayland(t) => Self::Wayland(t.wl_surface().clone()),
+            WindowSurface::X11(x) => Self::X11(x.clone()),
+        }
+    }
+}
+
+impl From<WlSurface> for KeyboardFocus {
+    fn from(s: WlSurface) -> Self {
+        Self::Wayland(s)
+    }
+}
+
+impl From<PopupKind> for KeyboardFocus {
+    fn from(p: PopupKind) -> Self {
+        Self::Wayland(p.wl_surface().clone())
+    }
+}
+
+/// Popup grabs point the pointer at the keyboard's focus; theirs is always an xdg surface.
+impl From<KeyboardFocus> for WlSurface {
+    fn from(f: KeyboardFocus) -> Self {
+        match f {
+            KeyboardFocus::Wayland(s) => s,
+            KeyboardFocus::X11(x) => x.wl_surface().expect("a focused X11 window is mapped"),
+        }
+    }
+}
+
+impl IsAlive for KeyboardFocus {
+    fn alive(&self) -> bool {
+        match self {
+            Self::Wayland(s) => s.alive(),
+            Self::X11(x) => x.alive(),
+        }
+    }
+}
+
+impl WaylandFocus for KeyboardFocus {
+    fn wl_surface(&self) -> Option<Cow<'_, WlSurface>> {
+        match self {
+            Self::Wayland(s) => Some(Cow::Borrowed(s)),
+            Self::X11(x) => x.wl_surface().map(Cow::Owned),
+        }
+    }
+}
+
+impl KeyboardTarget<State> for KeyboardFocus {
+    fn enter(&self, seat: &Seat<State>, data: &mut State, keys: Vec<KeysymHandle<'_>>, serial: Serial) {
+        match self {
+            Self::Wayland(s) => KeyboardTarget::enter(s, seat, data, keys, serial),
+            Self::X11(x) => KeyboardTarget::enter(x, seat, data, keys, serial),
+        }
+    }
+    fn leave(&self, seat: &Seat<State>, data: &mut State, serial: Serial) {
+        match self {
+            Self::Wayland(s) => KeyboardTarget::leave(s, seat, data, serial),
+            Self::X11(x) => KeyboardTarget::leave(x, seat, data, serial),
+        }
+    }
+    fn key(&self, seat: &Seat<State>, data: &mut State, key: KeysymHandle<'_>, state: KeyState, serial: Serial, time: u32) {
+        match self {
+            Self::Wayland(s) => KeyboardTarget::key(s, seat, data, key, state, serial, time),
+            Self::X11(x) => KeyboardTarget::key(x, seat, data, key, state, serial, time),
+        }
+    }
+    fn modifiers(&self, seat: &Seat<State>, data: &mut State, modifiers: ModifiersState, serial: Serial) {
+        match self {
+            Self::Wayland(s) => KeyboardTarget::modifiers(s, seat, data, modifiers, serial),
+            Self::X11(x) => KeyboardTarget::modifiers(x, seat, data, modifiers, serial),
+        }
+    }
+}
 
 impl State {
     pub fn window_for(&self, surface: &WlSurface) -> Option<Window> {
@@ -214,6 +301,7 @@ impl State {
     /// A Top or Overlay layer surface with exclusive keyboard interactivity (a launcher) holds the keyboard.
     fn exclusive_layer_focused(&self) -> bool {
         let Some(focus) = self.seat.get_keyboard().and_then(|k| k.current_focus()) else { return false };
+        let Some(focus) = focus.wl_surface() else { return false };
         let layers = layer_map_for_output(&self.output);
         layers
             .layer_for_surface(&focus, WindowSurfaceType::TOPLEVEL)
@@ -244,7 +332,7 @@ fn ensure_initial_configure(surface: &WlSurface, state: &mut State) {
         // launchers take the keyboard while they are up; the panels only ask on demand (handled on click)
         if layer.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive && matches!(layer.layer(), Layer::Top | Layer::Overlay) {
             let keyboard = state.seat.get_keyboard().unwrap();
-            keyboard.set_focus(state, Some(layer.wl_surface().clone()), SERIAL_COUNTER.next_serial());
+            keyboard.set_focus(state, Some(layer.wl_surface().clone().into()), SERIAL_COUNTER.next_serial());
         }
     }
 }
@@ -310,7 +398,7 @@ impl XdgShellHandler for State {
         let seat: Seat<State> = Seat::from_resource(&seat).unwrap();
         let kind = PopupKind::Xdg(surface);
         let Some(root) = find_popup_root_surface(&kind).ok() else { return };
-        let Ok(mut grab) = self.popups.grab_popup(root, kind, &seat, serial) else { return };
+        let Ok(mut grab) = self.popups.grab_popup(root.into(), kind, &seat, serial) else { return };
         if let Some(keyboard) = seat.get_keyboard() {
             if keyboard.is_grabbed() && !(keyboard.has_grab(serial) || keyboard.has_grab(grab.previous_serial().unwrap_or(serial))) {
                 grab.ungrab(PopupUngrabStrategy::All);
@@ -458,7 +546,7 @@ impl WlrLayerShellHandler for State {
         drop(layers);
         self.relayout();
         // a launcher that held the keyboard is gone: the active window gets it back
-        if self.seat.get_keyboard().and_then(|k| k.current_focus()).is_some_and(|f| f == *surface.wl_surface()) {
+        if self.seat.get_keyboard().and_then(|k| k.current_focus()).is_some_and(|f| f.wl_surface().as_deref() == Some(surface.wl_surface())) {
             let active = self.active.clone();
             self.focus_window(active.as_ref(), SERIAL_COUNTER.next_serial());
         }
@@ -484,7 +572,7 @@ impl XdgDecorationHandler for State {
 }
 
 impl SeatHandler for State {
-    type KeyboardFocus = WlSurface;
+    type KeyboardFocus = KeyboardFocus;
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
 
@@ -506,8 +594,8 @@ impl SeatHandler for State {
         self.cursor_status = image;
         self.export_cursor();
     }
-    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
-        let client = focused.and_then(|s| self.dh.get_client(s.id()).ok());
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&KeyboardFocus>) {
+        let client = focused.and_then(|f| f.wl_surface()).and_then(|s| self.dh.get_client(s.id()).ok());
         set_data_device_focus(&self.dh, seat, client.clone());
         set_primary_focus(&self.dh, seat, client);
     }

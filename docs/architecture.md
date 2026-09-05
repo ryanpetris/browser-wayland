@@ -118,7 +118,10 @@ constraints) are mirrored to the browser's Pointer Lock API; the browser then se
 
 **Xwayland.** Started at boot; its `DISPLAY` is printed and passed to `--exec` children. X11 windows
 are ordinary space elements; clipboard and primary selection are bridged both ways; `WM_CHANGE_STATE`
-iconify goes through the same minimize code.
+iconify goes through the same minimize code. The keyboard focuses an X11 window as an `X11Surface`
+(`KeyboardFocus` in `handlers.rs`), so Smithay also sets the X input focus and sends `WM_TAKE_FOCUS`;
+an X11 client that only ever saw its surface focused gets no `FocusIn`, and Chromium, for one, then
+opens no menus. Clicks on override-redirect windows (X11 menus, tooltips) leave the focus alone.
 
 **Panels and taskbars.** wlr-layer-shell and a hand-written wlr-foreign-toplevel-management (v2)
 make waybar and xfce4-panel work as ordinary clients. Details in [panels.md](panels.md).

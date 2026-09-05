@@ -207,7 +207,7 @@ impl XwmHandler for State {
     /// X11 clients may read a Wayland-owned selection only while an X11 window has keyboard focus.
     fn allow_selection_access(&mut self, _xwm: XwmId, _selection: SelectionTarget) -> bool {
         let Some(keyboard) = self.seat.get_keyboard() else { return false };
-        keyboard.current_focus().and_then(|s| self.window_for(&s)).is_some_and(|w| w.x11_surface().is_some())
+        matches!(keyboard.current_focus(), Some(crate::handlers::KeyboardFocus::X11(_)))
     }
 
     /// An X11 client wants data from a selection owned by a Wayland client.
