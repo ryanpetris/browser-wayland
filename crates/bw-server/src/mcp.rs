@@ -305,7 +305,7 @@ impl Mcp {
         self.input(&parts, InputMsg::Key { keys })
     }
 
-    #[tool(description = "The last text a desktop application copied to the clipboard (empty if none yet). An image says so; GET /api/clipboard returns its bytes.")]
+    #[tool(description = "The last text a desktop application copied to the clipboard (empty if none yet). An image says so; copied files are their file:// URIs; GET /api/clipboard returns the bytes.")]
     fn clipboard_read(&self) -> ToolResult {
         let text = match self.app.clipboard() {
             Some((mime, data)) if mime == api::PNG => format!("[{} bytes of {mime}; GET /api/clipboard returns them]", data.len()),

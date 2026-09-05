@@ -352,18 +352,23 @@ async fn api_put_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<Str
     }
 }
 
+/// A file for the browser to save under `name`, streamed.
+fn attachment(name: &str, len: u64, body: axum::body::Body) -> Response {
+    (
+        NO_STORE,
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_LENGTH, len.to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", name.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect::<String>(), files::percent(name))),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 async fn api_file(UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>) -> Response {
     match app.open_file(&name).await {
-        Ok((len, body)) => (
-            NO_STORE,
-            [
-                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-                (header::CONTENT_LENGTH, len.to_string()),
-                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", name.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect::<String>(), files::percent(&name))),
-            ],
-            body,
-        )
-            .into_response(),
+        Ok((len, body)) => attachment(&name, len, body),
         Err(e) => e.into_response(),
     }
 }
@@ -424,7 +429,7 @@ async fn api_token_rotate(headers: HeaderMap, State(app): State<Arc<App>>) -> Re
     }
 }
 
-/// What a desktop application last copied, as text or as a PNG (its Content-Type says which), or 204 if nothing yet.
+/// What a desktop application last copied: text, a PNG or a file list (its Content-Type says which), or 204 if nothing yet.
 async fn api_clipboard(State(app): State<Arc<App>>) -> Response {
     match app.clipboard() {
         Some((mime, data)) => (NO_STORE, [(header::CONTENT_TYPE, match mime.as_str() { api::PNG | api::URI_LIST => mime.clone(), _ => "text/plain; charset=utf-8".into() })], data).into_response(),
@@ -432,7 +437,8 @@ async fn api_clipboard(State(app): State<Arc<App>>) -> Response {
     }
 }
 
-/// The body becomes the desktop clipboard: a PNG with `Content-Type: image/png` (up to 16 MiB), else UTF-8 text (up to 1 MiB).
+/// The body becomes the desktop clipboard: a PNG with `Content-Type: image/png` (up to 16 MiB), a file list
+/// with `text/uri-list`, else UTF-8 text (up to 1 MiB).
 /// The body is read only for a control token, and only up to its mime's limit.
 async fn api_set_clipboard(Extension(key): Extension<Key>, State(app): State<Arc<App>>, req: Request) -> Response {
     if let Err(e) = writable(key) {
@@ -462,16 +468,7 @@ async fn api_clipboard_files(Extension(key): Extension<Key>, State(app): State<A
 /// holds no such list or entry.
 async fn api_clipboard_file(UrlPath(index): UrlPath<usize>, State(app): State<Arc<App>>) -> Response {
     match app.clipboard_file(index).await {
-        Ok((name, len, body)) => (
-            NO_STORE,
-            [
-                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-                (header::CONTENT_LENGTH, len.to_string()),
-                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", name.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect::<String>(), files::percent(&name))),
-            ],
-            body,
-        )
-            .into_response(),
+        Ok((name, len, body)) => attachment(&name, len, body),
         Err(e) => e.into_response(),
     }
 }

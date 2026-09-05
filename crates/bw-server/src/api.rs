@@ -11,7 +11,7 @@ use axum::{
 };
 use bw_core::{Bytes, Command, ControlMsg, ControlOp, InputMsg, Snapshot, SnapshotError, SnapshotReply, WindowInfo};
 
-/// The clipboard mimes the bridge carries: text (offered to clients under every text mime) and PNG.
+/// The clipboard mimes the bridge carries: text (offered to clients under every text mime), PNG and file lists.
 pub const TEXT: &str = "text/plain;charset=utf-8";
 pub const PNG: &str = "image/png";
 /// A list of `file://` URIs, one per line: files copied in a file manager, or files the browser pasted.
@@ -148,7 +148,7 @@ impl App {
         self.viewers.lock().unwrap().clipboard.clone()
     }
 
-    /// Text (`TEXT`) or a PNG becomes the desktop clipboard; fire-and-forget like control. The compositor
+    /// Text (`TEXT`), a PNG or a file list becomes the desktop clipboard; fire-and-forget like control. The compositor
     /// reports it back like any clipboard change, which is what `clipboard()` and the viewers then see.
     pub fn set_clipboard(&self, mime: &str, data: Bytes) -> Result<(), ApiError> {
         if data.len() > clipboard_limit(mime) {

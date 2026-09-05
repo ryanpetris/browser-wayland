@@ -44,24 +44,19 @@ const ok = r => (r.ok ? r : Promise.reject(new Error(`HTTP ${r.status}`)));
 export const files = async () => ok(await api('/api/files')).json();
 export const uploadFile = async file => ok(await api(`/api/files/${encodeURIComponent(file.name)}`, { method: 'PUT', body: file })).json();
 export const deleteFile = async name => ok(await api(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' }));
-export const downloadFile = async name => {
-  const blob = await ok(await api(`/api/files/${encodeURIComponent(name)}`)).blob();
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
+// Saved under the name the server serves it as (a clipboard file may have changed since its name was shown).
+const download = async (path, name) => {
+  const r = ok(await api(path));
+  const served = /filename\*=UTF-8''([^;]+)/.exec(r.headers.get('content-disposition') ?? '');
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await r.blob()), download: served ? decodeURIComponent(served[1]) : name });
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 };
+export const downloadFile = name => download(`/api/files/${encodeURIComponent(name)}`, name);
 
 // Files on the clipboard: put files of the transfer folder there; fetch the i-th file copied in the desktop.
 export const clipboardFiles = names => api('/api/clipboard/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names }) });
-export const downloadClipboardFile = async (index, name) => {
-  const r = ok(await api(`/api/clipboard/files/${index}`));
-  // the clipboard may have changed since the names were shown: the file is saved under its own name
-  const served = /filename\*=UTF-8''([^;]+)/.exec(r.headers.get('content-disposition') ?? '');
-  const blob = await r.blob();
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: served ? decodeURIComponent(served[1]) : name });
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-};
+export const downloadClipboardFile = (index, name) => download(`/api/clipboard/files/${index}`, name);
 
 // A notification's icon as a blob URL (the caller revokes it), or null.
 export const notificationIcon = id => api(`/api/notifications/${id}/icon`).then(r => (r.ok ? r.blob().then(URL.createObjectURL) : null)).catch(() => null);

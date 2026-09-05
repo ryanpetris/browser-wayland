@@ -225,8 +225,9 @@ shows "N files copied" with a download button, and `GET /api/clipboard/files/{in
 `index`th file of the list currently on the clipboard (only that list: the route can't read anything
 else). The other way, files pasted into the page go to the transfer folder first, then `POST
 /api/clipboard/files` makes them the desktop clipboard as a URI list offered under both mimes (the
-gnome one with its `copy` line), and the paste chord follows through the API; Thunar and Nautilus paste
-them as copies.
+gnome one rewritten the way file managers write it: `copy`, then one URI per line, LF only, no trailing
+newline; Nautilus refuses a CR or an empty line), and the paste chord follows through the API; Thunar
+and Nautilus paste them as copies.
 
 The page writes received text to the browser clipboard at once when it may, otherwise on the next
 gesture; a received image is fetched from the API and written as a `ClipboardItem`. Ctrl+V and

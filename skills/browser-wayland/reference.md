@@ -896,7 +896,7 @@ Move the pointer there and click. With `window`, x y are relative to that window
 
 ### `clipboard_read`
 
-The last text a desktop application copied to the clipboard (empty if none yet). An image says so; GET /api/clipboard returns its bytes.
+The last text a desktop application copied to the clipboard (empty if none yet). An image says so; copied files are their file:// URIs; GET /api/clipboard returns the bytes.
 
 ```json
 {

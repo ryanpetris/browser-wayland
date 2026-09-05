@@ -52,7 +52,7 @@ pub struct Reading {
 }
 
 impl State {
-    /// Read the current clipboard as text through a pipe and report it when the owner is done writing.
+    /// Read the current clipboard (a URI list, text or a PNG, whichever `pick_mime` chose) through a pipe and report it when the owner is done writing.
     /// `x11` says the owner is an X11 client (the request goes through Xwayland). Deferred to the next
     /// loop turn so the selection this is called about is installed by then; a previous read still in
     /// flight is dropped.
@@ -129,7 +129,8 @@ impl State {
         }
     }
 
-    /// Text or a PNG from the browser or the API becomes the clipboard, offered to Wayland and X11 clients.
+    /// Text, a PNG or a file list (`text/uri-list`) from the browser or the API becomes the clipboard, offered
+    /// to Wayland and X11 clients.
     pub fn set_clipboard(&mut self, mime: String, data: Vec<u8>) {
         self.cancel_clipboard_read(); // an application's older clipboard must not land after this one
         let mimes: Vec<String> = match mime.as_str() {
@@ -150,8 +151,14 @@ impl State {
     /// a reader that stalls costs a source, not a thread.
     pub fn serve_clipboard(&mut self, data: Arc<Vec<u8>>, mime: &str, fd: OwnedFd) {
         let _ = rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK);
-        // a file list asked for in the file managers' own format gets their "copy" first line
-        let data: Arc<Vec<u8>> = if mime == GNOME_FILES { Arc::new([b"copy\n".as_slice(), &data].concat()) } else { data };
+        // a file list asked for in the file managers' own format is rewritten the way they write it: "copy",
+        // then the URIs, one per line, LF only and no trailing newline (Nautilus refuses a CR or an empty line)
+        let data: Arc<Vec<u8>> = if mime == GNOME_FILES {
+            let list = String::from_utf8_lossy(&data);
+            Arc::new(std::iter::once("copy").chain(list.lines().map(str::trim_end)).collect::<Vec<_>>().join("\n").into_bytes())
+        } else {
+            data
+        };
         let mut written = 0;
         let token = self.handle.insert_source(Generic::new(fd, Interest::WRITE, Mode::Level), move |_, fd, _| {
             loop {
