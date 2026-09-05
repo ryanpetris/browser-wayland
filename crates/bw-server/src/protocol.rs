@@ -12,8 +12,9 @@ pub const AUDIO: u8 = 0x05;
 pub const WINDOWS: u8 = 0x06;
 /// UTF-8 text a desktop application put on the clipboard.
 pub const CLIPBOARD: u8 = 0x07;
-/// `[ROLE][u8]`: what this session may do: 0 watch only (the viewer token), 1 act but not drive (a control
-/// token while someone else controls), 2 control (its pointer, keyboard and size are the desktop's).
+/// `[ROLE][u8 role][u8 microphone]`: what this session may do: 0 watch only (the viewer token), 1 act but
+/// not drive (a control token while someone else controls), 2 control (its pointer, keyboard and size are
+/// the desktop's); then whether the desktop takes the browser's microphone (`MIC`).
 pub const ROLE: u8 = 0x08;
 /// `[NOTICE][utf-8 text]`: something the page should tell its user about what it just did.
 pub const NOTICE: u8 = 0x09;

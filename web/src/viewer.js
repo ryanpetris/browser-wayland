@@ -146,6 +146,8 @@ export function createViewer() {
     ws.onmessage = e => onMessage(e.data);
     ws.onclose = e => {
       closes.push(`${e.code}:${e.reason}`);
+      micStop(); // nobody hears it now, and the role is whatever the next connection says
+      store.set({ role: null, micAvailable: false });
       if (e.code === 4001) {
         stream = null;
         forgetToken();
@@ -318,7 +320,7 @@ export function createViewer() {
         break;
       case ROLE: {
         const role = ROLES[dv.getUint8(1)] ?? 'viewer';
-        store.set({ role, micAvailable: dv.byteLength > 2 && dv.getUint8(2) === 1 });
+        store.set({ role, micAvailable: dv.getUint8(2) === 1 });
         if (role !== 'controller') {
           if (document.pointerLockElement) document.exitPointerLock(); // only the controller's pointer is the desktop's
           micStop(); // and only its microphone
@@ -435,8 +437,9 @@ export function createViewer() {
   const micStop = () => { stopMic(); if (state().mic) store.set({ mic: false }); };
   async function micStart() {
     try {
-      await startMic(buf => send(MIC, buf.byteLength, dv => new Uint8Array(dv.buffer, 1).set(new Uint8Array(buf))));
-      store.set({ mic: true });
+      await startMic(buf => send(MIC, buf.byteLength, dv => new Uint8Array(dv.buffer, 1).set(new Uint8Array(buf))), micStop);
+      if (state().role === 'controller') store.set({ mic: true }); // control may have gone while the permission prompt was up
+      else micStop();
     } catch (e) {
       store.set({ notice: `microphone: ${e.message}` });
       clearTimeout(noticeTimer);

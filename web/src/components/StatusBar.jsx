@@ -58,7 +58,7 @@ export function StatusBar({ viewer }) {
         <span className="flex items-center gap-1" title={s.audio ? `audio ${s.audio.state}` : 'no audio yet'}>
           {s.audio?.state === 'running' ? <Volume2 className="size-3 text-emerald-400" /> : <VolumeX className="size-3" />}
         </span>
-        {role === 'controller' && micAvailable && navigator.mediaDevices && (
+        {role === 'controller' && micAvailable && navigator.mediaDevices && 'AudioEncoder' in window && (
           <button type="button" aria-label="Microphone" aria-pressed={mic} onClick={e => { (mic ? viewer.mic.stop : viewer.mic.start)(); e.currentTarget.blur(); }} title={mic ? 'Microphone on: the desktop hears you' : 'Microphone: let the desktop hear you'} className="flex items-center hover:text-zinc-300">
             {mic ? <Mic className="size-3 text-emerald-400" /> : <MicOff className="size-3" />}
           </button>

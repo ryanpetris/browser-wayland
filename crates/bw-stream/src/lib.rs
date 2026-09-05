@@ -330,13 +330,14 @@ pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<AudioSt
 
 /// Plays Opus packets from the browser's microphone into `device` (the sink whose monitor is the
 /// virtual source applications record from), as they come: `sync=false`, the sink paces at 48 kHz and
-/// swallows the network's jitter in its buffer. A thread feeds the appsrc from `rx`; the pipeline stops
-/// when the handle is dropped (the thread ends with the channel).
+/// swallows the network's jitter in its buffer, and packets that pile up behind a stall (or clock
+/// drift) are dropped at the source rather than played late. A thread feeds the appsrc from `rx`; the
+/// pipeline stops when the handle is dropped (the thread ends with the channel).
 pub fn audio_sink(device: &str, mut rx: mpsc::Receiver<Bytes>) -> Result<AudioStream> {
     gst::init()?;
     let desc = format!(
-        "appsrc name=src is-live=true format=time do-timestamp=true caps=audio/x-opus,channel-mapping-family=0,channels=2,rate=48000 \
-         ! opusdec ! audioconvert ! audioresample ! pulsesink device={device} sync=false"
+        "appsrc name=src is-live=true format=time do-timestamp=true max-buffers=10 leaky-type=downstream \
+         caps=audio/x-opus,channel-mapping-family=0,channels=1,rate=48000 ! opusdec ! pulsesink device={device} sync=false"
     );
     let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
     let src = pipeline.by_name("src").context("src element")?.downcast::<gst_app::AppSrc>().unwrap();

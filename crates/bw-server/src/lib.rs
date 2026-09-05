@@ -74,7 +74,7 @@ pub struct Config {
     /// One encoder per viewer and per window stream.
     pub sinks: SinkFactory,
     /// Where the browser's microphone packets (Opus) go to be played into the desktop's virtual source;
-    /// `None` without audio.
+    /// `None` without a microphone.
     pub mic: Option<mpsc::Sender<Bytes>>,
 }
 
