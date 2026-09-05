@@ -66,7 +66,7 @@ export function StatusBar({ viewer }) {
           </button>
         )}
         {role === 'controller' && camAvailable && navigator.mediaDevices && 'VideoEncoder' in window && 'MediaStreamTrackProcessor' in window && (
-          <button type="button" aria-label="Webcam" aria-pressed={cam} onClick={e => { (cam ? viewer.cam.stop : () => viewer.cam.start())(); e.currentTarget.blur(); }} title={cam ? 'Webcam on: the desktop sees you' : 'Webcam: let the desktop see you'} className="flex items-center hover:text-zinc-300">
+          <button type="button" aria-label="Webcam" aria-pressed={cam} onClick={e => { (cam ? viewer.cam.stop : viewer.cam.start)(); e.currentTarget.blur(); }} title={cam ? 'Webcam on: the desktop sees you' : 'Webcam: let the desktop see you'} className="flex items-center hover:text-zinc-300">
             {cam ? <Camera className="size-3 text-emerald-400" /> : <CameraOff className="size-3" />}
           </button>
         )}

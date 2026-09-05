@@ -480,13 +480,13 @@ impl App {
         });
     }
 
-    /// A state message to every viewer and window session.
-    /// ponytail: a session that can't keep up misses a state change (it is dropped after ten seconds anyway)
     /// What the desktop takes from the browser (`Role`'s second byte).
     pub(crate) fn features(&self) -> u8 {
         (self.mic.is_some() as u8) * protocol::FEATURE_MIC | (self.cam.is_some() as u8) * protocol::FEATURE_CAM
     }
 
+    /// A state message to every viewer and window session.
+    /// ponytail: a session that can't keep up misses a state change (it is dropped after ten seconds anyway)
     pub(crate) fn broadcast(&self, msg: Bytes) {
         for s in self.viewers.lock().unwrap().sessions.values() {
             let _ = s.events.try_send(msg.clone());

@@ -76,7 +76,8 @@ pub struct Config {
     /// Where the browser's microphone packets (Opus) go to be played into the desktop's virtual source;
     /// `None` without a microphone.
     pub mic: Option<mpsc::Sender<Bytes>>,
-    /// Where the browser's webcam frames (VP8) go to be played into the loopback camera; `None` without `--webcam`.
+    /// Where the browser's webcam frames (VP8) go to be played into the loopback camera; `None` without
+    /// `--webcam`, or when its device couldn't be opened.
     pub cam: Option<mpsc::Sender<Bytes>>,
 }
 

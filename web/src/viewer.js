@@ -453,9 +453,9 @@ export function createViewer() {
 
   // The local webcam the same way (cam.js), one VP8 frame per message.
   const camStop = () => { stopCam(); if (state().cam) store.set({ cam: false }); };
-  async function camStart(constraints) {
+  async function camStart() {
     try {
-      await startCam(buf => send(CAM, buf.byteLength, dv => new Uint8Array(dv.buffer, 1).set(new Uint8Array(buf))), camStop, constraints);
+      await startCam(buf => send(CAM, buf.byteLength, dv => new Uint8Array(dv.buffer, 1).set(new Uint8Array(buf))), camStop);
       if (state().role === 'controller') store.set({ cam: true });
       else camStop();
     } catch (e) {

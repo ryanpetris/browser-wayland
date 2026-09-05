@@ -331,44 +331,53 @@ pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<Running
 /// Plays Opus packets from the browser's microphone into `device` (the sink whose monitor is the
 /// virtual source applications record from), as they come: `sync=false`, the sink paces at 48 kHz and
 /// swallows the network's jitter in its buffer, and packets that pile up behind a stall (or clock
-/// drift) are dropped at the source rather than played late. A thread feeds the appsrc from `rx`; the
-/// pipeline stops when the handle is dropped (the thread ends with the channel).
-pub fn audio_sink(device: &str, mut rx: mpsc::Receiver<Bytes>) -> Result<Running> {
+/// drift) are dropped at the source rather than played late.
+pub fn audio_sink(device: &str, rx: mpsc::Receiver<Bytes>) -> Result<Running> {
+    feed(
+        &format!(
+            "appsrc name=src is-live=true format=time do-timestamp=true max-buffers=10 leaky-type=downstream \
+             caps=audio/x-opus,channel-mapping-family=0,channels=1,rate=48000 ! opusdec ! pulsesink device={device} sync=false"
+        ),
+        "microphone",
+        rx,
+    )
+}
+
+/// Plays VP8 frames from the browser's webcam into `device`, a v4l2loopback camera, as 1280×720 YUY2 (the
+/// loopback keeps the first format it is given, so every frame is scaled to that one, letterboxed):
+/// applications open it like any camera. Frames that pile up behind a stall are dropped at the source;
+/// the browser sends a keyframe every couple of seconds, so the decoder recovers.
+pub fn video_sink(device: &std::path::Path, rx: mpsc::Receiver<Bytes>) -> Result<Running> {
+    feed(
+        &format!(
+            "appsrc name=src is-live=true format=time do-timestamp=true max-buffers=4 leaky-type=downstream caps=video/x-vp8 \
+             ! vp8dec ! videoconvert ! videoscale ! video/x-raw,format=YUY2,width=1280,height=720,pixel-aspect-ratio=1/1 ! v4l2sink device={} sync=false",
+            device.display()
+        ),
+        "webcam",
+        rx,
+    )
+}
+
+/// A pipeline whose `appsrc` a thread feeds from `rx`, one buffer per message; the pipeline stops when the
+/// handle is dropped (the thread ends with the channel), or when it fails (the failure is logged and the
+/// thread ends: pushing into a leaky source never fails by itself).
+fn feed(desc: &str, name: &str, mut rx: mpsc::Receiver<Bytes>) -> Result<Running> {
     gst::init()?;
-    let desc = format!(
-        "appsrc name=src is-live=true format=time do-timestamp=true max-buffers=10 leaky-type=downstream \
-         caps=audio/x-opus,channel-mapping-family=0,channels=1,rate=48000 ! opusdec ! pulsesink device={device} sync=false"
-    );
-    let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
+    let pipeline = gst::parse::launch(desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
     let src = pipeline.by_name("src").context("src element")?.downcast::<gst_app::AppSrc>().unwrap();
+    let bus = pipeline.bus().context("pipeline bus")?;
     pipeline.set_state(gst::State::Playing)?;
-    std::thread::Builder::new().name("microphone".into()).spawn(move || {
+    let what = name.to_string();
+    std::thread::Builder::new().name(name.into()).spawn(move || {
         while let Some(packet) = rx.blocking_recv() {
             if src.push_buffer(gst::Buffer::from_slice(packet)).is_err() {
                 break; // the pipeline is gone
             }
-        }
-    })?;
-    Ok(Running(pipeline))
-}
-
-/// Plays VP8 frames from the browser's webcam into `device`, a v4l2loopback camera, as 1280×720 YUY2 (the
-/// loopback keeps the first format it is given, so every frame is scaled to that one): applications open
-/// it like any camera. Frames that pile up behind a stall are dropped at the source; the browser sends a
-/// keyframe every couple of seconds, so the decoder recovers. A thread feeds the appsrc from `rx`.
-pub fn video_sink(device: &std::path::Path, mut rx: mpsc::Receiver<Bytes>) -> Result<Running> {
-    gst::init()?;
-    let desc = format!(
-        "appsrc name=src is-live=true format=time do-timestamp=true max-buffers=4 leaky-type=downstream caps=video/x-vp8 \
-         ! vp8dec ! videoconvert ! videoscale ! video/x-raw,format=YUY2,width=1280,height=720 ! v4l2sink device={} sync=false",
-        device.display()
-    );
-    let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
-    let src = pipeline.by_name("src").context("src element")?.downcast::<gst_app::AppSrc>().unwrap();
-    pipeline.set_state(gst::State::Playing)?;
-    std::thread::Builder::new().name("webcam".into()).spawn(move || {
-        while let Some(frame) = rx.blocking_recv() {
-            if src.push_buffer(gst::Buffer::from_slice(frame)).is_err() {
+            if let Some(msg) = bus.pop_filtered(&[gst::MessageType::Error])
+                && let gst::MessageView::Error(e) = msg.view()
+            {
+                tracing::warn!("{what}: {} ({:?})", e.error(), e.debug());
                 break;
             }
         }
