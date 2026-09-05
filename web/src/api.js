@@ -54,8 +54,11 @@ export const downloadFile = async name => {
 // Files on the clipboard: put files of the transfer folder there; fetch the i-th file copied in the desktop.
 export const clipboardFiles = names => api('/api/clipboard/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names }) });
 export const downloadClipboardFile = async (index, name) => {
-  const blob = await ok(await api(`/api/clipboard/files/${index}`)).blob();
-  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
+  const r = ok(await api(`/api/clipboard/files/${index}`));
+  // the clipboard may have changed since the names were shown: the file is saved under its own name
+  const served = /filename\*=UTF-8''([^;]+)/.exec(r.headers.get('content-disposition') ?? '');
+  const blob = await r.blob();
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: served ? decodeURIComponent(served[1]) : name });
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 };

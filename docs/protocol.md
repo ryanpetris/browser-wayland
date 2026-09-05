@@ -144,8 +144,8 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` the tree couldn't be read: no D-Bus session or accessibility bus, the application went away, or 2 s passed (body: `{"error": …}`), `404` unknown id. |
 
 Status codes: `401` (empty body) missing or wrong bearer token; `403` `read-only token` from `POST
-/api/control`, `POST /api/input`, `PUT /api/clipboard`, `PUT` and `DELETE /api/files/{name}`, `POST
-/api/notifications/{id}` and `POST /api/token/rotate` with the viewer token; the statuses above come with
+/api/control`, `POST /api/input`, `PUT /api/clipboard`, `POST /api/clipboard/files`, `PUT` and `DELETE
+/api/files/{name}`, `POST /api/notifications/{id}` and `POST /api/token/rotate` with the viewer token; the statuses above come with
 `{"error": "..."}`. A body axum can't read is rejected with a plain-text message: `400` invalid JSON,
 `415` missing `Content-Type: application/json`, `422` wrong shape; JSON bodies are limited to 2 MiB (the
 clipboard and file uploads have their own limits, or none).

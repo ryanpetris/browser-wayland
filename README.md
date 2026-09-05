@@ -130,7 +130,8 @@ HTTP calls send the token as `Authorization: Bearer <token>`; the viewer page ta
 fragment once (`#token=`, never sent to the server), keeps it in `sessionStorage` and drops it from the
 address bar, and sends it as the first message on its WebSocket. A tab without a token shows a dialog
 asking for one. There are no cookies and a token is never in a URL the server sees. The view-only token
-works for everything below that reads (the window list, elements, snapshots, the clipboard's text) and
+works for everything below that reads (the window list, elements, snapshots, the clipboard, copied files
+included) and
 gets `403` for everything that acts. `POST /api/token/rotate` (with the control token) issues new
 tokens: the files, the API and every viewer switch at once and the server prints the new URLs.
 

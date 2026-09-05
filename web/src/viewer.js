@@ -449,15 +449,15 @@ export function createViewer() {
   // --- files ---------------------------------------------------------------------------------
   // Files dropped anywhere on the page go to the desktop's transfer folder, one after the other.
   async function uploadFiles(list) {
-    const files = [...list];
-    let saved = 0;
+    const files = [...list], saved = [];
     for (const [index, file] of files.entries()) {
       store.set({ upload: { name: file.name, index: index + 1, count: files.length } });
-      try { await uploadFile(file); saved++; } catch {}
+      try { saved.push((await uploadFile(file)).name); } catch {}
     }
-    store.set({ upload: null, filesRev: state().filesRev + 1, notice: saved ? `${saved} file${saved === 1 ? '' : 's'} saved to the desktop's transfer folder` : 'upload failed' });
+    store.set({ upload: null, filesRev: state().filesRev + 1, notice: saved.length ? `${saved.length} file${saved.length === 1 ? '' : 's'} saved to the desktop's transfer folder` : 'upload failed' });
     clearTimeout(noticeTimer);
     noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
+    return saved; // the names they got there
   }
   document.addEventListener('dragover', e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
   document.addEventListener('drop', e => {
@@ -478,7 +478,8 @@ export function createViewer() {
     clipboardGen++;
     pendingClipboard = null;
     store.set({ clipboardText: text, clipboardFiles: [] });
-    if (text) { pendingClipboard = text; flushClipboard(); }
+    pendingClipboard = text; // empty text clears the browser's clipboard too
+    flushClipboard();
   }
   // the bytes are fetched once, now, so the write can happen inside a gesture (WebKit insists on that);
   // a file list can't go on the browser's clipboard: the page offers the files for download instead
@@ -486,9 +487,11 @@ export function createViewer() {
     const gen = ++clipboardGen;
     pendingClipboard = null;
     if (mime === 'text/uri-list') {
+      store.set({ clipboardText: 'files', clipboardFiles: [] }); // the old buttons go now, in case the list can't be fetched
+      const name = s => { try { return decodeURIComponent(s); } catch { return s; } }; // a name that isn't UTF-8 stays escaped
       api('/api/clipboard').then(r => r.text()).then(list => {
         if (gen !== clipboardGen) return;
-        const names = list.split(/\r?\n/).filter(l => l.startsWith('file://')).map(l => decodeURIComponent(l.replace(/^file:\/\//, '').split('/').pop()));
+        const names = list.split(/\r?\n/).filter(l => l.startsWith('file://')).map(l => name(l.trim().split('/').pop()));
         if (names.length) store.set({ clipboardFiles: names, clipboardText: `${names.length} file${names.length === 1 ? '' : 's'}` });
         else onClipboard(list.trim()); // links, not files: plain text to the browser
       }).catch(() => {});
@@ -519,7 +522,7 @@ export function createViewer() {
     if (isFormField(e.target) || state().role === 'viewer') return;
     e.preventDefault();
     const files = [...(e.clipboardData?.files ?? [])];
-    const image = files.length === 1 && files[0].type === 'image/png' ? files[0] : null; // a screenshot, not a copied file
+    const image = files.length === 1 && files[0].type === 'image/png' && files[0].name === 'image.png' ? files[0] : null; // a screenshot (browsers name pasted pixels so), not a copied file
     if (image || files.length) {
       // The user's chord is dropped (its modifier may go up before the upload is done); once the picture, or
       // the files, are on the desktop clipboard the same chord is pressed through the API, and not at all
@@ -528,7 +531,7 @@ export function createViewer() {
       swallowKeyup = pendingPaste; pendingPaste = null; clearTimeout(pasteTimer);
       const put = image
         ? api('/api/clipboard', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: image, signal: AbortSignal.timeout(5000) })
-        : Promise.all(files.map(f => uploadFile(f).then(r => r.name))).then(names => { store.set({ filesRev: state().filesRev + 1 }); return clipboardFiles(names); });
+        : uploadFiles(files).then(names => (names.length === files.length ? clipboardFiles(names) : { ok: false })); // a file that didn't land isn't pasted, and the notice says what did
       put.then(r => { if (r.ok) return api('/api/input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'key', keys: chord }) }); }).catch(() => {});
       return;
     }

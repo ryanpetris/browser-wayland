@@ -47,7 +47,7 @@ export function StatusBar({ viewer }) {
       <span className={bad ? 'text-amber-400' : ''} title="lost · dropped · decode errors">{s.lost} · {s.dropped} · {s.decodeErrors}</span>
       <span className="ml-auto flex items-center gap-4">
         {clipboardFiles.length > 0 ? (
-          <button type="button" onClick={() => clipboardFiles.forEach((n, i) => downloadClipboardFile(i, n))} title={`Download the copied files: ${clipboardFiles.join(', ')}`} className="flex max-w-48 items-center gap-1 truncate text-indigo-300 hover:text-indigo-200">
+          <button type="button" onClick={async () => { for (const [i, n] of clipboardFiles.entries()) await downloadClipboardFile(i, n).catch(() => {}); }} title={`Download the copied files: ${clipboardFiles.join(', ')}`} className="flex max-w-48 items-center gap-1 truncate text-indigo-300 hover:text-indigo-200">
             <Download className="size-3 shrink-0" /><span className="truncate">{clipboardText} copied</span>
           </button>
         ) : clipboardText && <span className="flex max-w-48 items-center gap-1 truncate" title={`Clipboard: ${clipboardText}`}><ClipboardCheck className="size-3 shrink-0" /><span className="truncate">{clipboardText}</span></span>}

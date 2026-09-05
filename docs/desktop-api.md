@@ -13,7 +13,7 @@ of a window, and a small desktop UI in the viewer built on the same data. Wire f
 | Window identity | `u64` from a counter, stored in the `Window` user data on first sight. Stable, never reused. |
 | Where the page talks | The existing WebSocket: `Windows` (server → client) and `Control` (client → server) JSON messages. |
 | Where scripts talk | `/api/...` on the same axum router, bearer token. |
-| Two tokens | The control token acts; the viewer token (`viewer-token`, printed as "view only") reads: window list, elements, snapshots, clipboard text, the video. Acting routes answer `403`, acting MCP tools a tool error. |
+| Two tokens | The control token acts; the viewer token (`viewer-token`, printed as "view only") reads: window list, elements, snapshots, the clipboard (text, image, copied files), the video. Acting routes answer `403`, acting MCP tools a tool error. |
 | Several viewers | Each session has its own encoder (codec and size of its own); one controller at a time drives input and sizes the output, the first control-token session or whoever took control last; the rest watch letterboxed. |
 | "Focused" | The compositor's intent: the window `focus_window` last activated (or that was just mapped), not the client-acknowledged xdg state, which lags a round trip and is wrong for a hung client. |
 | Update timestamps | Whole-second resolution. It is part of the diffed list, so finer resolution would turn a 60 fps client into sixty lists a second. |
@@ -201,7 +201,7 @@ locally).
 
 ## Clipboard
 
-`clipboard.rs`. When a client takes the clipboard offering a text mime type or `image/png`
+`clipboard.rs`. When a client takes the clipboard offering `text/uri-list`, a text mime type or `image/png`
 (`new_selection`, or the Xwayland path in `xwayland.rs`), the compositor asks the owner for it (text
 first) through a pipe on the next loop idle (the request is deferred out of the selection handler and
 any read still in progress is dropped), reads it on the event loop (calloop `Generic` on the
@@ -342,7 +342,8 @@ bearer token and the WebSocket authenticates with its first message. Two tokens:
 do everything (`spawn` is remote code execution for whoever holds it, which the viewer already implied,
 since it can type into a terminal; `launch` runs an installed program's `Exec` line, `quit` ends the
 desktop); the viewer token is for showing the desktop to someone who should
-only watch: it gets the video, the window list, elements, snapshots and the clipboard's text, and `403`
+only watch: it gets the video, the window list, elements, snapshots and the clipboard (copied files
+included), and `403`
 (or a tool error) for anything that acts, including taking control. The bearer middleware tags each
 request with which token it carried; handlers and MCP tools check the tag. Snapshot
 rendering is bounded by the one-in-flight rule and the pixel cap. The viewer receives the token once in
