@@ -224,6 +224,7 @@ impl CompositorHandler for State {
     }
 
     fn new_surface(&mut self, surface: &WlSurface) {
+        self.surfaces.push(surface.downgrade());
         add_pre_commit_hook::<Self, _>(surface, |state, _dh, surface| {
             // Don't sample a client's dmabuf before its GPU work has finished: wait for the explicit-sync
             // acquire point when the client gave one, else for the dmabuf's implicit fences.

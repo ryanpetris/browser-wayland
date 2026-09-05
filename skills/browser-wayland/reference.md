@@ -42,7 +42,7 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
       "type": "string"
     },
     "content": {
-      "description": "what the client says it shows (content-type-v1): `photo`, `video` or `game`; absent for ordinary windows",
+      "description": "what the client says it shows (content-type-v1): `photo`, `video` or `game`; null for ordinary windows",
       "type": [
         "string",
         "null"

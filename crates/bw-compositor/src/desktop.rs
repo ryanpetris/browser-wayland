@@ -18,9 +18,8 @@ use smithay::{
         },
     },
     desktop::{Window, WindowSurface, PopupManager},
-    reexports::{wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState, wayland_server::Resource},
+    reexports::{wayland_protocols::{wp::content_type::v1::server::wp_content_type_v1::Type as ContentType, xdg::shell::server::xdg_toplevel::State as XdgState}, wayland_server::Resource},
     utils::{Buffer, Physical, Rectangle, SERIAL_COUNTER, Scale, Size, Transform},
-    reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type as ContentType,
     wayland::{compositor::with_states, content_type::ContentTypeSurfaceCachedState, shell::xdg::XdgToplevelSurfaceData, xdg_toplevel_icon::ToplevelIconCachedState},
 };
 

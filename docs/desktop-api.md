@@ -37,7 +37,7 @@ toplevel data or the X11 surface, geometry from the space (or the saved position
 window), states from the acked xdg state or the X11 flags, `focused` from `State::active`, the pid from
 the client's socket credentials or `_NET_WM_PID`, `icon` from the name the client set through
 xdg-toplevel-icon (its picture, or the pixels it set instead, or its launcher's icon by app id, is at
-`GET /api/windows/{id}/icon`), `content` from content-type-v1 (`photo`, `video`, `game`, else absent),
+`GET /api/windows/{id}/icon`), `content` from content-type-v1 (`photo`, `video`, `game`, else `null`),
 `updated_ms` from a per-window `LastCommit` cell set
 in the commit handler (also for minimized windows and for a window whose popup committed). `windows()`
 walks the space bottom to top, skipping X11 override-redirect surfaces, then the minimized list.

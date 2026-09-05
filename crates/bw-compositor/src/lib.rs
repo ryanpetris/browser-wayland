@@ -48,7 +48,7 @@ use smithay::{
     wayland::{
         alpha_modifier::AlphaModifierState,
         commit_timing::{CommitTimerBarrierStateUserData, CommitTimingManagerState},
-        compositor::{CompositorClientState, CompositorState},
+        compositor::{self, CompositorClientState, CompositorState},
         content_type::ContentTypeState,
         fifo::{FifoBarrierCachedState, FifoManagerState},
         cursor_shape::CursorShapeManagerState,
@@ -162,6 +162,8 @@ pub struct State {
     pub foreign: foreign_toplevel::ForeignToplevels,
     pub workspaces: workspace::Workspaces,
     pub reading: clipboard::Reading,
+    /// Every wl_surface a client made, mapped or not: a fifo barrier or commit timer can sit on any of them.
+    pub surfaces: Vec<smithay::reexports::wayland_server::Weak<WlSurface>>,
     /// Windows encoded into streams of their own, for the viewer's per-window tabs.
     pub window_streams: Vec<window_stream::WindowStream>,
     /// The window `focus_window` last activated.
@@ -307,6 +309,7 @@ impl State {
             foreign: Default::default(),
             workspaces: Default::default(),
             reading: Default::default(),
+            surfaces: Vec::new(),
             window_streams: Vec::new(),
             active: None,
             last_windows: Vec::new(),
@@ -514,38 +517,34 @@ impl State {
     }
 
     /// Keep at least a corner of `window` at `loc` (and its title bar, if we draw one) reachable in the work area.
-    /// Every refresh, whether or not a frame was rendered: let the content updates clients queued behind
-    /// a fifo barrier or a commit timer through (fifo-v1, commit-timing-v1). Hidden windows count too, or
-    /// they would never draw again.
+    /// Every refresh, after rendering: let the content updates clients queued behind a fifo barrier or a
+    /// commit timer through (fifo-v1, commit-timing-v1), on every surface whether it is shown or not, or
+    /// a hidden one would never draw again. A timer is due when its time is within half a frame of now
+    /// (a client aiming at the next refresh lands just past this tick).
     fn release_barriers(&mut self) {
-        let deadline = self.clock.now() + self.frame_interval;
+        let deadline = self.clock.now() + self.frame_interval / 2;
         let mut clients = Vec::new();
-        let mut visit = |surface: &WlSurface, states: &smithay::wayland::compositor::SurfaceData| {
-            let fifo = states.cached_state.get::<FifoBarrierCachedState>().current().barrier.take();
-            let timer = states.data_map.get::<CommitTimerBarrierStateUserData>().is_some_and(|t| t.lock().unwrap().signal_until(deadline));
-            let fired = fifo.is_some() || timer;
-            if let Some(b) = fifo {
-                b.signal();
-            }
+        self.surfaces.retain(|weak| {
+            let Ok(surface) = weak.upgrade() else { return false };
+            let fired = compositor::with_states(&surface, |states| {
+                let fifo = states.cached_state.get::<FifoBarrierCachedState>().current().barrier.take();
+                let timer = states.data_map.get::<CommitTimerBarrierStateUserData>().is_some_and(|t| t.lock().unwrap().signal_until(deadline));
+                if let Some(b) = &fifo {
+                    b.signal();
+                }
+                fifo.is_some() || timer
+            });
             if fired
                 && let Some(c) = surface.client()
                 && !clients.contains(&c)
             {
                 clients.push(c);
             }
-        };
-        for w in self.space.elements().chain(self.minimized.iter().map(|(w, ..)| w)) {
-            w.with_surfaces(&mut visit);
-        }
-        for l in layer_map_for_output(&self.output).layers() {
-            l.with_surfaces(&mut visit);
-        }
-        if let CursorImageStatus::Surface(s) = &self.cursor_status {
-            smithay::desktop::utils::with_surfaces_surface_tree(s, &mut visit);
-        }
+            true
+        });
         let dh = self.dh.clone();
         for c in clients {
-            c.get_data::<ClientState>().unwrap().compositor_state.blocker_cleared(self, &dh);
+            <Self as smithay::wayland::compositor::CompositorHandler>::client_compositor_state(self, &c).blocker_cleared(self, &dh);
         }
     }
 

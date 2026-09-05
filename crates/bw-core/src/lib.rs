@@ -128,7 +128,7 @@ pub struct WindowInfo {
     pub app_id: String,
     /// the icon name the client set (xdg-toplevel-icon); the picture is at `/api/windows/{id}/icon`, which falls back to the launcher's icon
     pub icon: Option<String>,
-    /// what the client says it shows (content-type-v1): `photo`, `video` or `game`; absent for ordinary windows
+    /// what the client says it shows (content-type-v1): `photo`, `video` or `game`; null for ordinary windows
     pub content: Option<String>,
     pub x11: bool,
     pub pid: Option<u32>,
