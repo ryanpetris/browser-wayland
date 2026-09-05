@@ -299,8 +299,6 @@ pub trait FrameSink: Send {
     /// Must not block. `Err` means the frame was not handed to the encoder.
     fn submit(&mut self, frame: DmabufFrame) -> Result<(), SinkError>;
     fn output_changed(&mut self, geo: OutputGeometry, fourcc: u32, modifier: u64);
-    /// `(fourcc, modifier)` pairs the encoder can import zero-copy.
-    fn accepted_formats(&self) -> Vec<(u32, u64)>;
 }
 
 impl std::fmt::Debug for dyn FrameSink {
@@ -314,7 +312,7 @@ pub enum StreamMsg {
     /// A (re)started stream; always followed by a keyframe.
     Info(StreamInfo),
     Frame(EncodedFrame),
-    /// The pipeline died; whoever drives it should ask for a keyframe so it gets rebuilt.
+    /// The pipeline died and was dropped; the next frame submitted builds a new one.
     Failed,
     /// One 20 ms Opus packet from the clients' audio sink.
     Audio { pts_us: u64, data: Bytes },

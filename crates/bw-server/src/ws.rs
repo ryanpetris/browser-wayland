@@ -165,7 +165,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     }
     let _ = app.commands.send(Command::ViewerStream { key: id, sink: Some(sink) });
 
-    let (mut info, mut seq) = (None::<bw_core::StreamInfo>, 0u16);
+    let (mut info, mut seq, mut failed) = (None::<bw_core::StreamInfo>, 0u16, false);
     let mut ping = tokio::time::interval(Duration::from_secs(5));
     let mut unanswered = 0;
     let ended = loop {
@@ -173,6 +173,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
             msg = rx.recv() => match msg {
                 Some(StreamMsg::Info(i)) => {
                     seq = 0;
+                    failed = false;
                     if !send(&mut socket, protocol::config(&i)).await { break None }
                     info = Some(i);
                 }
@@ -184,8 +185,16 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                         seq = seq.wrapping_add(1);
                     }
                 }
-                // the sink dropped the dead pipeline; the next frame builds a new one
-                Some(StreamMsg::Failed) => { let _ = app.commands.send(Command::RequestFullFrame); }
+                // a dead pipeline is dropped and the next frame builds a new one; a rebuild that fails too
+                // ends the session instead of looping, and the page reconnects
+                Some(StreamMsg::Failed) if failed => break None,
+                Some(StreamMsg::Failed) => {
+                    failed = true;
+                    if let Some(s) = app.viewers.lock().unwrap().sessions.get(&id) {
+                        s.control.request_keyframe(); // drops the dead pipeline, and with it the leases the frame needs
+                    }
+                    let _ = app.commands.send(Command::RequestFullFrame);
+                }
                 None => break None,
                 Some(StreamMsg::Audio { .. }) => {}
             },
@@ -271,7 +280,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     }
     let _ = app.commands.send(Command::WindowStream { key: stream, window: id, sink: Some(sink) });
 
-    let (mut info, mut seq) = (None::<bw_core::StreamInfo>, 0u16);
+    let (mut info, mut seq, mut failed) = (None::<bw_core::StreamInfo>, 0u16, false);
     let mut ping = tokio::time::interval(Duration::from_secs(5));
     let mut unanswered = 0;
     let ended = loop {
@@ -288,7 +297,12 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                         seq = seq.wrapping_add(1);
                     }
                 }
-                Some(StreamMsg::Failed) => { let _ = app.commands.send(Command::RequestFullFrame); }
+                Some(StreamMsg::Failed) if failed => break None,
+                Some(StreamMsg::Failed) => {
+                    failed = true;
+                    control.request_keyframe();
+                    let _ = app.commands.send(Command::RequestFullFrame);
+                }
                 Some(StreamMsg::Audio { .. }) => {}
                 None => break Some((GONE, "window closed")), // the compositor dropped the stream: the window is gone
             },
@@ -318,6 +332,11 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                         None => None,
                     };
                     if let Some(cmd) = cmd {
+                        // under the lock a rotation clears, so nothing slips through behind one
+                        let live = app.window_viewers.lock().unwrap();
+                        if !live.contains_key(&stream) {
+                            break Some((UNAUTHORIZED, "token rotated"));
+                        }
                         let _ = app.commands.send(cmd);
                     }
                 }
@@ -384,6 +403,9 @@ impl App {
     /// from any control token.
     fn viewer_message(&self, id: u64, key: Key, m: ClientMsg) {
         let mut v = self.viewers.lock().unwrap();
+        if !v.sessions.contains_key(&id) {
+            return; // a rotation cleared it under this lock; the session is about to end
+        }
         let controls = v.controller == Some(id);
         let cmd = match m {
             // dpr bounds keep a bogus value from turning into a giant dmabuf allocation

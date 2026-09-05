@@ -253,7 +253,6 @@ struct Inner {
     tx: mpsc::Sender<StreamMsg>,
     bitrate_kbps: u32,
     codec: Codec,
-    accepted: Vec<(u32, u64)>,
     /// Set by `output_changed`; the pipeline is (re)built lazily on the next frame.
     geo: Option<(OutputGeometry, u32, u64)>,
     /// The viewer's size: frames are scaled to it (none: the frames' own size).
@@ -297,7 +296,6 @@ impl GstSink {
             tx,
             bitrate_kbps,
             codec: Codec::H264,
-            accepted: accepted_formats(),
             geo: None,
             target: None,
             stream: None,
@@ -360,10 +358,6 @@ fn discard(old: (Option<(Stream, gst_app::AppSrc)>, HashMap<u32, gst::Memory>)) 
 }
 
 impl FrameSink for GstSink {
-    fn accepted_formats(&self) -> Vec<(u32, u64)> {
-        self.0.lock().unwrap().accepted.clone()
-    }
-
     fn output_changed(&mut self, geo: OutputGeometry, fourcc: u32, modifier: u64) {
         let mut i = self.0.lock().unwrap();
         i.geo = Some((geo, fourcc, modifier));

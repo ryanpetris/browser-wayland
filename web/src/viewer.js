@@ -395,8 +395,10 @@ export function createViewer() {
   }
   function onPointerButton(e) {
     const btn = BTN[e.button];
-    if (btn === undefined || !driving()) return;
-    if (e.type === 'pointerdown') { canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); resumeAudio(); flushClipboard(); if (wantLock) requestLock(); }
+    if (btn === undefined) return;
+    // the gesture counts for every session: audio and the browser clipboard need one
+    if (e.type === 'pointerdown') { canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); resumeAudio(); flushClipboard(); if (wantLock && driving()) requestLock(); }
+    if (!driving()) return;
     onPointerMove(e);
     send(BUTTON, 3, dv => { dv.setUint16(1, btn, true); dv.setUint8(3, e.type === 'pointerdown' ? 1 : 0); });
   }

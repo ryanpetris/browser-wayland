@@ -24,22 +24,22 @@ export function Stage({ viewer, windowMode, borders, elements }) {
   return (
     <div ref={el} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-black">
       <canvas ref={viewer.attach} tabIndex={-1} className={`stage block outline-none ${windowMode ? '' : 'h-full w-full'}`} />
-      {(borders || elements) && <Overlay viewer={viewer} size={size} windowMode={windowMode} borders={borders} elements={elements} />}
+      {(borders || elements) && <Overlay viewer={viewer} size={size} borders={borders} elements={elements} />}
       <Banner viewer={viewer} />
     </div>
   );
 }
 
 // One rectangle per visible window (the same hue as its row) and one per element of the focused
-// window, in CSS px over the canvas, which sits centred in the stage at the size fitCanvas gives it.
-function Overlay({ viewer, size, windowMode, borders, elements }) {
+// window, in CSS px over the canvas, which sits centred in the stage at the size fitCanvas gives it
+// (the desktop's; a window tab has no overlays).
+function Overlay({ viewer, size, borders, elements }) {
   const windows = useStore(viewer.store, s => s.windows);
   const stream = useStore(viewer.store, s => s.stream);
   const els = useStore(viewer.store, s => s.elements);
   if (!stream || !size.w) return null;
   const sw = stream.width / stream.scale, sh = stream.height / stream.scale;
-  let k = Math.min(size.w / sw, size.h / sh);
-  if (windowMode) k = Math.min(1, k);
+  const k = Math.min(size.w / sw, size.h / sh);
   const ox = (size.w - sw * k) / 2, oy = (size.h - sh * k) / 2;
   const box = (x, y, w, h) => ({ left: ox + x * k, top: oy + y * k, width: w * k, height: h * k });
   const f = windows.find(w => w.focused && !w.minimized);

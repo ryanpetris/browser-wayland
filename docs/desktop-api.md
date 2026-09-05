@@ -198,8 +198,10 @@ the GPU on the way to NV12, and the stream's `scale` becomes `output scale × ta
 the page's logical mapping still holds; the controller's encoder has no target and takes the output as
 it is, so a resize rebuilds its pipeline once, through the compositor. `TakeControl` from a control-token session, or the controller
 leaving (the oldest remaining control-token session inherits), goes through `set_controller`: release
-all input, resize the output to the new controller's size, re-fit, tell both sessions their `Role`. A
-token rotation drops every session's senders, which ends them with `4001`.
+all input and the pointer lock, re-fit, resize the output to the new controller's size, tell both
+sessions their `Role`. An encoder that fails is rebuilt by the next full frame; one that fails again
+before producing a stream ends the session, and the page reconnects. A token rotation drops every
+session's senders, which ends them with `4001`.
 
 ## Window streams
 
@@ -231,9 +233,10 @@ React and Tailwind, built by Vite into `web/dist` by `make web` and embedded (se
 read it with `useSyncExternalStore` and send actions back through the engine.
 
 - **Layout** (`App.jsx`): a top bar (name, connection status, codec and size, the toggles, fullscreen),
-  the stage (`Stage.jsx`: the canvas, which fills it, plus the overlays and the status banners), the
+  the stage (`Stage.jsx`: the canvas, centred and fitted to it, plus the overlays and the status banners), the
   side panel (`Sidebar.jsx`) and a status bar (`StatusBar.jsx`: fps, bandwidth, input-to-paint latency,
-  loss counters, clipboard, pointer lock, audio). The desktop's output takes the stage's size. Fullscreen
+  loss counters, clipboard, pointer lock, audio). The controller's stage sizes the desktop's output; the
+  other sessions get it fitted into theirs. Fullscreen
   is requested on the stage element, so the chrome is gone while it lasts. Toggles are remembered in
   `localStorage`. A popup (`?window=ID`) shows the window's title in the top bar, no side panel, and the
   canvas centred at the window's size, scaled down if the popup is smaller.

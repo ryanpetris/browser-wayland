@@ -168,7 +168,7 @@ impl State {
         // so the slot is free again when the last of them is done with it
         let lease = Arc::new(slot);
         let now = self.clock.now(); // after the GPU wait: when the frame really left
-        let mut encoded = 0;
+        let (mut encoded, mut failed) = (0, false);
         for (key, sink) in &mut self.viewer_sinks {
             let fd = dmabuf.handles().next().context("dmabuf has no plane").and_then(|fd| fd.as_fd().try_clone_to_owned().context("dup dmabuf fd"));
             let submitted = fd.and_then(|fd| {
@@ -189,19 +189,21 @@ impl State {
             });
             match submitted {
                 Ok(()) => encoded += 1,
-                Err(e) => tracing::warn!(key, "frame not encoded: {e}"),
+                Err(e) => {
+                    failed = true;
+                    tracing::warn!(key, "frame not encoded: {e}");
+                }
             }
         }
         if encoded > 0 {
             self.dirty = false;
-            self.force_full_frame = false;
             // an encoder has it: the closest thing to "presented" without a display; no MSC, so seq 0
             feedback.presented(now, Refresh::Fixed(self.frame_interval), 0, wp_presentation_feedback::Kind::empty());
         } else {
-            // The damage tracker already advanced, so the retry must redraw everything.
-            self.force_full_frame = true;
             feedback.discarded();
         }
+        // An encoder that got nothing gets the next frame whole: the damage tracker already advanced.
+        self.force_full_frame = failed || encoded == 0;
         Ok(())
     }
 }
