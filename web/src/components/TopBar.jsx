@@ -1,4 +1,4 @@
-import { Expand, Eye, LayoutGrid, LayoutList, Maximize, MousePointer2, PanelRight, Power, ScanSearch } from 'lucide-react';
+import { Expand, Eye, Keyboard, LayoutGrid, LayoutList, Maximize, MousePointer2, PanelRight, Power, ScanSearch } from 'lucide-react';
 import { useStore } from '../store.js';
 import { WINDOW } from '../api.js';
 import { IconButton, codecName } from './ui.jsx';
@@ -13,7 +13,7 @@ const STATUS = {
   quit: ['bg-zinc-500', 'Shut down'],
 };
 
-export function TopBar({ viewer, windowMode, borders, onBorders, elements, onElements, sidebar, onSidebar, onFullscreen, menu, onMenu }) {
+export function TopBar({ viewer, windowMode, borders, onBorders, elements, onElements, sidebar, onSidebar, onFullscreen, menu, onMenu, keyboard, onKeyboard }) {
   const status = useStore(viewer.store, s => s.status);
   const stream = useStore(viewer.store, s => s.stream);
   const windowTitle = useStore(viewer.store, s => s.windowTitle);
@@ -21,15 +21,15 @@ export function TopBar({ viewer, windowMode, borders, onBorders, elements, onEle
   const [dot, text] = STATUS[status];
   const acts = !windowMode && role && role !== 'viewer' && status === 'connected'; // the menus act on the desktop
   return (
-    <header className="flex h-11 shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-900 px-3">
+    <header className="flex h-11 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-2 sm:gap-3 sm:px-3">
       <div className="flex min-w-0 shrink items-center gap-2 font-medium text-zinc-100">
         <Logo />
-        <span className="truncate">{windowMode ? windowTitle || `Window ${WINDOW}` : 'browser-wayland'}</span>
+        <span className="hidden truncate sm:inline">{windowMode ? windowTitle || `Window ${WINDOW}` : 'browser-wayland'}</span>
       </div>
       {acts && <IconButton icon={LayoutGrid} label="Applications" active={menu === 'apps'} onClick={() => onMenu('apps')} />}
       <div className="flex min-w-0 shrink-0 items-center gap-2 text-xs text-zinc-400">
-        <span className={`size-2 shrink-0 rounded-full ${dot}`} />
-        <span className="truncate">{text}</span>
+        <span className={`size-2 shrink-0 rounded-full ${dot}`} title={text} />
+        <span className="hidden truncate sm:inline">{text}</span>
         {stream && status === 'connected' && (
           <span className="hidden truncate font-mono text-zinc-500 sm:inline">
             · {codecName(stream.codec)} {stream.width}×{stream.height}{stream.scale !== 1 ? ` @${stream.scale.toFixed(2)}` : ''}
@@ -39,13 +39,14 @@ export function TopBar({ viewer, windowMode, borders, onBorders, elements, onEle
       <div className="ml-auto flex items-center gap-1">
         {!windowMode && role === 'participant' && (
           <button type="button" onClick={e => { viewer.takeControl(); e.currentTarget.blur(); }} title="Drive the desktop; it takes this window's size" className="mr-1 inline-flex items-center gap-1.5 rounded-md bg-indigo-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-400">
-            <MousePointer2 className="size-3.5" /> Take control
+            <MousePointer2 className="size-3.5" /> <span className="hidden sm:inline">Take control</span>
           </button>
         )}
         {role === 'viewer' && (
-          <span className="mr-1 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400" title="The viewer token watches; it can't act"><Eye className="size-3.5" /> view only</span>
+          <span className="mr-1 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400" title="The viewer token watches; it can't act"><Eye className="size-3.5" /> <span className="hidden sm:inline">view only</span></span>
         )}
-        {!windowMode && role === 'controller' && <span className="mr-1 text-xs text-emerald-400/80" title="Your pointer, keyboard and window size are the desktop's">controlling</span>}
+        {!windowMode && role === 'controller' && <span className="mr-1 hidden text-xs text-emerald-400/80 sm:inline" title="Your pointer, keyboard and window size are the desktop's">controlling</span>}
+        {!windowMode && viewer.touch && role !== 'viewer' && <IconButton icon={Keyboard} label="On-screen keyboard" active={keyboard} onClick={onKeyboard} />}
         {!windowMode && (
           <>
             <IconButton icon={Maximize} label="Window borders" active={borders} onClick={onBorders} />

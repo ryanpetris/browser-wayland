@@ -8,6 +8,7 @@ import { Sidebar } from './components/Sidebar.jsx';
 import { StatusBar } from './components/StatusBar.jsx';
 import { TokenForm } from './components/TokenForm.jsx';
 import { Launcher, PowerMenu } from './components/Launcher.jsx';
+import { Keyboard, focusKeyboard } from './components/Keyboard.jsx';
 
 // A remembered on/off switch.
 function usePref(key, fallback) {
@@ -17,7 +18,8 @@ function usePref(key, fallback) {
 
 export function App({ viewer }) {
   const status = useStore(viewer.store, s => s.status);
-  const [sidebar, setSidebar] = usePref('sidebar', true);
+  const [sidebar, setSidebar] = usePref('sidebar', matchMedia('(min-width: 48rem)').matches); // a phone starts with the stage alone
+  const [keyboard, setKeyboard] = useState(false);
   const [borders, setBorders] = usePref('borders', false);
   const [elements, setElements] = usePref('elements', false);
   const [tab, setTab] = useState('windows');
@@ -42,14 +44,16 @@ export function App({ viewer }) {
         sidebar={sidebar} onSidebar={() => setSidebar(!sidebar)}
         onFullscreen={viewer.fullscreen}
         menu={menu} onMenu={m => setMenu(menu === m ? null : m)}
+        keyboard={keyboard} onKeyboard={() => (keyboard ? focusKeyboard() : setKeyboard(true))}
       />
       {menu === 'apps' && <Launcher viewer={viewer} onClose={() => setMenu(null)} />}
       {menu === 'power' && <PowerMenu viewer={viewer} onClose={() => setMenu(null)} />}
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         <Stage viewer={viewer} windowMode={windowMode} borders={borders && !windowMode} elements={elements && !windowMode} />
         {/* stays mounted while hidden, so the thumbnails don't reload on every toggle */}
         {!windowMode && <Sidebar viewer={viewer} tab={tab} onTab={setTab} hidden={!sidebar} />}
       </div>
+      {keyboard && <Keyboard viewer={viewer} onClose={() => setKeyboard(false)} />}
       <StatusBar viewer={viewer} />
       {(status === 'no-token' || status === 'unauthorized') && <TokenForm viewer={viewer} />}
     </div>

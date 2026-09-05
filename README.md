@@ -120,6 +120,17 @@ folder shown), so the file lands in the transfer folder either way.
 Files copied in a file manager inside the desktop show up in the status bar with a download button, and
 files copied on your machine paste into the desktop's file manager (they land in the folder first).
 
+## Phones and tablets
+
+The page works on a phone. A tap clicks, a finger drags, a hold of half a second right-clicks, two
+fingers scroll, and a pinch zooms the picture on the phone (the desktop keeps the phone's size; two
+fingers pan while zoomed, pinching back undoes it). The side panel slides over the stage, the top bar
+keeps its icons, and on touch devices a keyboard button opens a row with a field that brings up the
+phone's keyboard, whose text goes through the desktop's keyboard layout, and the keys such keyboards
+lack: Esc, Tab, Ctrl, Alt and Super (sticky, for the next key), the arrows, Del. Fullscreen works where
+the browser allows it (Android; iOS Safari has no fullscreen for pages, and needs Safari 26 for
+WebCodecs). Applications see a mouse; native touch is separate work.
+
 ## Window streams
 
 The ↗ button on a window's row in the panel opens it in a popup of its own, streaming only that window

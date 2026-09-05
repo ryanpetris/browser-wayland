@@ -1,6 +1,6 @@
 //! Binary WebSocket messages, little-endian, byte 0 = type. Mirrored in web/src/viewer.js.
 
-use bw_core::{Bytes, Codec, ControlMsg, CursorImage, EncodedFrame, Quality, StreamInfo, WindowInfo};
+use bw_core::{Bytes, Codec, ControlMsg, CursorImage, EncodedFrame, InputMsg, Quality, StreamInfo, WindowInfo};
 
 // server -> client
 pub const CONFIG: u8 = 0x01;
@@ -54,6 +54,10 @@ pub const STREAM: u8 = 0x8F;
 /// `{"op": "drop", "names": [...]}` with the files' names in the transfer folder (uploaded first), or
 /// `{"op": "cancel"}`. Controlling session only.
 pub const DRAG: u8 = 0x90;
+/// `[INPUT][JSON]`: one input action as `POST /api/input` takes it (`{"type": "text", "text": …}`,
+/// `{"type": "key", "keys": …}`, …), resolved on the compositor thread; the on-screen keyboard types with
+/// it, in order with the rest of the session's input. Controlling session only.
+pub const INPUT: u8 = 0x91;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,6 +226,7 @@ pub enum ClientMsg {
     Notify(NotifyMsg),
     Stream(StreamChoice),
     Drag(DragMsg),
+    Input(InputMsg),
 }
 
 #[derive(Debug, PartialEq, serde::Deserialize)]
@@ -274,6 +279,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         NOTIFY => ClientMsg::Notify(serde_json::from_slice(&b[1..]).ok()?),
         STREAM => ClientMsg::Stream(serde_json::from_slice(&b[1..]).ok()?),
         DRAG => ClientMsg::Drag(serde_json::from_slice(&b[1..]).ok()?),
+        INPUT => ClientMsg::Input(serde_json::from_slice(&b[1..]).ok()?),
         _ => return None,
     })
 }

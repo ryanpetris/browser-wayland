@@ -594,6 +594,7 @@ impl App {
             ClientMsg::Control(m) if key == Key::Control => self.command_for(m).ok(),
             ClientMsg::SetClipboard(text) if key == Key::Control => Some(Command::SetClipboard { mime: api::TEXT.into(), data: text.into() }),
             ClientMsg::Drag(d) if controls => Some(self.drag_command(d)),
+            ClientMsg::Input(m) if controls => Some(Command::Input(m)),
             m if controls => input_command(m),
             _ => None,
         };

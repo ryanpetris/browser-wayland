@@ -4,7 +4,7 @@
 import { KEYCODES } from './keycodes.js';
 import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, clipboardFiles, pref, codecs as serverCodecs } from './api.js';
 import { createStore } from './store.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, BTN } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -423,22 +423,100 @@ export function createViewer() {
   // --- input -----------------------------------------------------------------------------
   // Only the controller's pointer and keyboard are the desktop's (a window popup drives with any control token).
   const driving = () => WINDOW ? state().role !== 'viewer' : state().role === 'controller';
-  // Stream logical px per canvas CSS px (1 except while a resize is in flight).
-  const scaleX = () => (stream ? stream.width / stream.scale / canvas.clientWidth : 1);
-  const scaleY = () => (stream ? stream.height / stream.scale / canvas.clientHeight : 1);
+  // A pointer position in the desktop's logical px, through the canvas's on-screen rectangle (which
+  // follows the touch zoom); the stream's size is the desktop's, except while a resize is in flight.
+  function toDesktop(e) {
+    const r = canvas.getBoundingClientRect();
+    const w = stream ? stream.width / stream.scale : r.width, h = stream ? stream.height / stream.scale : r.height;
+    return { x: (e.clientX - r.left) / r.width * w, y: (e.clientY - r.top) / r.height * h };
+  }
   function onPointerMove(e) {
     if (!driving()) return;
     if (document.pointerLockElement) send(MOTION_REL, 8, dv => { dv.setFloat32(1, e.movementX, true); dv.setFloat32(5, e.movementY, true); });
-    else send(MOTION_ABS, 8, dv => { dv.setFloat32(1, e.offsetX * scaleX(), true); dv.setFloat32(5, e.offsetY * scaleY(), true); });
+    else { const p = toDesktop(e); send(MOTION_ABS, 8, dv => { dv.setFloat32(1, p.x, true); dv.setFloat32(5, p.y, true); }); }
   }
+  const sendButton = (btn, pressed) => send(BUTTON, 3, dv => { dv.setUint16(1, btn, true); dv.setUint8(3, pressed ? 1 : 0); });
+  // the gesture counts for every session: audio and the browser clipboard need one
+  function gesture(e) { canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); resumeAudio(); flushClipboard(); }
   function onPointerButton(e) {
     const btn = BTN[e.button];
     if (btn === undefined) return;
-    // the gesture counts for every session: audio and the browser clipboard need one
-    if (e.type === 'pointerdown') { canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); resumeAudio(); flushClipboard(); if (wantLock && driving()) requestLock(); }
+    if (e.type === 'pointerdown') { gesture(e); if (wantLock && driving()) requestLock(); }
     if (!driving()) return;
     onPointerMove(e);
-    send(BUTTON, 3, dv => { dv.setUint16(1, btn, true); dv.setUint8(3, e.type === 'pointerdown' ? 1 : 0); });
+    sendButton(btn, e.type === 'pointerdown');
+  }
+
+  // --- touch ----------------------------------------------------------------------------------
+  // A finger is a pointer with one button: a tap clicks, a hold of half a second right-clicks, movement
+  // drags (the left button goes down on the first movement, so a hold never clicks). Two fingers scroll
+  // (finger source, pixel deltas), or pinch to zoom the picture on this screen (the desktop keeps its
+  // size) and, while zoomed, pan it; pinched back near 1, the zoom snaps off.
+  const touches = new Map(); // pointerId -> { x, y } in client px, every finger down
+  let touch = null; // the one-finger gesture: where it started, whether the button went down, the hold timer
+  let pinch = null; // the two-finger gesture: the fingers' centre and distance, and whether it turned into a pinch
+  let zoom = { k: 1, tx: 0, ty: 0 };
+  const centroid = () => { const [a, b] = [...touches.values()]; return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, dist: Math.hypot(a.x - b.x, a.y - b.y) }; };
+  function applyZoom() {
+    canvas.style.transformOrigin = '0 0';
+    canvas.style.transform = zoom.k === 1 ? '' : `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.k})`;
+  }
+  // The one-finger gesture ends: a tap clicks (a hold's timer already right-clicked), a drag lets go.
+  function endTouch(tap) {
+    clearTimeout(touch.timer);
+    if (touch.pressed) sendButton(BTN[0], false);
+    else if (tap) { sendButton(BTN[0], true); sendButton(BTN[0], false); }
+    touch = null;
+  }
+  function onTouch(e) {
+    if (e.type === 'pointerdown') {
+      gesture(e);
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (!driving()) return;
+      if (touches.size === 1) {
+        onPointerMove(e);
+        touch = { x: e.clientX, y: e.clientY, pressed: false, timer: setTimeout(() => { touch = null; sendButton(BTN[2], true); sendButton(BTN[2], false); }, 500) };
+      } else if (touches.size === 2) {
+        if (touch) endTouch(false);
+        pinch = { ...centroid(), zooming: false };
+      }
+      return;
+    }
+    if (!touches.has(e.pointerId)) return;
+    if (e.type === 'pointermove') {
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touch) {
+        if (!touch.pressed) {
+          if (Math.hypot(e.clientX - touch.x, e.clientY - touch.y) < 10) return; // a hold, so far
+          clearTimeout(touch.timer);
+          touch.pressed = true;
+          sendButton(BTN[0], true);
+        }
+        onPointerMove(e);
+      } else if (pinch && touches.size === 2) {
+        const c = centroid();
+        pinch.zooming ||= Math.abs(c.dist / pinch.dist - 1) > 0.15;
+        if (pinch.zooming || zoom.k > 1) {
+          // scale about the fingers' centre so the picture under it stays put, then pan by the centre's movement,
+          // and keep the picture covering the stage
+          const r = canvas.parentElement.getBoundingClientRect();
+          const k = Math.max(1, Math.min(5, zoom.k * c.dist / pinch.dist));
+          const fx = pinch.cx - r.left, fy = pinch.cy - r.top;
+          zoom = { k, tx: fx - (fx - zoom.tx) * (k / zoom.k) + c.cx - pinch.cx, ty: fy - (fy - zoom.ty) * (k / zoom.k) + c.cy - pinch.cy };
+          if (k < 1.05) zoom = { k: 1, tx: 0, ty: 0 };
+          zoom.tx = Math.min(0, Math.max(r.width * (1 - zoom.k), zoom.tx));
+          zoom.ty = Math.min(0, Math.max(r.height * (1 - zoom.k), zoom.ty));
+          applyZoom();
+        } else {
+          send(AXIS, 9, dv => { dv.setUint8(1, 0); dv.setFloat32(2, pinch.cx - c.cx, true); dv.setFloat32(6, pinch.cy - c.cy, true); });
+        }
+        Object.assign(pinch, c);
+      }
+      return;
+    }
+    touches.delete(e.pointerId); // pointerup or pointercancel
+    if (touch) endTouch(e.type === 'pointerup');
+    if (touches.size < 2) pinch = null;
   }
   function onWheel(e) {
     e.preventDefault();
@@ -630,9 +708,11 @@ export function createViewer() {
     if (attached || !el) return;
     attached = true;
     canvas = el;
-    canvas.addEventListener('pointermove', onPointerMove);
-    canvas.addEventListener('pointerdown', onPointerButton);
-    canvas.addEventListener('pointerup', onPointerButton);
+    const byType = (mouse, touch) => e => (e.pointerType === 'touch' ? touch : mouse)(e);
+    canvas.addEventListener('pointermove', byType(onPointerMove, onTouch));
+    canvas.addEventListener('pointerdown', byType(onPointerButton, onTouch));
+    canvas.addEventListener('pointerup', byType(onPointerButton, onTouch));
+    canvas.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') onTouch(e); });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
     canvas.addEventListener('wheel', onWheel, { passive: false });
     canvas.addEventListener('dragenter', onDragEnter);
@@ -657,6 +737,10 @@ export function createViewer() {
     setElementsOn(on) { store.set({ elementsOn: on }); fetchElements(); },
     setStatsOn(on) { store.set({ statsOn: on }); inflight.clear(); stage_.decode.length = stage_.paint.length = stage_.interval.length = 0; lastPaint = 0; },
     releaseInput: () => send(BLUR, 0), // a key held on the canvas must not stay held while a text field has the keyboard
+    // the on-screen keyboard: text through the desktop's keyboard layout, and key chords (`ctrl+c`, `Left`)
+    type: text => sendText(INPUT, JSON.stringify({ type: 'text', text })),
+    key: keys => sendText(INPUT, JSON.stringify({ type: 'key', keys })),
+    touch: navigator.maxTouchPoints > 0,
     takeControl: () => send(TAKE_CONTROL, 0),
     setChoice,
     uploadFiles,

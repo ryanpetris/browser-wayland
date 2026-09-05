@@ -43,8 +43,8 @@ export function StatusBar({ viewer }) {
     <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-zinc-800 bg-zinc-900 px-3 font-mono text-[11px] text-zinc-500">
       <span className="flex items-center gap-1.5"><Activity className="size-3" /> {s.fps} fps</span>
       <span>{s.mbps.toFixed(1)} Mbit/s</span>
-      <span title="Input to the next painted frame">{s.latencyMs.toFixed(0)} ms</span>
-      <span className={bad ? 'text-amber-400' : ''} title="lost · dropped · decode errors">{s.lost} · {s.dropped} · {s.decodeErrors}</span>
+      <span className="hidden sm:inline" title="Input to the next painted frame">{s.latencyMs.toFixed(0)} ms</span>
+      <span className={`hidden sm:inline ${bad ? 'text-amber-400' : ''}`} title="lost · dropped · decode errors">{s.lost} · {s.dropped} · {s.decodeErrors}</span>
       <span className="ml-auto flex items-center gap-4">
         {clipboardFiles.length > 0 ? (
           <button type="button" onClick={async () => { for (const [i, n] of clipboardFiles.entries()) await downloadClipboardFile(i, n).catch(() => {}); }} title={`Download the copied files: ${clipboardFiles.join(', ')}`} className="flex max-w-48 items-center gap-1 truncate text-indigo-300 hover:text-indigo-200">
@@ -55,8 +55,8 @@ export function StatusBar({ viewer }) {
         <span className="flex items-center gap-1" title={s.audio ? `audio ${s.audio.state}` : 'no audio yet'}>
           {s.audio?.state === 'running' ? <Volume2 className="size-3 text-emerald-400" /> : <VolumeX className="size-3" />}
         </span>
-        <Choice viewer={viewer} />
-        <span>{renderer}</span>
+        <span className="hidden items-center gap-4 sm:flex"><Choice viewer={viewer} /></span>
+        <span className="hidden sm:inline">{renderer}</span>
       </span>
     </footer>
   );

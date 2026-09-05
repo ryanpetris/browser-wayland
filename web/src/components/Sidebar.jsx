@@ -8,7 +8,7 @@ import { codecName, windowColor } from './ui.jsx';
 // The two panels stay mounted (hidden) so the window list keeps its thumbnails across toggles.
 export function Sidebar({ viewer, tab, onTab, hidden }) {
   return (
-    <aside hidden={hidden} className="flex w-80 shrink-0 flex-col border-l border-zinc-800 bg-zinc-900">
+    <aside hidden={hidden} className="absolute inset-y-0 right-0 z-10 flex w-full max-w-sm shrink-0 flex-col border-l border-zinc-800 bg-zinc-900 md:static md:w-80 md:max-w-none">
       <nav className="flex shrink-0 border-b border-zinc-800 text-sm">
         {[['windows', 'Windows'], ['files', 'Files'], ['stats', 'Statistics']].map(([t, label]) => (
           <button
