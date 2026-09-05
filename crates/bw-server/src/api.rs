@@ -191,17 +191,11 @@ impl App {
     /// A window's icon as bytes and media type: the name its client set, else the pixels it set, else
     /// its launcher's icon.
     pub async fn window_icon(&self, id: u64) -> Result<(Vec<u8>, &'static str), ApiError> {
-        let (icon, app_id) = self.viewers.lock().unwrap().window_list.iter().find(|w| w.id == id).map(|w| (w.icon.clone(), w.app_id.clone())).ok_or(ApiError::NotFound)?;
-        let file = |icon: Option<String>, app_id: String| async move {
-            tokio::task::spawn_blocking(move || {
-                let (path, mime) = apps::window_icon(icon.as_deref(), &app_id).ok_or(ApiError::NotFound)?;
-                Ok((std::fs::read(path).map_err(|e| ApiError::Internal(e.to_string()))?, mime))
-            })
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?
-        };
-        if icon.is_some() {
-            return file(icon, app_id).await;
+        let (WindowInfo { icon, app_id, .. }, _) = self.window(id)?;
+        if let Some(name) = icon
+            && let Some(found) = read_icon(move || apps::named_icon(&name)).await?
+        {
+            return Ok(found);
         }
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<Snapshot, SnapshotError>>();
         let reply = SnapshotReply(Box::new(move |s| {
@@ -210,7 +204,7 @@ impl App {
         self.send(Command::WindowIcon { id, reply })?;
         match tokio::time::timeout(Duration::from_secs(2), rx).await {
             Ok(Ok(Ok(snap))) => Ok((encode_png(snap).await?, "image/png")),
-            Ok(Ok(Err(SnapshotError::NoSuchWindow))) => file(None, app_id).await,
+            Ok(Ok(Err(SnapshotError::NoSuchWindow))) => read_icon(move || apps::launcher_icon(&app_id)).await?.ok_or(ApiError::NotFound),
             Ok(Ok(Err(SnapshotError::Render(e)))) => Err(ApiError::Internal(e)),
             _ => Err(ApiError::Unavailable("the compositor didn't answer".into())),
         }
@@ -228,6 +222,16 @@ impl App {
     fn send(&self, cmd: Command) -> Result<(), ApiError> {
         self.commands.send(cmd).map_err(|_| ApiError::Unavailable("the compositor is gone".into()))
     }
+}
+
+/// An icon file found by `find`, read on the blocking pool.
+async fn read_icon(find: impl FnOnce() -> Option<(std::path::PathBuf, &'static str)> + Send + 'static) -> Result<Option<(Vec<u8>, &'static str)>, ApiError> {
+    tokio::task::spawn_blocking(move || {
+        let Some((path, mime)) = find() else { return Ok(None) };
+        Ok(Some((std::fs::read(path).map_err(|e| ApiError::Internal(e.to_string()))?, mime)))
+    })
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?
 }
 
 /// Straight-alpha RGBA rows to PNG, on the blocking pool.

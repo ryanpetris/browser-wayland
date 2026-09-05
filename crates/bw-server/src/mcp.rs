@@ -196,7 +196,7 @@ impl Mcp {
 
 #[tool_router(vis = "pub(crate)")]
 impl Mcp {
-    #[tool(description = "The windows on the desktop: id, title, app_id, pid, geometry x y w h (logical px), stacking z, maximized/fullscreen/minimized/focused, updated_ms (last redraw), popups (open menus, relative to x y).")]
+    #[tool(description = "The windows on the desktop: id, title, app_id, icon (name the client set; its picture is at GET /api/windows/{id}/icon), pid, geometry x y w h (logical px), stacking z, maximized/fullscreen/minimized/focused, updated_ms (last redraw), popups (open menus, relative to x y).")]
     fn windows(&self) -> ToolResult {
         json(self.app.windows())
     }

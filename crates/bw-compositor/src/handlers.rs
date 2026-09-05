@@ -160,16 +160,24 @@ impl State {
         self.space.elements().find(|w| w.wl_surface().is_some_and(|s| *s == *surface)).cloned()
     }
 
-    /// The toplevels whose xdg parent (set_parent, or xdg-foreign) is this window.
+    /// The toplevels whose xdg parent chain (set_parent, or xdg-foreign) leads to this window, bottom to top.
     pub fn transients_of(&self, window: &Window) -> Vec<Window> {
-        let Some(surface) = window.wl_surface() else { return vec![] };
-        self.space.elements().filter(|w| w.toplevel().and_then(|t| t.parent()).is_some_and(|p| p == *surface)).cloned().collect()
+        let mut roots: Vec<WlSurface> = window.wl_surface().map(|s| s.into_owned()).into_iter().collect();
+        let mut found = Vec::new();
+        while !roots.is_empty() {
+            let next: Vec<Window> = self.space.elements().filter(|w| !found.contains(*w) && w.toplevel().and_then(|t| t.parent()).is_some_and(|p| roots.contains(&p))).cloned().collect();
+            roots = next.iter().filter_map(|w| w.wl_surface().map(|s| s.into_owned())).collect();
+            found.extend(next);
+        }
+        let order = |w: &Window| self.space.elements().position(|e| e == w);
+        found.sort_by_key(order);
+        found
     }
 
     /// Put a window with an xdg parent in the middle of that parent.
     fn center_on_parent(&mut self, window: &Window) {
         let Some(parent) = window.toplevel().and_then(|t| t.parent()).and_then(|p| self.window_for(&p)) else { return };
-        let Some(pg) = self.space.element_geometry(&parent) else { return };
+        let (Some(pg), true) = (self.space.element_geometry(&parent), self.space.element_location(window).is_some()) else { return }; // not a minimized child
         let size = window.geometry().size;
         let loc = self.clamp_to_output(window, pg.loc + Point::from(((pg.size.w - size.w) / 2, (pg.size.h - size.h) / 2)));
         self.space.map_element(window.clone(), loc, false);
@@ -267,14 +275,15 @@ impl CompositorHandler for State {
             if let Some(window) = self.window_for(&root).or_else(minimized) {
                 window.on_commit();
                 self.touch_window(&window);
+                let has_buffer = with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false);
                 // a dialog opens over its parent, not in the cascade
-                if with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false) && window.user_data().insert_if_missing(|| FirstBuffer) {
+                if has_buffer && window.user_data().insert_if_missing(|| FirstBuffer) {
                     self.center_on_parent(&window);
                 }
                 // A new window takes the keyboard once it has something to show (its first buffer), so typing
                 // goes to it without a click, unless a launcher holds an exclusive grab. Once per window.
                 if self.active.as_ref() == Some(&window)
-                    && with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false)
+                    && has_buffer
                     && !self.exclusive_layer_focused()
                     && window.user_data().insert_if_missing(|| InitialFocus)
                 {
@@ -761,6 +770,11 @@ smithay::delegate_alpha_modifier!(State);
 impl smithay::wayland::xdg_activation::XdgActivationHandler for State {
     fn activation_state(&mut self) -> &mut smithay::wayland::xdg_activation::XdgActivationState {
         &mut self.xdg_activation_state
+    }
+    fn token_created(&mut self, _token: smithay::wayland::xdg_activation::XdgActivationToken, _data: smithay::wayland::xdg_activation::XdgActivationTokenData) -> bool {
+        // tokens nobody used (a launched program that never asked) would otherwise pile up
+        self.xdg_activation_state.retain_tokens(|_, d| d.timestamp.elapsed() < std::time::Duration::from_secs(60));
+        true
     }
     fn request_activation(&mut self, token: smithay::wayland::xdg_activation::XdgActivationToken, _data: smithay::wayland::xdg_activation::XdgActivationTokenData, surface: WlSurface) {
         self.xdg_activation_state.remove_token(&token);

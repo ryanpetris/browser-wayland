@@ -281,7 +281,7 @@ async fn api_application_icon(UrlPath(id): UrlPath<String>, State(app): State<Ar
 
 async fn api_window_icon(UrlPath(id): UrlPath<u64>, State(app): State<Arc<App>>) -> Response {
     match app.window_icon(id).await {
-        Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=86400")], bytes).into_response(),
+        Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=300")], bytes).into_response(),
         Err(e) => e.into_response(),
     }
 }

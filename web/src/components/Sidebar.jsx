@@ -64,7 +64,7 @@ function Spawn({ viewer }) {
 }
 
 function WinIcon({ w }) {
-  const key = `${w.icon ?? ''}|${w.app_id}`;
+  const key = `${w.id}|${w.icon ?? ''}|${w.app_id}`; // pixel icons differ per window
   const [src, setSrc] = useState(null);
   useEffect(() => {
     let live = true;

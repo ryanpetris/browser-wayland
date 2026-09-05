@@ -107,8 +107,9 @@ fullscreen the output. Focus, raising and activation go through one function (`f
 the click handler, the taskbar protocol, the desktop API and minimize all use. Minimized windows leave
 the space into a list (no rendering, hit-testing or frame callbacks) and come back through `relayout`.
 Client buffers are wl_shm, linux-dmabuf or single-pixel-buffer-v1 (GTK4's solid backgrounds), and
-alpha-modifier-v1 fades a surface without redrawing it. A toplevel with an xdg parent (set_parent, or another client's window through xdg-foreign, as
-portal dialogs do) opens centred on the parent and is raised with it; xdg-activation lets a client
+alpha-modifier-v1 fades a surface without redrawing it. A toplevel with an xdg parent (set_parent, or another client's window through xdg-foreign v2, as
+GTK4 and Qt portal dialogs do; GTK3 exports through v1, which Smithay doesn't offer) opens centred on
+the parent and is raised with it; xdg-activation lets a client
 bring a window forward (a link opened from another program, a second instance of an application).
 Windows that don't draw their own decorations (X11 windows, Wayland toplevels that ask for server-side
 decorations or bind neither xdg-decoration nor KDE's server-decoration protocol) get a title bar drawn

@@ -138,10 +138,15 @@ pub fn icon(id: &str) -> Option<(PathBuf, &'static str)> {
     icon_file(&entry(id)?.icon?)
 }
 
-/// A window's icon: the name its client set, else its launcher's (the app id is the desktop id for
-/// Wayland clients; X11 classes are often the lowercase name).
-pub fn window_icon(icon: Option<&str>, app_id: &str) -> Option<(PathBuf, &'static str)> {
-    icon.and_then(icon_file).or_else(|| entry(app_id).or_else(|| entry(&app_id.to_lowercase()))?.icon.and_then(|i| icon_file(&i)))
+/// An icon a client named through xdg-toplevel-icon: a stock name, never a path.
+pub fn named_icon(name: &str) -> Option<(PathBuf, &'static str)> {
+    (!name.contains('/')).then(|| icon_file(name)).flatten()
+}
+
+/// A window's launcher's icon (the app id is the desktop id for Wayland clients; X11 classes are
+/// often the lowercase name).
+pub fn launcher_icon(app_id: &str) -> Option<(PathBuf, &'static str)> {
+    entry(app_id).or_else(|| entry(&app_id.to_lowercase()))?.icon.and_then(|i| icon_file(&i))
 }
 
 /// An icon name (or path) as a file and its media type: SVG or PNG from the icon themes (hicolor,
