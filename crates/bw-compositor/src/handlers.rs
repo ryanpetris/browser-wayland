@@ -799,3 +799,9 @@ smithay::delegate_xdg_foreign!(State);
 /// The icon name lands in the surface's cached state, read with the window list.
 impl smithay::wayland::xdg_toplevel_icon::XdgToplevelIconHandler for State {}
 smithay::delegate_xdg_toplevel_icon!(State);
+
+// Frame pacing: barriers and timers are released from the frame clock (State::release_barriers);
+// the content type is read with the window list.
+smithay::delegate_fifo!(State);
+smithay::delegate_commit_timing!(State);
+smithay::delegate_content_type!(State);

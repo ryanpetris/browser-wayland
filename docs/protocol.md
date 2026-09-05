@@ -140,7 +140,7 @@ Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; se
 ### Window object
 
 ```json
-{"id": 3, "title": "…", "app_id": "org.gnome.Calculator", "icon": "org.gnome.Calculator", "x11": false, "pid": 4242,
+{"id": 3, "title": "…", "app_id": "org.gnome.Calculator", "icon": "org.gnome.Calculator", "content": null, "x11": false, "pid": 4242,
  "x": 70, "y": 70, "w": 360, "h": 616, "geo_x": 26, "geo_y": 23, "popups": [[12, 40, 200, 310]], "decoration": 0, "z": 1,
  "maximized": false, "fullscreen": false, "minimized": false, "focused": true,
  "updated_ms": 34044000}

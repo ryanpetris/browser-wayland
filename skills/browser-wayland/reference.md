@@ -41,6 +41,13 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
       "description": "X11: the WM_CLASS",
       "type": "string"
     },
+    "content": {
+      "description": "what the client says it shows (content-type-v1): `photo`, `video` or `game`; absent for ordinary windows",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "decoration": {
       "description": "height of the compositor's title bar above the geometry (the `decoration` module has its layout); 0 when the client draws its own",
       "type": "integer",
@@ -1126,7 +1133,7 @@ Change a window's state: activate (raise, focus, restore), close, minimize, unmi
 
 ### `windows`
 
-The windows on the desktop: id, title, app_id, pid, geometry x y w h (logical px), stacking z, maximized/fullscreen/minimized/focused, updated_ms (last redraw), popups (open menus, relative to x y).
+The windows on the desktop: id, title, app_id, icon (name the client set; its picture is at GET /api/windows/{id}/icon), content (video/game/photo when the client says so), pid, geometry x y w h (logical px), stacking z, maximized/fullscreen/minimized/focused, updated_ms (last redraw), popups (open menus, relative to x y).
 
 ```json
 {

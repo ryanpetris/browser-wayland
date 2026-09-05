@@ -40,14 +40,17 @@ use smithay::{
         wayland_protocols::ext::workspace::v1::server::ext_workspace_manager_v1::ExtWorkspaceManagerV1,
         wayland_protocols_wlr::foreign_toplevel::v1::server::zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1,
         wayland_server::{
-            Display, DisplayHandle,
+            Display, DisplayHandle, Resource,
             backend::{ClientData, ClientId, DisconnectReason},
         },
     },
     utils::{Clock, IsAlive, Logical, Monotonic, Point, Rectangle, SERIAL_COUNTER, Transform},
     wayland::{
         alpha_modifier::AlphaModifierState,
+        commit_timing::{CommitTimerBarrierStateUserData, CommitTimingManagerState},
         compositor::{CompositorClientState, CompositorState},
+        content_type::ContentTypeState,
+        fifo::{FifoBarrierCachedState, FifoManagerState},
         cursor_shape::CursorShapeManagerState,
         dmabuf::{DmabufFeedback, DmabufFeedbackBuilder, DmabufState},
         drm_syncobj::{DrmSyncobjState, supports_syncobj_eventfd},
@@ -203,6 +206,9 @@ pub struct State {
     pub xdg_activation_state: XdgActivationState,
     pub xdg_foreign_state: XdgForeignState,
     pub xdg_toplevel_icon_state: XdgToplevelIconManager,
+    pub fifo_state: FifoManagerState,
+    pub commit_timing_state: CommitTimingManagerState,
+    pub content_type_state: ContentTypeState,
     pub xwayland_shell_state: XWaylandShellState,
     pub xwm: Option<X11Wm>,
     pub x11_display: Option<u32>,
@@ -336,6 +342,9 @@ impl State {
             xdg_activation_state: XdgActivationState::new::<State>(&dh),
             xdg_foreign_state: XdgForeignState::new::<State>(&dh),
             xdg_toplevel_icon_state: XdgToplevelIconManager::new::<State>(&dh),
+            fifo_state: FifoManagerState::new::<State>(&dh),
+            commit_timing_state: CommitTimingManagerState::new::<State>(&dh),
+            content_type_state: ContentTypeState::new::<State>(&dh),
             xwayland_shell_state: XWaylandShellState::new::<State>(&dh),
             xwm: None,
             x11_display: None,
@@ -397,6 +406,7 @@ impl State {
         handle
             .insert_source(Timer::from_duration(interval), move |_, _, state| {
                 state.tick();
+                state.release_barriers();
                 TimeoutAction::ToDuration(interval)
             })
             .unwrap();
@@ -504,6 +514,41 @@ impl State {
     }
 
     /// Keep at least a corner of `window` at `loc` (and its title bar, if we draw one) reachable in the work area.
+    /// Every refresh, whether or not a frame was rendered: let the content updates clients queued behind
+    /// a fifo barrier or a commit timer through (fifo-v1, commit-timing-v1). Hidden windows count too, or
+    /// they would never draw again.
+    fn release_barriers(&mut self) {
+        let deadline = self.clock.now() + self.frame_interval;
+        let mut clients = Vec::new();
+        let mut visit = |surface: &WlSurface, states: &smithay::wayland::compositor::SurfaceData| {
+            let fifo = states.cached_state.get::<FifoBarrierCachedState>().current().barrier.take();
+            let timer = states.data_map.get::<CommitTimerBarrierStateUserData>().is_some_and(|t| t.lock().unwrap().signal_until(deadline));
+            let fired = fifo.is_some() || timer;
+            if let Some(b) = fifo {
+                b.signal();
+            }
+            if fired
+                && let Some(c) = surface.client()
+                && !clients.contains(&c)
+            {
+                clients.push(c);
+            }
+        };
+        for w in self.space.elements().chain(self.minimized.iter().map(|(w, ..)| w)) {
+            w.with_surfaces(&mut visit);
+        }
+        for l in layer_map_for_output(&self.output).layers() {
+            l.with_surfaces(&mut visit);
+        }
+        if let CursorImageStatus::Surface(s) = &self.cursor_status {
+            smithay::desktop::utils::with_surfaces_surface_tree(s, &mut visit);
+        }
+        let dh = self.dh.clone();
+        for c in clients {
+            c.get_data::<ClientState>().unwrap().compositor_state.blocker_cleared(self, &dh);
+        }
+    }
+
     pub fn clamp_to_output(&self, window: &Window, loc: Point<i32, Logical>) -> Point<i32, Logical> {
         let work = self.work_area();
         let bar = self.bar_height(window);

@@ -20,7 +20,8 @@ use smithay::{
     desktop::{Window, WindowSurface, PopupManager},
     reexports::{wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState, wayland_server::Resource},
     utils::{Buffer, Physical, Rectangle, SERIAL_COUNTER, Scale, Size, Transform},
-    wayland::{compositor::with_states, shell::xdg::XdgToplevelSurfaceData, xdg_toplevel_icon::ToplevelIconCachedState},
+    reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type as ContentType,
+    wayland::{compositor::with_states, content_type::ContentTypeSurfaceCachedState, shell::xdg::XdgToplevelSurfaceData, xdg_toplevel_icon::ToplevelIconCachedState},
 };
 
 use crate::State;
@@ -61,11 +62,19 @@ impl State {
             Rectangle::new(loc, window.geometry().size)
         });
         let mut popups = Vec::new();
-        let mut icon = None;
+        let (mut icon, mut content) = (None, None);
         let (x11, pid, maximized, fullscreen) = match window.underlying_surface() {
             WindowSurface::Wayland(t) => {
                 let st = t.current_state().states;
-                icon = with_states(t.wl_surface(), |s| s.cached_state.get::<ToplevelIconCachedState>().current().icon_name().map(str::to_string));
+                with_states(t.wl_surface(), |s| {
+                    icon = s.cached_state.get::<ToplevelIconCachedState>().current().icon_name().map(str::to_string);
+                    content = match s.cached_state.get::<ContentTypeSurfaceCachedState>().current().content_type() {
+                        ContentType::Photo => Some("photo"),
+                        ContentType::Video => Some("video"),
+                        ContentType::Game => Some("game"),
+                        _ => None,
+                    };
+                });
                 let pid = t.wl_surface().client().and_then(|c| c.get_credentials(&self.dh).ok()).map(|c| c.pid as u32);
                 // a popup's location is relative to the parent's geometry, like our x/y
                 popups.extend(PopupManager::popups_for_surface(t.wl_surface()).map(|(p, loc)| {
@@ -81,6 +90,7 @@ impl State {
             title,
             app_id,
             icon,
+            content: content.map(str::to_string),
             x11,
             pid,
             x: geo.loc.x,

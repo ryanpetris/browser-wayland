@@ -116,6 +116,12 @@ decorations or bind neither xdg-decoration nor KDE's server-decoration protocol)
 by the compositor (`decor.rs`, see [desktop-api.md](desktop-api.md)). Super/Alt + left drag moves any
 window besides.
 
+**Frame pacing.** A frame clock at the output's refresh rate renders when something is dirty. On every
+tick, rendered or not, the compositor releases the fifo barriers (fifo-v1) and commit timers
+(commit-timing-v1) of every surface, hidden ones included, so a client that queues one frame per
+refresh never stalls; the released commits render on the next tick. content-type-v1 is recorded per
+window for the API.
+
 **Input.** Browser keys arrive as evdev codes (xkb keycode = evdev + 8); the compositor never
 auto-repeats (clients do, via `repeat_info`) and ignores repeats. Pointer motion hit-tests overlay/top
 layers, then windows, then bottom/background layers. Pointer locks (relative-pointer + pointer-
