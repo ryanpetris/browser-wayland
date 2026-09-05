@@ -97,19 +97,24 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<(String, Key)
     auth
 }
 
-/// Hello, which picks the codec, before the pipeline exists.
+/// Hello, which picks the codec, before the pipeline exists; five seconds of silence ends the socket.
 async fn hello(socket: &mut WebSocket) -> Option<(u8, u8)> {
-    loop {
-        match socket.recv().await? {
-            Ok(Message::Binary(b)) => {
-                if let Some(ClientMsg::Hello { hw, sw }) = protocol::decode(&b) {
-                    return Some((hw, sw));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match socket.recv().await? {
+                Ok(Message::Binary(b)) => {
+                    if let Some(ClientMsg::Hello { hw, sw }) = protocol::decode(&b) {
+                        return Some((hw, sw));
+                    }
                 }
+                Ok(Message::Close(_)) | Err(_) => return None,
+                _ => {}
             }
-            Ok(Message::Close(_)) | Err(_) => return None,
-            _ => {}
         }
-    }
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 async fn close(socket: &mut WebSocket, code: u16, reason: &str) {
@@ -179,7 +184,9 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                         seq = seq.wrapping_add(1);
                     }
                 }
-                Some(StreamMsg::Failed) | None => break None, // the page reconnects and gets a fresh pipeline
+                // the sink dropped the dead pipeline; the next frame builds a new one
+                Some(StreamMsg::Failed) => { let _ = app.commands.send(Command::RequestFullFrame); }
+                None => break None,
                 Some(StreamMsg::Audio { .. }) => {}
             },
             ev = erx.recv() => match ev {
@@ -281,7 +288,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                         seq = seq.wrapping_add(1);
                     }
                 }
-                Some(StreamMsg::Failed) => break None, // the page reconnects and gets a fresh pipeline
+                Some(StreamMsg::Failed) => { let _ = app.commands.send(Command::RequestFullFrame); }
                 Some(StreamMsg::Audio { .. }) => {}
                 None => break Some((GONE, "window closed")), // the compositor dropped the stream: the window is gone
             },
@@ -391,7 +398,7 @@ impl App {
                     Some(Command::Resize(geo))
                 } else {
                     if let Some(s) = v.sessions.get(&id) {
-                        s.control.set_size(fit(&v.output, &geo));
+                        s.control.set_size(Some(fit(&v.output, &geo)));
                     }
                     None
                 }
@@ -430,12 +437,18 @@ impl App {
             return;
         }
         v.controller = next;
-        let _ = self.commands.send(Command::ReleaseAllInput); // whatever the old controller held
-        if let Some(size) = next.and_then(|id| v.sessions.get(&id)).and_then(|s| s.size) {
+        // whatever the old controller held; the application asks for its pointer lock again on the new one's click
+        let _ = self.commands.send(Command::ReleaseAllInput);
+        let _ = self.commands.send(Command::ReleasePointerLock);
+        // targets first, so the frame the compositor renders for the new size finds them in place
+        let size = next.and_then(|id| v.sessions.get(&id)).and_then(|s| s.size);
+        if let Some(size) = size {
             v.output = size;
-            let _ = self.commands.send(Command::Resize(size));
         }
         self.retarget(v);
+        if let Some(size) = size {
+            let _ = self.commands.send(Command::Resize(size));
+        }
         for id in [old, next].into_iter().flatten() {
             if let Some(s) = v.sessions.get(&id) {
                 let _ = s.events.try_send(protocol::role(v.role_of(id)));
@@ -443,11 +456,14 @@ impl App {
         }
     }
 
-    /// Every viewer's encoder scales the output to that viewer's window (the controller's is the output itself).
+    /// Every viewer's encoder scales the output to that viewer's window; the controller's window is the
+    /// output, so its encoder takes the frames as they are.
+    // ponytail: set_size takes the sink's lock, which the compositor holds while it builds a pipeline
+    // (~100 ms), under the viewers lock; hand the controls out as Arcs and call past the lock if that shows
     fn retarget(&self, v: &Viewers) {
-        for s in v.sessions.values() {
+        for (id, s) in &v.sessions {
             if let Some(size) = s.size {
-                s.control.set_size(fit(&v.output, &size));
+                s.control.set_size((v.controller != Some(*id)).then(|| fit(&v.output, &size)));
             }
         }
     }
@@ -477,8 +493,7 @@ fn geometry(css_w: u16, css_h: u16, dpr: f64) -> OutputGeometry {
     OutputGeometry { width_px: px(css_w), height_px: px(css_h), scale: dpr, refresh_mhz: 60_000 }
 }
 
-/// The output scaled to fit a viewer's window (never up), even-sized for the encoders. A viewer whose
-/// window is the output's size, the controller, gets the frames as they are.
+/// The output scaled to fit a viewer's window (never up), even-sized for the encoders.
 fn fit(output: &OutputGeometry, stage: &OutputGeometry) -> (u32, u32) {
     let k = (stage.width_px as f64 / output.width_px as f64).min(stage.height_px as f64 / output.height_px as f64).min(1.0);
     let even = |px: f64| ((px.round() as u32) & !1).max(2);

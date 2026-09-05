@@ -24,21 +24,24 @@ export function Stage({ viewer, windowMode, borders, elements }) {
   return (
     <div ref={el} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-black">
       <canvas ref={viewer.attach} tabIndex={-1} className={`stage block outline-none ${windowMode ? '' : 'h-full w-full'}`} />
-      {(borders || elements) && <Overlay viewer={viewer} size={size} borders={borders} elements={elements} />}
+      {(borders || elements) && <Overlay viewer={viewer} size={size} windowMode={windowMode} borders={borders} elements={elements} />}
       <Banner viewer={viewer} />
     </div>
   );
 }
 
 // One rectangle per visible window (the same hue as its row) and one per element of the focused
-// window, in CSS px over the canvas, which fills the stage.
-function Overlay({ viewer, size, borders, elements }) {
+// window, in CSS px over the canvas, which sits centred in the stage at the size fitCanvas gives it.
+function Overlay({ viewer, size, windowMode, borders, elements }) {
   const windows = useStore(viewer.store, s => s.windows);
   const stream = useStore(viewer.store, s => s.stream);
   const els = useStore(viewer.store, s => s.elements);
   if (!stream || !size.w) return null;
-  const sx = size.w / (stream.width / stream.scale), sy = size.h / (stream.height / stream.scale);
-  const box = (x, y, w, h) => ({ left: x * sx, top: y * sy, width: w * sx, height: h * sy });
+  const sw = stream.width / stream.scale, sh = stream.height / stream.scale;
+  let k = Math.min(size.w / sw, size.h / sh);
+  if (windowMode) k = Math.min(1, k);
+  const ox = (size.w - sw * k) / 2, oy = (size.h - sh * k) / 2;
+  const box = (x, y, w, h) => ({ left: ox + x * k, top: oy + y * k, width: w * k, height: h * k });
   const f = windows.find(w => w.focused && !w.minimized);
   const page = elements && f && els?.id === f.id ? els : null;
   const why = page && (page.status !== 200 ? page.page.error || `HTTP ${page.status}` : page.page.level !== 'full' && `no elements: ${page.page.level}${page.page.toolkit ? ` (${page.page.toolkit})` : ''}`);
@@ -56,7 +59,7 @@ function Overlay({ viewer, size, borders, elements }) {
         <div key={i} className="absolute box-border border" style={{ ...box(f.x + e.x, f.y + e.y, e.w, e.h), borderColor: `hsl(${hue(e.role)} 80% 55%)` }} />
       ))}
       {why && (
-        <div className="absolute rounded-b bg-zinc-950/80 px-1.5 font-mono text-[11px] leading-5 whitespace-nowrap text-zinc-200" style={{ left: f.x * sx, top: (f.y + f.h) * sy }}>
+        <div className="absolute rounded-b bg-zinc-950/80 px-1.5 font-mono text-[11px] leading-5 whitespace-nowrap text-zinc-200" style={{ left: ox + f.x * k, top: oy + (f.y + f.h) * k }}>
           {why}
         </div>
       )}

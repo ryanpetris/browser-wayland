@@ -279,7 +279,7 @@ impl StreamControl for GstControl {
             GstSink(inner).set_codec(codec);
         }
     }
-    fn set_size(&self, size: (u32, u32)) {
+    fn set_size(&self, size: Option<(u32, u32)>) {
         if let Some(inner) = self.0.upgrade() {
             GstSink(inner).set_size(size);
         }
@@ -339,12 +339,12 @@ impl StreamControl for GstSink {
         discard(old);
     }
 
-    fn set_size(&self, size: (u32, u32)) {
+    fn set_size(&self, size: Option<(u32, u32)>) {
         let mut i = self.0.lock().unwrap();
-        if i.target == Some(size) {
+        if i.target == size {
             return;
         }
-        i.target = Some(size);
+        i.target = size;
         let old = i.take_stream();
         drop(i);
         discard(old);

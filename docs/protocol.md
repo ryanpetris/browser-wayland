@@ -31,13 +31,13 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | Type | Name | Payload |
 |---|---|---|
 | `0x01` | Config | JSON `{streamId, codec, width, height, scale}`. Sent before the first frame of every (re)started stream; the viewer resets its decoder on a new `streamId`. `codec` is a WebCodecs string (`avc1…`, `hev1…`, `vp09…`). |
-| `0x02` | Video | `u8 flags` (bit 0 keyframe) `u16 seq` `u64 pts_us` then one Annex B access unit. `seq` counts every frame the encoder produced while a viewer was attached, sent or not, restarting at 0 with each new stream; the first frame after a Config need not be 0. A gap means frames were dropped for this viewer. |
+| `0x02` | Video | `u8 flags` (bit 0 keyframe) `u16 seq` `u64 pts_us` then one Annex B access unit. `seq` numbers the frames of a stream from 0 in the order they are sent, restarting with each new stream; the page treats a gap as a lost frame and waits for the next keyframe. |
 | `0x03` | Cursor | `u16 w` `u16 h` `i16 hot_x` `i16 hot_y` `u16 logical_w` `u16 logical_h` then straight-alpha RGBA; `w == 0` hides the pointer. The bitmap is `w × h`; it is shown at `logical_w × logical_h` logical pixels (larger for a client's HiDPI cursor, by buffer scale or viewport), the hotspot is logical, so the page uses `image-set(… (w/logical_w)x)`. |
 | `0x04` | PointerLock | `u8 locked`: a client locked or released the pointer; the page mirrors it with the Pointer Lock API. |
 | `0x05` | Audio | `u8 0` `u16 seq` `u64 pts_us` then one 20 ms Opus packet. `seq` counts every packet, sent or not. |
 | `0x06` | Windows | JSON array of window objects (see below), the whole list, whenever anything in it changed. Replayed to a new viewer. |
 | `0x07` | Clipboard | UTF-8 text a desktop application put on the clipboard (text mime types only, at most 1 MiB). Not replayed: a viewer that reconnects keeps its browser clipboard. |
-| `0x08` | Role | `u8`: what this session may do. 0 watch only (the viewer token); 1 act but not drive (a control token while another session controls); 2 control: its pointer, keyboard and window size are the desktop's. Sent after `AUTH` and whenever it changes. |
+| `0x08` | Role | `u8`: what this session may do. 0 watch only (the viewer token); 1 act but not drive (a control token while another session controls); 2 control: its pointer, keyboard and window size are the desktop's. Sent with the replay after `Hello` and whenever it changes. |
 
 ### Client → server
 

@@ -252,7 +252,7 @@ export function createViewer() {
       case POINTER_LOCK:
         // A client locked the pointer (a game, say): lock the browser's too and send raw deltas.
         wantLock = dv.getUint8(1) !== 0;
-        if (wantLock) requestLock();
+        if (wantLock && driving()) requestLock();
         else if (document.pointerLockElement) document.exitPointerLock();
         break;
       case AUDIO:

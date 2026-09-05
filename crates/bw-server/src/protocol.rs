@@ -59,8 +59,8 @@ pub fn config(info: &StreamInfo) -> Bytes {
     b.into()
 }
 
-/// `[VIDEO][flags: bit0 keyframe][seq: u16][pts_us: u64][annex-b access unit]`; `seq` counts every frame
-/// the encoder produced for this stream, sent or not, so the page sees a drop as a gap.
+/// `[VIDEO][flags: bit0 keyframe][seq: u16][pts_us: u64][annex-b access unit]`; `seq` numbers the frames
+/// of a stream from 0 in the order they are sent, so the page can tell when one went missing.
 pub fn video(f: &EncodedFrame, seq: u16) -> Bytes {
     let mut b = Vec::with_capacity(12 + f.data.len());
     b.push(VIDEO);

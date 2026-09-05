@@ -288,8 +288,9 @@ pub trait StreamControl: Send + Sync {
     fn request_keyframe(&self);
     /// Switch codecs; the stream restarts with a new id.
     fn set_codec(&self, codec: Codec);
-    /// Encode at this size (the frames are scaled to it); the stream restarts with a new id.
-    fn set_size(&self, size: (u32, u32));
+    /// Encode at this size (the frames are scaled to it) or, with none, at the frames' own; the stream
+    /// restarts with a new id when it changes.
+    fn set_size(&self, size: Option<(u32, u32)>);
 }
 
 pub type SinkError = Box<dyn std::error::Error + Send + Sync>;

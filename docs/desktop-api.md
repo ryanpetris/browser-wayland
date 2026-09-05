@@ -195,7 +195,8 @@ The controller's `Resize` becomes `Command::Resize` and re-fits everyone else (`
 session's `Resize` only sets its own encoder's size (`fit`: the output's aspect within its window, never
 enlarged, even-sized). `set_size` on a `GstSink` puts a caps filter after `vapostproc`, which scales on
 the GPU on the way to NV12, and the stream's `scale` becomes `output scale × target / output width`, so
-the page's logical mapping still holds. `TakeControl` from a control-token session, or the controller
+the page's logical mapping still holds; the controller's encoder has no target and takes the output as
+it is, so a resize rebuilds its pipeline once, through the compositor. `TakeControl` from a control-token session, or the controller
 leaving (the oldest remaining control-token session inherits), goes through `set_controller`: release
 all input, resize the output to the new controller's size, re-fit, tell both sessions their `Role`. A
 token rotation drops every session's senders, which ends them with `4001`.
@@ -257,8 +258,8 @@ read it with `useSyncExternalStore` and send actions back through the engine.
   closes, 300 ms after the last change; an answer that no longer matches the current state is dropped, a
   failed request is retried on the next list update. A note under the window says why there are none
   (`501`, `503`, or the `level`).
-- **Banners** on the stage: reconnecting, replaced by another viewer (with a button to take over), a
-  window stream whose window is gone; a modal asks for the token when there is none or it was rejected.
+- **Banners** on the stage: reconnecting, a window stream whose window is gone; a modal asks for the
+  token when there is none or it was rejected.
 - `window.bw()` returns the numbers; `bw.windows()`, `bw.control()`, `bw.activate()`, `bw.spawn()`,
   `bw.snapshot()`, `bw.elements()` and `bw.clipboard.read()/write()` act on the desktop.
 
