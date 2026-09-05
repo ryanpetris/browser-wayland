@@ -126,6 +126,10 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `GET /api/windows/{id}/snapshot.png?scale=` | PNG of that window. `scale` 0.05–2, relative to the output scale, default 1. `404` unknown id, `429` another snapshot is in flight, `500` the render failed (logged), `503` the compositor didn't answer within 2 s. |
 | `GET /api/screenshot.png?scale=` | PNG of the whole output (layers included, cursor excluded); `scale` as for a window; `429`, `500`, `503` as for a window. |
 | `POST /api/input` | Body: an input message (below). `202`, with `{"warning": …}` when a click aims past the desktop's edge at an X11 window; `404` unknown window; `503` compositor gone. |
+| `GET /api/files` | The transfer folder's files (`name`, `size`, `modified_ms`), by name. |
+| `PUT /api/files/{name}` | The body is saved in the folder under `name` (streamed; a taken name gets ` (2)` before its extension). `201` with `{"name": "…"}`. |
+| `GET /api/files/{name}` | The file, as an attachment. `404`. |
+| `DELETE /api/files/{name}` | `204`; `404`. |
 | `GET /api/notifications` | The open notifications, oldest first, as the `Notifications` message carries them. |
 | `POST /api/notifications/{id}` | Body `{"action": "default" \| "<key>"}`, or `{}` to dismiss. `202`; `404` unknown id. |
 | `GET /api/notifications/{id}/icon` | The notification's picture: what the application named or sent, else its launcher's icon. `404` none. |

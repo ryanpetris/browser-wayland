@@ -256,6 +256,11 @@ impl Mcp {
         json(self.app.applications().await)
     }
 
+    #[tool(description = "The files in the desktop's transfer folder (what was dropped on the page, and what the desktop put there for download): name, size, modified_ms. GET /api/files/{name} downloads one.")]
+    async fn files(&self) -> ToolResult {
+        json(self.app.files().await.unwrap_or_default())
+    }
+
     #[tool(description = "The desktop notifications currently shown (id, app, summary, body, actions, timeout_ms): what applications reported. POST /api/notifications/{id} with {\"action\": key} acts on one, {} dismisses it.")]
     fn notifications(&self) -> ToolResult {
         json(self.app.notifications())

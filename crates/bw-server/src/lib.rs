@@ -7,6 +7,7 @@ mod api;
 mod apps;
 mod elements;
 mod mcp;
+pub mod files;
 mod notify;
 mod protocol;
 #[cfg(test)]
@@ -60,6 +61,8 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// Serve /api/windows/{id}/elements (see `elements.rs`).
     pub elements: bool,
+    /// Where dropped files land and downloads come from (`files.rs`).
+    pub files_dir: PathBuf,
     /// Reported to MCP clients.
     pub version: &'static str,
     /// One encoder per viewer and per window stream.
@@ -91,6 +94,7 @@ pub struct App {
     notifications: Mutex<HashMap<u32, notify::Open>>,
     next_notification: std::sync::atomic::AtomicU32,
     notify_bus: std::sync::OnceLock<zbus::Connection>,
+    files_dir: PathBuf,
     elements: bool,
     version: &'static str,
     tls: bool,
@@ -151,6 +155,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         notifications: Mutex::default(),
         next_notification: std::sync::atomic::AtomicU32::new(1),
         notify_bus: std::sync::OnceLock::new(),
+        files_dir: cfg.files_dir,
         elements: cfg.elements,
         version: cfg.version,
         tls: cfg.tls,
@@ -177,6 +182,8 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
                 .route("/api/screenshot.png", get(api_screenshot))
                 .route("/api/windows/{id}/elements", get(api_window_elements))
                 .route("/api/windows/{id}/icon", get(api_window_icon))
+                .route("/api/files", get(api_files))
+                .route("/api/files/{name}", get(api_file).put(api_put_file).delete(api_delete_file).layer(DefaultBodyLimit::disable()))
                 .route("/api/notifications", get(api_notifications))
                 .route("/api/notifications/{id}", post(api_notification_action))
                 .route("/api/notifications/{id}/icon", get(api_notification_icon))
@@ -295,6 +302,50 @@ async fn api_application_icon(UrlPath(id): UrlPath<String>, State(app): State<Ar
 async fn api_window_icon(UrlPath(id): UrlPath<u64>, State(app): State<Arc<App>>) -> Response {
     match app.window_icon(id).await {
         Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=300")], bytes).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn api_files(State(app): State<Arc<App>>) -> Response {
+    match app.files().await {
+        Ok(list) => (NO_STORE, Json(list)).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// The body is streamed to the folder; `201` with `{"name": …}`, the name it got.
+async fn api_put_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>, req: Request) -> Response {
+    if let Err(e) = writable(key) {
+        return e.into_response();
+    }
+    match app.store_file(&name, req.into_body()).await {
+        Ok(name) => (StatusCode::CREATED, NO_STORE, Json(serde_json::json!({ "name": name }))).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn api_file(UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>) -> Response {
+    match app.open_file(&name).await {
+        Ok((len, body)) => (
+            NO_STORE,
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                (header::CONTENT_LENGTH, len.to_string()),
+                (header::CONTENT_DISPOSITION, format!("attachment; filename*=UTF-8''{}", files::percent(&name))),
+            ],
+            body,
+        )
+            .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn api_delete_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>) -> Response {
+    match writable(key) {
+        Ok(()) => match app.delete_file(&name).await {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(e) => e.into_response(),
+        },
         Err(e) => e.into_response(),
     }
 }

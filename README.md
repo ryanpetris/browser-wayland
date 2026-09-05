@@ -102,6 +102,12 @@ in the Dockerfile's header.
 The page says when the server closed its socket with a token dialog ("wrong token" or "token
 rotated"; the tokens change with the data directory, e.g. a fresh container without a volume).
 
+## Files
+
+Drop a file on the page and it lands in the desktop's Downloads folder (`--files-dir` for another);
+the Files tab of the side panel lists that folder, with download and delete, and an Upload button for
+browsers without drag and drop. The same folder is `GET`, `PUT` and `DELETE /api/files/{name}` on the API.
+
 ## Window streams
 
 The ↗ button on a window's row in the panel opens it in a popup of its own, streaming only that window

@@ -161,6 +161,22 @@ the mechanism.
   documented requirement rather than something browser-wayland tries to inject (the Docker image sets
   it in Chromium's flags file).
 
+## Files
+
+`files.rs`. A transfer folder, the XDG download directory (`XDG_DOWNLOAD_DIR` in `user-dirs.dirs`, else
+`~/Downloads`) unless `--files-dir` names another, is the meeting point between the browser's machine and
+the desktop. `PUT /api/files/{name}` streams the body into it through a `.part` file renamed when the
+upload is complete (a taken name gets ` (2)` before its extension; the reply carries the name it got);
+`GET /api/files` lists the folder's files (no subfolders or hidden entries), `GET /api/files/{name}`
+streams one back as an attachment, `DELETE` removes one. A name is a single entry of the folder: anything
+with a `/` or a `..` is `404`. Listing and downloading work with the view-only token; uploads and
+deletions need the control token. There is no size limit beyond the disk.
+
+The page uploads whatever is dropped on it (any part of the page, one file after another, with progress
+in the Files tab and a notice at the end) or picked with the Upload button, and its Files tab lists the
+folder with download (fetch and a blob, so no token is in a URL) and delete; the list refreshes when the
+tab opens and after an upload.
+
 ## Notifications
 
 `notify.rs`. Applications send desktop notifications to `org.freedesktop.Notifications` on the session

@@ -39,6 +39,17 @@ export const windowIcon = (id, key) => {
   return windowIcons.get(key);
 };
 
+// The transfer folder: list, upload (the final name comes back), download through a blob (no token in URLs), delete.
+export const files = async () => (await api('/api/files')).json();
+export const uploadFile = async file => (await api(`/api/files/${encodeURIComponent(file.name)}`, { method: 'PUT', body: file })).json();
+export const deleteFile = name => api(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' });
+export const downloadFile = async name => {
+  const blob = await (await api(`/api/files/${encodeURIComponent(name)}`)).blob();
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+};
+
 // A notification's icon as a blob URL (the caller revokes it), or null.
 export const notificationIcon = id => api(`/api/notifications/${id}/icon`).then(r => (r.ok ? r.blob().then(URL.createObjectURL) : null)).catch(() => null);
 

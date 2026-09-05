@@ -39,6 +39,10 @@ struct Cli {
     /// the toolkits' accessibility trees over the D-Bus session this process was started in.
     #[arg(long)]
     elements: bool,
+    /// Where files dropped on the page land and the page's downloads come from (default: the XDG
+    /// download directory, `~/Downloads`).
+    #[arg(long)]
+    files_dir: Option<PathBuf>,
 }
 
 /// A private PulseAudio/PipeWire sink for this instance's clients; its monitor is what we stream.
@@ -131,7 +135,7 @@ fn main() -> Result<()> {
         let _ = exited_tx.send(join.join().is_ok());
     });
 
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, version: env!("BW_VERSION"), sinks };
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: cli.files_dir.unwrap_or_else(bw_server::files::default_dir), version: env!("BW_VERSION"), sinks };
     // Ctrl+C returns here so the audio sink gets unloaded and the pipelines stopped.
     let result = tokio::runtime::Runtime::new()?.block_on(async {
         tokio::select! {

@@ -2,7 +2,7 @@
 // React only draws the chrome around it (App.jsx) and reads what it publishes on `store`.
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
-import { TOKEN, WINDOW, api, elementsOf, snapshot, control } from './api.js';
+import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile } from './api.js';
 import { createStore } from './store.js';
 import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, ROLES, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, BTN } from './protocol.js';
 
@@ -23,6 +23,8 @@ export function createViewer() {
     clipboardText: '',
     notice: '', // what the server just told us about our last action, shown for a few seconds
     notifications: [], // open desktop notifications, oldest first
+    upload: null, // { name, index, count } while files dropped on the page go up
+    filesRev: 0, // bumps when an upload finished, so the Files tab refreshes
     locked: false,
     elements: null, // the focused window's elements: {id, status, page}
     elementsOn: false,
@@ -424,6 +426,26 @@ export function createViewer() {
     send(AXIS, 9, dv => { dv.setUint8(1, e.deltaMode); dv.setFloat32(2, e.deltaX, true); dv.setFloat32(6, e.deltaY, true); });
   }
 
+  // --- files ---------------------------------------------------------------------------------
+  // Files dropped anywhere on the page go to the desktop's transfer folder, one after the other.
+  async function uploadFiles(list) {
+    const files = [...list];
+    let saved = 0;
+    for (const [index, file] of files.entries()) {
+      store.set({ upload: { name: file.name, index: index + 1, count: files.length } });
+      try { await uploadFile(file); saved++; } catch {}
+    }
+    store.set({ upload: null, filesRev: state().filesRev + 1, notice: saved ? `${saved} file${saved === 1 ? '' : 's'} saved to the desktop's Downloads` : 'upload failed' });
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
+  }
+  document.addEventListener('dragover', e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+  document.addEventListener('drop', e => {
+    if (!e.dataTransfer?.files.length) return;
+    e.preventDefault();
+    if (state().role !== 'viewer') uploadFiles(e.dataTransfer.files);
+  });
+
   // --- clipboard ---------------------------------------------------------------------------
   // Desktop -> browser: text copied in an application arrives as CLIPBOARD, an image as CLIPBOARD_DATA
   // (its bytes are fetched from the API); the browser clipboard takes it right away when the page may
@@ -568,6 +590,7 @@ export function createViewer() {
     setStatsOn(on) { store.set({ statsOn: on }); inflight.clear(); stage_.decode.length = stage_.paint.length = stage_.interval.length = 0; lastPaint = 0; },
     releaseInput: () => send(BLUR, 0), // a key held on the canvas must not stay held while a text field has the keyboard
     takeControl: () => send(TAKE_CONTROL, 0),
+    uploadFiles,
     // a click ('default'), an action key, or nothing to dismiss; a session that can't act only hides it for itself
     notify(id, action) {
       if (state().role === 'viewer') store.set({ notifications: state().notifications.filter(n => n.id !== id) });

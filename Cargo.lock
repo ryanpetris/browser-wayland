@@ -415,6 +415,7 @@ dependencies = [
  "base64 0.22.1",
  "bw-core",
  "calloop",
+ "futures-util",
  "if-addrs",
  "png",
  "rcgen",
@@ -425,6 +426,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "tokio-util",
  "tracing",
  "zbus",
 ]

@@ -17,6 +17,10 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `GET /api/applications` | | JSON array of **Application**: the installed launchers, for `launch` |
 | `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
 | `GET /api/windows/{id}/icon` | | the window's icon (its own, else its launcher's), SVG or PNG; `404` none |
+| `GET /api/files` | | JSON array of **File**: the transfer folder (dropped files, downloads) |
+| `PUT /api/files/{name}` | the file's bytes | saved in the folder under `name`, or `name (2)` if taken; `201` with `{"name"}` |
+| `GET /api/files/{name}` | | the file, as an attachment; `404` |
+| `DELETE /api/files/{name}` | | `204`; `404` |
 | `GET /api/notifications` | | JSON array of **Notification**: what applications reported and the viewers show |
 | `POST /api/notifications/{id}` | `{"action": "default" \| "<key>"}`, or `{}` to dismiss | click, invoke an action of, or dismiss a notification; `202`, `404` |
 | `GET /api/notifications/{id}/icon` | | the notification's picture (the application's, else its launcher's); `404` none |
@@ -290,6 +294,38 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
     "icon",
     "actions",
     "timeout_ms"
+  ]
+}
+```
+
+## File
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FileInfo",
+  "description": "One file in the folder.",
+  "type": "object",
+  "properties": {
+    "modified_ms": {
+      "description": "last modification, ms since the epoch",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "name": {
+      "type": "string"
+    },
+    "size": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "name",
+    "size",
+    "modified_ms"
   ]
 }
 ```
@@ -904,6 +940,17 @@ The UI elements of a window (buttons, links, text fields, menu items, tabs, ...)
   "required": [
     "window"
   ],
+  "type": "object"
+}
+```
+
+### `files`
+
+The files in the desktop's transfer folder (what was dropped on the page, and what the desktop put there for download): name, size, modified_ms. GET /api/files/{name} downloads one.
+
+```json
+{
+  "properties": {},
   "type": "object"
 }
 ```
