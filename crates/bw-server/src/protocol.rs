@@ -12,9 +12,10 @@ pub const AUDIO: u8 = 0x05;
 pub const WINDOWS: u8 = 0x06;
 /// UTF-8 text a desktop application put on the clipboard.
 pub const CLIPBOARD: u8 = 0x07;
-/// `[ROLE][u8 role][u8 microphone]`: what this session may do: 0 watch only (the viewer token), 1 act but
+/// `[ROLE][u8 role][u8 features]`: what this session may do: 0 watch only (the viewer token), 1 act but
 /// not drive (a control token while someone else controls), 2 control (its pointer, keyboard and size are
-/// the desktop's); then whether the desktop takes the browser's microphone (`MIC`).
+/// the desktop's); then what the desktop takes from the browser: bit 0 its microphone (`MIC`), bit 1 its
+/// webcam (`CAM`).
 pub const ROLE: u8 = 0x08;
 /// `[NOTICE][utf-8 text]`: something the page should tell its user about what it just did.
 pub const NOTICE: u8 = 0x09;
@@ -66,6 +67,9 @@ pub const TOUCH: u8 = 0x92;
 /// `[MIC][Opus packet]`: 20 ms of the browser's microphone, played into the desktop's virtual source.
 /// Controlling session only.
 pub const MIC: u8 = 0x93;
+/// `[CAM][VP8 frame]`: one encoded frame of the browser's webcam, played into the loopback camera.
+/// Controlling session only.
+pub const CAM: u8 = 0x94;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,10 +79,12 @@ pub enum Role {
     Controller = 2,
 }
 
-/// `[ROLE][role][microphone]`: what the session may do, and whether the desktop takes a microphone (`Mic`).
-pub fn role(role: Role, microphone: bool) -> Bytes {
-    Bytes::from(vec![ROLE, role as u8, microphone as u8])
+/// `[ROLE][role][features]`: what the session may do, and what the desktop takes (`FEATURE_*` bits).
+pub fn role(role: Role, features: u8) -> Bytes {
+    Bytes::from(vec![ROLE, role as u8, features])
 }
+pub const FEATURE_MIC: u8 = 1;
+pub const FEATURE_CAM: u8 = 2;
 
 pub fn config(info: &StreamInfo) -> Bytes {
     let json = format!(
@@ -238,6 +244,7 @@ pub enum ClientMsg {
     Input(InputMsg),
     Touch { kind: u8, id: u8, x: f32, y: f32 },
     Mic(Bytes),
+    Cam(Bytes),
 }
 
 #[derive(Debug, PartialEq, serde::Deserialize)]
@@ -293,6 +300,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         INPUT => ClientMsg::Input(serde_json::from_slice(&b[1..]).ok()?),
         TOUCH => ClientMsg::Touch { kind: u8_at(1)?, id: u8_at(2)?, x: f32_at(3)?, y: f32_at(7)? },
         MIC => ClientMsg::Mic(Bytes::copy_from_slice(b.get(1..)?)),
+        CAM => ClientMsg::Cam(Bytes::copy_from_slice(b.get(1..)?)),
         _ => return None,
     })
 }
@@ -314,7 +322,7 @@ mod tests {
         assert_eq!(decode(&[0x89]), Some(ClientMsg::Blur));
         assert_eq!(decode(&[0x92, 0, 3, 0, 0, 0x80, 0x3f, 0, 0, 0, 0x40]), Some(ClientMsg::Touch { kind: 0, id: 3, x: 1.0, y: 2.0 }));
         assert_eq!(decode(&[0x8D]), Some(ClientMsg::TakeControl));
-        assert_eq!(role(Role::Controller, false).as_ref(), &[0x08, 2, 0]);
+        assert_eq!(role(Role::Controller, FEATURE_CAM).as_ref(), &[0x08, 2, 2]);
         let control = |json: &str| decode(&[&[CONTROL][..], json.as_bytes()].concat());
         assert_eq!(
             control(r#"{"id":3,"op":"move","x":10,"y":-2}"#),

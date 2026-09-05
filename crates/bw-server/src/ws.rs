@@ -169,7 +169,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         if key == Key::Control && v.controller.is_none() {
             v.controller = Some(id);
         }
-        let replay: Vec<Bytes> = [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id), app.mic.is_some())), Some(notifications.clone())].into_iter().flatten().collect();
+        let replay: Vec<Bytes> = [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id), app.features())), Some(notifications.clone())].into_iter().flatten().collect();
         (id, replay)
     };
     for msg in replay {
@@ -320,7 +320,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     let replay: Vec<Bytes> = {
         let v = app.viewers.lock().unwrap();
         let role = if key == Key::Control { Role::Controller } else { Role::Viewer };
-        [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(role, false))].into_iter().flatten().collect()
+        [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(role, 0))].into_iter().flatten().collect()
     };
     for msg in replay {
         let _ = socket.send(Message::Binary(msg)).await;
@@ -482,6 +482,11 @@ impl App {
 
     /// A state message to every viewer and window session.
     /// ponytail: a session that can't keep up misses a state change (it is dropped after ten seconds anyway)
+    /// What the desktop takes from the browser (`Role`'s second byte).
+    pub(crate) fn features(&self) -> u8 {
+        (self.mic.is_some() as u8) * protocol::FEATURE_MIC | (self.cam.is_some() as u8) * protocol::FEATURE_CAM
+    }
+
     pub(crate) fn broadcast(&self, msg: Bytes) {
         for s in self.viewers.lock().unwrap().sessions.values() {
             let _ = s.events.try_send(msg.clone());
@@ -601,6 +606,12 @@ impl App {
                 }
                 None
             }
+            ClientMsg::Cam(frame) if controls => {
+                if let Some(cam) = &self.cam {
+                    let _ = cam.try_send(frame);
+                }
+                None
+            }
             m if controls => input_command(m),
             _ => None,
         };
@@ -632,7 +643,7 @@ impl App {
         }
         for id in [old, next].into_iter().flatten() {
             if let Some(s) = v.sessions.get(&id) {
-                let _ = s.events.try_send(protocol::role(v.role_of(id), self.mic.is_some()));
+                let _ = s.events.try_send(protocol::role(v.role_of(id), self.features()));
             }
         }
     }

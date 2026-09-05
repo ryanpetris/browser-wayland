@@ -70,6 +70,14 @@ only the controlling session's is taken, and stopping it ends the capture, so th
 indicator goes off. `--no-audio` turns both off; both devices are unloaded when the server exits (Ctrl+C
 or SIGTERM).
 
+The browser's webcam works the same way through a `v4l2loopback` device, the one kind of camera every
+application understands: on the host, `modprobe v4l2loopback exclusive_caps=1 card_label=browser-wayland`
+(the package is `v4l2loopback-dkms` on most distributions) and start the server with `--webcam
+/dev/videoN` (the device it made; in Docker add `--device /dev/videoN --group-add video` to `docker run`).
+The camera button in the status bar then sends the webcam as VP8, 720p, to that device, which video
+calls in the desktop pick as a camera; without `--webcam` (or if the device can't be opened, which the
+log says) there is no button.
+
 `--exec` runs at startup with the environment of a Wayland session (`XDG_SESSION_TYPE`, the toolkits'
 backend switches, `DISPLAY` for X11 programs), and `--kiosk` fullscreens every window. Together they run a whole nested desktop; with the
 `mutter-devkit` package installed, GNOME:
@@ -235,7 +243,7 @@ Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`
 `--codec auto|h264|hevc|vp9|av1|vp8` (what Auto resolves to when the browser decodes it; a codec this
 machine can't encode stops startup; auto prefers whatever the browser decodes in hardware, among what
 this machine encodes: AV1, then HEVC, VP9, H.264 on the GPU; VP8 first on the CPU),
-`--software-encoding`, `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--socket-name`, `--render-node`. `--help`
+`--software-encoding`, `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--webcam`, `--socket-name`, `--render-node`. `--help`
 lists them all.
 
 Games and other clients that lock the pointer get raw mouse deltas: the page mirrors the lock with the

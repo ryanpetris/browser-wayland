@@ -76,6 +76,8 @@ pub struct Config {
     /// Where the browser's microphone packets (Opus) go to be played into the desktop's virtual source;
     /// `None` without a microphone.
     pub mic: Option<mpsc::Sender<Bytes>>,
+    /// Where the browser's webcam frames (VP8) go to be played into the loopback camera; `None` without `--webcam`.
+    pub cam: Option<mpsc::Sender<Bytes>>,
 }
 
 impl Config {
@@ -100,6 +102,7 @@ pub struct App {
     viewers: Mutex<Viewers>,
     sinks: SinkFactory,
     mic: Option<mpsc::Sender<Bytes>>,
+    cam: Option<mpsc::Sender<Bytes>>,
     /// Event senders of the window-stream sessions (cursor, clipboard, window list go to them too).
     window_viewers: Mutex<HashMap<u64, mpsc::Sender<Bytes>>>,
     snapshot_lock: tokio::sync::Semaphore,
@@ -174,6 +177,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         viewers: Mutex::new(Viewers { output: bw_core::OutputGeometry { refresh_mhz: cfg.refresh_mhz, ..bw_core::INITIAL_OUTPUT }, ..Default::default() }),
         sinks: cfg.sinks,
         mic: cfg.mic,
+        cam: cfg.cam,
         window_viewers: Mutex::default(),
         snapshot_lock: tokio::sync::Semaphore::new(1),
         notifications: Mutex::default(),

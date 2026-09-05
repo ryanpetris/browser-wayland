@@ -5,7 +5,8 @@ import { KEYCODES } from './keycodes.js';
 import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, clipboardFiles, pref, codecs as serverCodecs } from './api.js';
 import { createStore } from './store.js';
 import { startMic, stopMic } from './mic.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, BTN } from './protocol.js';
+import { startCam, stopCam } from './cam.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -31,6 +32,8 @@ export function createViewer() {
     touchMouse: pref.get('touchmouse', false), // fingers as a mouse with gestures, instead of real touch points
     mic: false, // the local microphone is going to the desktop
     micAvailable: false, // the desktop takes one (audio is on there)
+    cam: false, // the local webcam is going to the desktop
+    camAvailable: false, // the desktop takes one (--webcam)
     codecs: [], // what the server encodes, in Auto's order: [{ codec, hardware }]
     decodable: [], // codec families this browser decodes at all
     filesRev: 0, // bumps when an upload finished, so the Files tab refreshes
@@ -146,8 +149,8 @@ export function createViewer() {
     ws.onmessage = e => onMessage(e.data);
     ws.onclose = e => {
       closes.push(`${e.code}:${e.reason}`);
-      micStop(); // nobody hears it now, and the role is whatever the next connection says
-      store.set({ role: null, micAvailable: false });
+      micStop(); camStop(); // nobody hears or sees them now, and the role is whatever the next connection says
+      store.set({ role: null, micAvailable: false, camAvailable: false });
       if (e.code === 4001) {
         stream = null;
         forgetToken();
@@ -320,10 +323,11 @@ export function createViewer() {
         break;
       case ROLE: {
         const role = ROLES[dv.getUint8(1)] ?? 'viewer';
-        store.set({ role, micAvailable: dv.getUint8(2) === 1 });
+        const features = dv.getUint8(2);
+        store.set({ role, micAvailable: !!(features & 1), camAvailable: !!(features & 2) });
         if (role !== 'controller') {
           if (document.pointerLockElement) document.exitPointerLock(); // only the controller's pointer is the desktop's
-          micStop(); // and only its microphone
+          micStop(); camStop(); // and only its microphone and webcam
         }
         break;
       }
@@ -442,6 +446,20 @@ export function createViewer() {
       else micStop();
     } catch (e) {
       store.set({ notice: `microphone: ${e.message}` });
+      clearTimeout(noticeTimer);
+      noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
+    }
+  }
+
+  // The local webcam the same way (cam.js), one VP8 frame per message.
+  const camStop = () => { stopCam(); if (state().cam) store.set({ cam: false }); };
+  async function camStart(constraints) {
+    try {
+      await startCam(buf => send(CAM, buf.byteLength, dv => new Uint8Array(dv.buffer, 1).set(new Uint8Array(buf))), camStop, constraints);
+      if (state().role === 'controller') store.set({ cam: true });
+      else camStop();
+    } catch (e) {
+      store.set({ notice: `webcam: ${e.message}` });
       clearTimeout(noticeTimer);
       noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
     }
@@ -796,6 +814,7 @@ export function createViewer() {
     key: keys => sendText(INPUT, JSON.stringify({ type: 'key', keys })),
     touch: navigator.maxTouchPoints > 0,
     mic: { start: micStart, stop: micStop },
+    cam: { start: camStart, stop: camStop },
     setTouchMouse(on) {
       // fingers down now end here, on both sides: the desktop lets go of everything, the page forgets them
       send(BLUR, 0);

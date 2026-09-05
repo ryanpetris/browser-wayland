@@ -270,8 +270,9 @@ lease, so the slot is free when the last encoder is done) and encodes nothing wh
 Frames go from each session's own channel to its socket in order, with a ten-second send deadline, the
 way window streams do; audio and events are broadcast with `try_send`. The controller's `Mic` packets
 go to `Config::mic`, the channel `bw-stream`'s `audio_sink` plays into the microphone sink (`bw`
-creates the sink and the remapped source next to the audio sink; the `Role` message tells sessions
-whether there is one).
+creates the sink and the remapped source next to the audio sink), and its `Cam` frames to `Config::cam`,
+which `video_sink` decodes (VP8) and scales to 720p YUY2 for the `--webcam` loopback device (which keeps
+the first format it is given); the `Role` message's second byte tells sessions which of the two exist.
 
 The controller's `Resize` becomes `Command::Resize` and re-fits everyone else (`retarget`); another
 session's `Resize` only sets its own encoder's size (`fit`: the output's aspect within its window, never

@@ -51,7 +51,8 @@ Zero-copy video path: client dmabuf → GLES composite into a GBM-allocated dmab
 post-processor and encoder import that same dmabuf → bitstream → browser GPU decode. No CPU pixel
 copies. Audio: clients play into a private PulseAudio/PipeWire null sink; its monitor is captured and
 encoded as Opus. The browser's microphone comes back as Opus packets played into a second null sink,
-whose monitor is remapped as a real source (`module-remap-source`) for applications to record from.
+whose monitor is remapped as a real source (`module-remap-source`) for applications to record from; its
+webcam comes back as VP8 frames decoded into a `v4l2loopback` device (`--webcam`), a camera to them.
 
 ## Crates
 

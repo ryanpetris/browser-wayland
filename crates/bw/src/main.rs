@@ -40,6 +40,10 @@ struct Cli {
     /// No audio either way: neither the clients' for the browser nor the browser's microphone for them.
     #[arg(long)]
     no_audio: bool,
+    /// A v4l2loopback device (`modprobe v4l2loopback exclusive_caps=1 card_label=browser-wayland`, then its
+    /// /dev/videoN) that the browser's webcam is played into, for applications to use as a camera.
+    #[arg(long)]
+    webcam: Option<PathBuf>,
     /// Serve each window's UI elements (roles, names, rectangles) on /api/windows/{id}/elements, read from
     /// the toolkits' accessibility trees over the D-Bus session this process was started in.
     #[arg(long)]
@@ -164,6 +168,18 @@ fn main() -> Result<()> {
         }
     }
 
+    let mut cam = None; // the browser's webcam: its playback pipeline and the frames' way in
+    if let Some(device) = &cli.webcam {
+        let (cam_tx, cam_rx) = mpsc::channel(16);
+        match bw_stream::video_sink(device, cam_rx) {
+            Ok(stream) => {
+                tracing::info!("webcam: the browser's camera plays into {}", device.display());
+                cam = Some((stream, cam_tx));
+            }
+            Err(e) => tracing::warn!("webcam disabled: {e:#}"),
+        }
+    }
+
     // one encoder per viewer and per window stream, made when the session starts
     let bitrate = cli.bitrate;
     let va_for_sinks = va.clone();
@@ -199,7 +215,7 @@ fn main() -> Result<()> {
         let _ = exited_tx.send(join.join().is_ok());
     });
 
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, software, bitrate_kbps: cli.bitrate, refresh_mhz: if software { 30_000 } else { 60_000 }, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: std::path::absolute(cli.files_dir.unwrap_or_else(bw_server::files::default_dir))?, version: env!("BW_VERSION"), sinks, mic: mic.as_ref().map(|(_, _, tx)| tx.clone()) };
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, software, bitrate_kbps: cli.bitrate, refresh_mhz: if software { 30_000 } else { 60_000 }, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: std::path::absolute(cli.files_dir.unwrap_or_else(bw_server::files::default_dir))?, version: env!("BW_VERSION"), sinks, mic: mic.as_ref().map(|(_, _, tx)| tx.clone()), cam: cam.as_ref().map(|(_, tx)| tx.clone()) };
     // Ctrl+C and SIGTERM (`docker stop`, a service manager) return here so the audio devices get unloaded
     // and the pipelines stopped.
     let result = tokio::runtime::Runtime::new()?.block_on(async {
@@ -213,5 +229,6 @@ fn main() -> Result<()> {
     });
     drop(audio);
     drop(mic);
+    drop(cam);
     result
 }

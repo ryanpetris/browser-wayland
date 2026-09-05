@@ -294,16 +294,16 @@ fn nal_units(au: &[u8]) -> impl Iterator<Item = &[u8]> {
     starts.into_iter().zip(ends).map(move |(s, e)| &au[s..e.max(s)]).filter(|n| !n.is_empty())
 }
 
-/// Opus-encodes whatever plays into `device` (a sink monitor); drop to stop.
-pub struct AudioStream(gst::Pipeline);
+/// A running pipeline (audio capture, microphone playback, the webcam); drop to stop it.
+pub struct Running(gst::Pipeline);
 
-impl Drop for AudioStream {
+impl Drop for Running {
     fn drop(&mut self) {
         let _ = self.0.set_state(gst::State::Null);
     }
 }
 
-pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<AudioStream> {
+pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<Running> {
     gst::init()?;
     let desc = format!(
         "pulsesrc device={device} buffer-time=40000 latency-time=10000 ! audio/x-raw,rate=48000,channels=2 \
@@ -325,7 +325,7 @@ pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<AudioSt
             .build(),
     );
     pipeline.set_state(gst::State::Playing)?;
-    Ok(AudioStream(pipeline))
+    Ok(Running(pipeline))
 }
 
 /// Plays Opus packets from the browser's microphone into `device` (the sink whose monitor is the
@@ -333,7 +333,7 @@ pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<AudioSt
 /// swallows the network's jitter in its buffer, and packets that pile up behind a stall (or clock
 /// drift) are dropped at the source rather than played late. A thread feeds the appsrc from `rx`; the
 /// pipeline stops when the handle is dropped (the thread ends with the channel).
-pub fn audio_sink(device: &str, mut rx: mpsc::Receiver<Bytes>) -> Result<AudioStream> {
+pub fn audio_sink(device: &str, mut rx: mpsc::Receiver<Bytes>) -> Result<Running> {
     gst::init()?;
     let desc = format!(
         "appsrc name=src is-live=true format=time do-timestamp=true max-buffers=10 leaky-type=downstream \
@@ -349,7 +349,31 @@ pub fn audio_sink(device: &str, mut rx: mpsc::Receiver<Bytes>) -> Result<AudioSt
             }
         }
     })?;
-    Ok(AudioStream(pipeline))
+    Ok(Running(pipeline))
+}
+
+/// Plays VP8 frames from the browser's webcam into `device`, a v4l2loopback camera, as 1280×720 YUY2 (the
+/// loopback keeps the first format it is given, so every frame is scaled to that one): applications open
+/// it like any camera. Frames that pile up behind a stall are dropped at the source; the browser sends a
+/// keyframe every couple of seconds, so the decoder recovers. A thread feeds the appsrc from `rx`.
+pub fn video_sink(device: &std::path::Path, mut rx: mpsc::Receiver<Bytes>) -> Result<Running> {
+    gst::init()?;
+    let desc = format!(
+        "appsrc name=src is-live=true format=time do-timestamp=true max-buffers=4 leaky-type=downstream caps=video/x-vp8 \
+         ! vp8dec ! videoconvert ! videoscale ! video/x-raw,format=YUY2,width=1280,height=720 ! v4l2sink device={} sync=false",
+        device.display()
+    );
+    let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
+    let src = pipeline.by_name("src").context("src element")?.downcast::<gst_app::AppSrc>().unwrap();
+    pipeline.set_state(gst::State::Playing)?;
+    std::thread::Builder::new().name("webcam".into()).spawn(move || {
+        while let Some(frame) = rx.blocking_recv() {
+            if src.push_buffer(gst::Buffer::from_slice(frame)).is_err() {
+                break;
+            }
+        }
+    })?;
+    Ok(Running(pipeline))
 }
 
 /// The real sink: compositor dmabufs → `appsrc`. Clone it for a keyframe handle before moving it into the compositor.

@@ -8,7 +8,8 @@
 # The desktop starts empty: the viewer's own menu lists the installed applications and launches them,
 # and its power menu shuts browser-wayland down. To have the Xfce panel as well, add
 # `--exec xfce4-panel` after the image name. Without a usable GPU encoder, add `--software-encoding`
-# (rendering still needs `--device /dev/dri`).
+# (rendering still needs `--device /dev/dri`). For the browser's webcam, load v4l2loopback on the host
+# and add `--device /dev/videoN --group-add video` to docker run and `--webcam /dev/videoN` after the image name.
 # Open the https://<host>:8443/#token=... URL that `docker logs` prints, with <host> being the Docker
 # host's address (the log shows the container's own), and accept the self-signed certificate. The
 # volume keeps the token and certificate across runs; without it every run prints a new token and

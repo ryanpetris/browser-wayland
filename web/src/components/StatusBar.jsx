@@ -1,5 +1,5 @@
 // One line of numbers under the display, and this viewer's codec and quality choice.
-import { Activity, ClipboardCheck, Download, Lock, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
+import { Activity, Camera, CameraOff, ClipboardCheck, Download, Lock, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
 import { useStore } from '../store.js';
 import { PRESETS } from '../protocol.js';
 import { codecName } from './ui.jsx';
@@ -40,6 +40,8 @@ export function StatusBar({ viewer }) {
   const renderer = useStore(viewer.store, st => st.renderer);
   const mic = useStore(viewer.store, st => st.mic);
   const micAvailable = useStore(viewer.store, st => st.micAvailable);
+  const cam = useStore(viewer.store, st => st.cam);
+  const camAvailable = useStore(viewer.store, st => st.camAvailable);
   const role = useStore(viewer.store, st => st.role);
   const bad = s.lost + s.dropped + s.decodeErrors;
   return (
@@ -61,6 +63,11 @@ export function StatusBar({ viewer }) {
         {role === 'controller' && micAvailable && navigator.mediaDevices && 'AudioEncoder' in window && (
           <button type="button" aria-label="Microphone" aria-pressed={mic} onClick={e => { (mic ? viewer.mic.stop : viewer.mic.start)(); e.currentTarget.blur(); }} title={mic ? 'Microphone on: the desktop hears you' : 'Microphone: let the desktop hear you'} className="flex items-center hover:text-zinc-300">
             {mic ? <Mic className="size-3 text-emerald-400" /> : <MicOff className="size-3" />}
+          </button>
+        )}
+        {role === 'controller' && camAvailable && navigator.mediaDevices && 'VideoEncoder' in window && 'MediaStreamTrackProcessor' in window && (
+          <button type="button" aria-label="Webcam" aria-pressed={cam} onClick={e => { (cam ? viewer.cam.stop : () => viewer.cam.start())(); e.currentTarget.blur(); }} title={cam ? 'Webcam on: the desktop sees you' : 'Webcam: let the desktop see you'} className="flex items-center hover:text-zinc-300">
+            {cam ? <Camera className="size-3 text-emerald-400" /> : <CameraOff className="size-3" />}
           </button>
         )}
         <span className="hidden items-center gap-4 sm:flex"><Choice viewer={viewer} /></span>
