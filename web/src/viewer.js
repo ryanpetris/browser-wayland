@@ -202,9 +202,11 @@ export function createViewer() {
     });
   }
   let resizeTimer;
+  let unzoom = () => {}; // set with the touch code: a resize while zoomed would leave the picture short of the canvas
   function setStage(w, h) {
     stage = { w, h };
     fitCanvas();
+    unzoom();
     // a window tab's size is the window's: only a real change after the stream is up (not the popup
     // opening or settling) resizes the window
     if (WINDOW && (!stream || (Math.round(w) === Math.round(stream.width / stream.scale) && Math.round(h) === Math.round(stream.height / stream.scale)))) return;
@@ -436,8 +438,16 @@ export function createViewer() {
     else { const p = toDesktop(e); send(MOTION_ABS, 8, dv => { dv.setFloat32(1, p.x, true); dv.setFloat32(5, p.y, true); }); }
   }
   const sendButton = (btn, pressed) => send(BUTTON, 3, dv => { dv.setUint16(1, btn, true); dv.setUint8(3, pressed ? 1 : 0); });
-  // the gesture counts for every session: audio and the browser clipboard need one
-  function gesture(e) { canvas.setPointerCapture(e.pointerId); canvas.focus({ preventScroll: true }); resumeAudio(); flushClipboard(); }
+  // the gesture counts for every session: audio and the browser clipboard need one; the canvas takes the
+  // focus (so keys go to the desktop) unless the on-screen keyboard's field has it, which a tap must not
+  // close
+  function gesture(e) {
+    canvas.setPointerCapture(e.pointerId);
+    if (document.activeElement?.hasAttribute('data-keyboard')) e.preventDefault();
+    else canvas.focus({ preventScroll: true });
+    resumeAudio();
+    flushClipboard();
+  }
   function onPointerButton(e) {
     const btn = BTN[e.button];
     if (btn === undefined) return;
@@ -461,9 +471,9 @@ export function createViewer() {
   // exactly two fingers begin the two-finger gesture afresh (a third one down, or one of three up, too)
   const rebase = () => { const c = touches.size === 2 ? centroid() : null; pinch = c && { ...c, start: c.dist, zooming: false }; };
   function applyZoom() {
-    canvas.style.transformOrigin = '0 0';
     canvas.style.transform = zoom.k === 1 ? '' : `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.k})`;
   }
+  unzoom = () => { if (zoom.k !== 1) { zoom = { k: 1, tx: 0, ty: 0 }; applyZoom(); } };
   // The one-finger gesture ends: a tap clicks (a hold's timer already right-clicked), a drag lets go.
   function endTouch(tap) {
     clearTimeout(touch.timer);

@@ -2,10 +2,11 @@
 // turns what it produces into typed text, and the keys such keyboards lack. Ctrl, Alt and Super are
 // sticky: the next key or character goes with them.
 import { useEffect, useRef, useState } from 'react';
-
-/// Bring the phone's keyboard back for the row that is open (a tap elsewhere dismissed it).
-export const focusKeyboard = () => document.querySelector('[aria-label="Type into the desktop"]')?.focus();
 import { X } from 'lucide-react';
+
+/// Bring the phone's keyboard back for the row that is open (its own hide button dismissed it, and left
+/// the field focused, so a plain focus() would do nothing).
+export const focusKeyboard = () => { const el = document.querySelector('[data-keyboard]'); el?.blur(); el?.focus(); };
 
 // DOM key names to xkb keysym names, for the keys that aren't text
 const KEYSYM = { Escape: 'Escape', Tab: 'Tab', Enter: 'Return', Backspace: 'BackSpace', Delete: 'Delete', ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down', Home: 'Home', End: 'End', PageUp: 'Prior', PageDown: 'Next' };
@@ -19,7 +20,7 @@ export function Keyboard({ viewer, onClose }) {
   sticky.current = mods;
   const chord = keys => { viewer.key([...sticky.current, keys].join('+')); setMods([]); };
   // text goes through the layout; with a sticky modifier its first character is a chord instead
-  const typed = text => { if (sticky.current.length) { chord(text[0]); if (text.length > 1) viewer.type(text.slice(1)); } else viewer.type(text); };
+  const typed = text => { if (sticky.current.length) { chord(text[0] === '+' ? 'plus' : text[0]); if (text.length > 1) viewer.type(text.slice(1)); } else viewer.type(text); };
   // native listeners: React's onBeforeInput is a polyfill without inputType
   useEffect(() => {
     const el = field.current;
@@ -45,7 +46,7 @@ export function Keyboard({ viewer, onClose }) {
   const onKeyDown = e => {
     if (e.isComposing || e.keyCode === 229) return;
     if (KEYSYM[e.key]) { e.preventDefault(); chord(KEYSYM[e.key]); }
-    else if ((e.ctrlKey || e.altKey || e.metaKey) && e.key.length === 1) { e.preventDefault(); viewer.key(`${e.ctrlKey ? 'ctrl+' : ''}${e.altKey ? 'alt+' : ''}${e.metaKey ? 'super+' : ''}${e.key}`); }
+    else if ((e.ctrlKey || e.altKey || e.metaKey) && e.key.length === 1) { e.preventDefault(); viewer.key(`${e.ctrlKey ? 'ctrl+' : ''}${e.altKey ? 'alt+' : ''}${e.metaKey ? 'super+' : ''}${e.shiftKey ? 'shift+' : ''}${e.key === '+' ? 'plus' : e.key}`); }
   };
   const keep = e => e.preventDefault(); // a tap on a key must not take the focus (and the phone's keyboard) away
   return (
@@ -56,7 +57,7 @@ export function Keyboard({ viewer, onClose }) {
           {label}
         </button>
       ))}
-      <input ref={field} onKeyDown={onKeyDown} onFocus={viewer.releaseInput}
+      <input ref={field} data-keyboard="" onKeyDown={onKeyDown} onFocus={viewer.releaseInput}
         aria-label="Type into the desktop" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
         className="h-7 w-0 min-w-0 flex-1 rounded-md border border-dashed border-zinc-700 bg-transparent px-1 text-transparent caret-transparent outline-none focus:border-indigo-400" />
       <button type="button" onClick={onClose} aria-label="Hide the keyboard row" className="shrink-0 rounded-md p-1 text-zinc-400 hover:bg-zinc-800"><X className="size-4" /></button>
