@@ -303,11 +303,10 @@ async fn api_notifications(State(app): State<Arc<App>>) -> Response {
     (NO_STORE, Json(app.notifications())).into_response()
 }
 
-/// `{"action": "default" | "<key>" | "dismiss"}`; `202`, `404` unknown id.
+/// `{"action": "default" | "<key>"}`, or `{}` to dismiss; `202`, `404` unknown id.
 async fn api_notification_action(Extension(key): Extension<Key>, UrlPath(id): UrlPath<u32>, State(app): State<Arc<App>>, Json(msg): Json<serde_json::Value>) -> Response {
-    let action = msg.get("action").and_then(|a| a.as_str()).unwrap_or("default");
     match writable(key) {
-        Ok(()) => match app.notification_action(id, action).await {
+        Ok(()) => match app.notification_action(id, msg.get("action").and_then(|a| a.as_str())).await {
             Ok(()) => StatusCode::ACCEPTED.into_response(),
             Err(e) => e.into_response(),
         },
@@ -317,7 +316,7 @@ async fn api_notification_action(Extension(key): Extension<Key>, UrlPath(id): Ur
 
 async fn api_notification_icon(UrlPath(id): UrlPath<u32>, State(app): State<Arc<App>>) -> Response {
     match app.notification_icon(id).await {
-        Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=300")], bytes).into_response(),
+        Ok((bytes, mime)) => (NO_STORE, [(header::CONTENT_TYPE, mime)], bytes).into_response(),
         Err(e) => e.into_response(),
     }
 }

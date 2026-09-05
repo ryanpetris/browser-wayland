@@ -20,8 +20,8 @@ pub const NOTICE: u8 = 0x09;
 /// A desktop application copied something that isn't text; the payload is its mime type (`image/png`)
 /// and the bytes are at `GET /api/clipboard`.
 pub const CLIPBOARD_DATA: u8 = 0x0A;
-/// A notification (JSON `Notification`), or `{"id":N,"closed":true}` when one went away. Open ones are replayed to a new viewer.
-pub const NOTIFICATION: u8 = 0x0B;
+/// The open desktop notifications, as a JSON array of `Notification`, whenever they change (and in the replay).
+pub const NOTIFICATIONS: u8 = 0x0B;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
@@ -42,7 +42,7 @@ pub const CONTROL: u8 = 0x8B;
 pub const SET_CLIPBOARD: u8 = 0x8C;
 /// A session with a control token asks to become the controller.
 pub const TAKE_CONTROL: u8 = 0x8D;
-/// JSON `{"id":N,"action":"key"}`: the viewer clicked a notification (`default`), one of its actions, or dismissed it (`dismiss`). Control token only.
+/// JSON `{"id":N,"action":"key"}`: the viewer clicked a notification (`default`) or one of its actions; without `action` it dismissed it. Control token only.
 pub const NOTIFY: u8 = 0x8E;
 
 /// What a session may do, as sent in `ROLE`.
@@ -109,15 +109,9 @@ pub fn clipboard(text: &str) -> Bytes {
     b.into()
 }
 
-pub fn notification(n: &crate::notify::Notification) -> Bytes {
-    let mut b = vec![NOTIFICATION];
-    b.extend_from_slice(serde_json::to_string(n).unwrap().as_bytes());
-    b.into()
-}
-
-pub fn notification_closed(id: u32) -> Bytes {
-    let mut b = vec![NOTIFICATION];
-    b.extend_from_slice(format!("{{\"id\":{id},\"closed\":true}}").as_bytes());
+pub fn notifications(list: &[crate::notify::Notification]) -> Bytes {
+    let mut b = vec![NOTIFICATIONS];
+    b.extend_from_slice(serde_json::to_string(list).unwrap().as_bytes());
     b.into()
 }
 
@@ -167,7 +161,9 @@ pub enum ClientMsg {
 #[derive(Debug, PartialEq, serde::Deserialize)]
 pub struct NotifyMsg {
     pub id: u32,
-    pub action: String,
+    /// `default`, an action key, or nothing for a dismissal
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 /// Malformed messages decode to `None` and are ignored.

@@ -5,6 +5,7 @@
 
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
@@ -12,7 +13,7 @@ use std::{
 use bw_core::{Command, ControlMsg, ControlOp, Snapshot};
 use schemars::JsonSchema;
 use serde::Serialize;
-use zbus::{interface, object_server::SignalEmitter, zvariant::OwnedValue};
+use zbus::{fdo::RequestNameFlags, interface, object_server::SignalEmitter, zvariant::OwnedValue};
 
 use crate::{App, api::{ApiError, encode_png}, apps, protocol};
 
@@ -25,6 +26,8 @@ const DEFAULT_TIMEOUT: u32 = 5000;
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct Notification {
     pub id: u32,
+    /// counts up when the application replaces the notification under the same id
+    pub rev: u64,
     /// the application's name as it gave it
     pub app: String,
     pub summary: String,
@@ -38,8 +41,7 @@ pub struct Notification {
 }
 
 enum Icon {
-    Name(String),
-    Path(String),
+    File(PathBuf, &'static str),
     Png(Vec<u8>),
 }
 
@@ -47,10 +49,8 @@ enum Icon {
 pub struct Open {
     pub info: Notification,
     icon: Option<Icon>,
-    /// the `desktop-entry` hint: which windows a click brings forward, and the fallback icon
+    /// the `desktop-entry` hint: which windows a click brings forward
     desktop_entry: Option<String>,
-    /// bumps when the id is reused (`replaces_id`), so an old expiry timer does nothing
-    generation: u64,
 }
 
 pub struct Daemon(pub Arc<App>);
@@ -58,7 +58,7 @@ pub struct Daemon(pub Arc<App>);
 #[interface(name = "org.freedesktop.Notifications")]
 impl Daemon {
     fn get_capabilities(&self) -> Vec<&'static str> {
-        vec!["actions", "body", "icon-static", "persistence"]
+        vec!["actions", "body", "icon-static"]
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
@@ -67,25 +67,29 @@ impl Daemon {
 
     #[allow(clippy::too_many_arguments)]
     async fn notify(&self, app_name: String, replaces_id: u32, app_icon: String, summary: String, body: String, actions: Vec<String>, hints: HashMap<String, OwnedValue>, expire_timeout: i32) -> u32 {
-        let desktop_entry = hints.get("desktop-entry").and_then(|v| <&str>::try_from(v).ok()).map(|s| s.trim_end_matches(".desktop").to_string());
-        let mut icon = match app_icon.as_str() {
-            "" => None,
-            p if p.starts_with("file://") => Some(Icon::Path(p[7..].to_string())),
-            p if p.starts_with('/') => Some(Icon::Path(p.to_string())),
-            n => Some(Icon::Name(n.to_string())),
+        let str_hint = |k: &str| hints.get(k).and_then(|v| <&str>::try_from(v).ok()).filter(|s| !s.is_empty());
+        let desktop_entry = str_hint("desktop-entry").map(|s| s.trim_end_matches(".desktop").to_string());
+        // the picture, in the specification's order of preference
+        let pixels = ["image-data", "image_data"].iter().find_map(|k| hints.get(*k)).and_then(image_data);
+        let icon = match pixels {
+            Some(p) => encode_png(p).await.ok().map(Icon::Png),
+            None => {
+                let named: Vec<String> = [str_hint("image-path"), str_hint("image_path"), Some(app_icon.as_str())].into_iter().flatten().map(|s| s.trim_start_matches("file://").to_string()).collect();
+                let entry = desktop_entry.clone();
+                tokio::task::spawn_blocking(move || named.iter().find_map(|n| apps::icon_file(n)).or_else(|| apps::launcher_icon(entry.as_deref()?)).map(|(p, m)| Icon::File(p, m))).await.ok().flatten()
+            }
         };
-        if icon.is_none()
-            && let Some(pixels) = ["image-data", "image_data", "icon_data"].iter().find_map(|k| hints.get(*k)).and_then(|v| image_data(v))
-        {
-            icon = encode_png(pixels).await.ok().map(Icon::Png);
-        }
-        if icon.is_none()
-            && let Some(p) = hints.get("image-path").or(hints.get("image_path")).and_then(|v| <&str>::try_from(v).ok())
-        {
-            icon = Some(if p.starts_with('/') { Icon::Path(p.to_string()) } else { Icon::Name(p.trim_start_matches("file://").to_string()) });
-        }
+        let icon = match icon {
+            None => match hints.get("icon_data").and_then(image_data) {
+                Some(p) => encode_png(p).await.ok().map(Icon::Png),
+                None => None,
+            },
+            some => some,
+        };
         let actions: Vec<(String, String)> = actions.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0].clone(), c[1].clone())).collect();
+        let critical = hints.get("urgency").and_then(|v| u8::try_from(v).ok()) == Some(2);
         let timeout_ms = match expire_timeout {
+            _ if critical => 0,
             t if t < 0 => DEFAULT_TIMEOUT,
             t => t as u32,
         };
@@ -93,9 +97,10 @@ impl Daemon {
     }
 
     async fn close_notification(&self, id: u32, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
-        if self.0.take_notification(id, None).is_some() {
-            Self::notification_closed(&emitter, id, 3).await?; // 3: closed by a call
+        if self.0.take_notification(id, None).is_none() {
+            return Err(zbus::fdo::Error::Failed("no such notification".into()));
         }
+        Self::notification_closed(&emitter, id, 3).await?; // 3: closed by a call
         Ok(())
     }
 
@@ -110,14 +115,13 @@ impl Daemon {
 /// pixels) as straight RGBA rows.
 fn image_data(v: &OwnedValue) -> Option<Snapshot> {
     let (w, h, stride, alpha, bps, channels, data): (i32, i32, i32, bool, i32, i32, Vec<u8>) = v.clone().try_into().ok()?;
-    if bps != 8 || w <= 0 || h <= 0 || channels < 3 {
+    let (w, h, stride, channels) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?, usize::try_from(stride).ok()?, usize::try_from(channels).ok()?);
+    if bps != 8 || w == 0 || h == 0 || channels != if alpha { 4 } else { 3 } || w.checked_mul(channels)? > stride || (h - 1).checked_mul(stride)?.checked_add(w * channels)? > data.len() {
         return None;
     }
-    let (w, h, stride, channels) = (w as usize, h as usize, stride as usize, channels as usize);
     let mut rgba = Vec::with_capacity(w * h * 4);
-    for y in 0..h {
-        for x in 0..w {
-            let p = data.get(y * stride + x * channels..y * stride + x * channels + channels)?;
+    for row in data.chunks(stride).take(h) {
+        for p in row[..w * channels].chunks(channels) {
             rgba.extend_from_slice(&p[..3]);
             rgba.push(if alpha { p[3] } else { 255 });
         }
@@ -128,11 +132,13 @@ fn image_data(v: &OwnedValue) -> Option<Snapshot> {
 /// Own the notification name on the session bus and serve until the process ends. Another daemon
 /// owning it, or no bus, means we're not the one showing notifications; nothing else changes.
 pub async fn serve(app: Arc<App>) {
-    let built = async {
-        zbus::connection::Builder::session()?.name(NAME)?.serve_at(PATH, Daemon(app.clone()))?.build().await
+    let served = async {
+        let conn = zbus::connection::Builder::session()?.serve_at(PATH, Daemon(app.clone()))?.build().await?;
+        conn.request_name_with_flags(NAME, RequestNameFlags::DoNotQueue.into()).await?; // never queue behind an owner
+        Ok::<_, zbus::Error>(conn)
     }
     .await;
-    match built {
+    match served {
         Ok(conn) => {
             tracing::info!("notifications: serving {NAME}; applications' notifications appear in the viewers");
             let _ = app.notify_bus.set(conn);
@@ -143,106 +149,103 @@ pub async fn serve(app: Arc<App>) {
 }
 
 impl App {
-    /// Store a notification (a `replaces_id` takes that id's place), tell every viewer, arm its expiry.
+    /// Store a notification (a nonzero `replaces_id` is the id, as the protocol requires), send every
+    /// viewer the new list, arm its expiry.
     #[allow(clippy::too_many_arguments)]
     fn open_notification(self: &Arc<Self>, replaces_id: u32, app: String, summary: String, body: String, icon: Option<Icon>, actions: Vec<(String, String)>, timeout_ms: u32, desktop_entry: Option<String>) -> u32 {
         let mut open = self.notifications.lock().unwrap();
-        let (id, generation) = match open.get(&replaces_id) {
-            Some(o) if replaces_id != 0 => (replaces_id, o.generation + 1),
-            _ => (self.next_notification.fetch_add(1, Ordering::Relaxed), 0),
-        };
-        let info = Notification { id, app, summary, body, icon: icon.is_some(), actions, timeout_ms };
-        let msg = protocol::notification(&info);
-        open.insert(id, Open { info, icon, desktop_entry, generation });
+        let id = if replaces_id != 0 { replaces_id } else { self.next_notification.fetch_add(1, Ordering::Relaxed) };
+        let rev = open.get(&id).map_or(0, |o| o.info.rev + 1);
+        let info = Notification { id, rev, app, summary, body, icon: icon.is_some(), actions, timeout_ms };
+        open.insert(id, Open { info, icon, desktop_entry });
+        let msg = protocol::notifications(&sorted(&open));
         drop(open);
         self.broadcast(msg);
         if timeout_ms > 0 {
             let app = self.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(timeout_ms as u64)).await;
-                app.close_notification(id, Some(generation), 1).await; // 1: expired
+                app.close_notification(id, Some(rev), 1).await; // 1: expired
             });
         }
         id
     }
 
-    /// Remove a notification (only the given generation, if one is given) and tell the viewers.
-    fn take_notification(&self, id: u32, generation: Option<u64>) -> Option<Open> {
+    /// Remove a notification (only the given revision, if one is given) and tell the viewers.
+    fn take_notification(&self, id: u32, rev: Option<u64>) -> Option<Open> {
         let mut open = self.notifications.lock().unwrap();
-        if generation.is_some_and(|g| open.get(&id).is_some_and(|o| o.generation != g)) {
+        if rev.is_some_and(|r| open.get(&id).is_some_and(|o| o.info.rev != r)) {
             return None;
         }
         let taken = open.remove(&id)?;
+        let msg = protocol::notifications(&sorted(&open));
         drop(open);
-        self.broadcast(protocol::notification_closed(id));
+        self.broadcast(msg);
         Some(taken)
     }
 
     /// Close a notification with the protocol's reason (1 expired, 2 dismissed by the user, 3 by a call).
-    async fn close_notification(&self, id: u32, generation: Option<u64>, reason: u32) {
-        if self.take_notification(id, generation).is_some() {
-            self.emit(|e| async move { Daemon::notification_closed(&e, id, reason).await }).await;
-        }
-    }
-
-    async fn emit<F, Fut>(&self, f: F)
-    where
-        F: FnOnce(SignalEmitter<'static>) -> Fut,
-        Fut: Future<Output = zbus::Result<()>>,
-    {
-        let Some(conn) = self.notify_bus.get() else { return };
-        let Ok(iface) = conn.object_server().interface::<_, Daemon>(PATH).await else { return };
-        if let Err(e) = f(iface.signal_emitter().to_owned()).await {
+    async fn close_notification(&self, id: u32, rev: Option<u64>, reason: u32) {
+        if self.take_notification(id, rev).is_some()
+            && let Some(e) = self.emitter()
+            && let Err(e) = Daemon::notification_closed(&e, id, reason).await
+        {
             tracing::debug!("notification signal: {e}");
         }
     }
 
-    /// The open notifications, oldest first.
-    pub fn notifications(&self) -> Vec<Notification> {
-        let mut list: Vec<Notification> = self.notifications.lock().unwrap().values().map(|o| o.info.clone()).collect();
-        list.sort_by_key(|n| n.id);
-        list
+    fn emitter(&self) -> Option<SignalEmitter<'static>> {
+        SignalEmitter::new(self.notify_bus.get()?, PATH).ok()
     }
 
-    /// A viewer acted on a notification: `dismiss` closes it; an action key is invoked and closes it;
-    /// `default` without such an action brings the application's newest window forward instead.
-    pub async fn notification_action(&self, id: u32, action: &str) -> Result<(), ApiError> {
-        let (has_action, target) = {
+    /// The open notifications, oldest first.
+    pub fn notifications(&self) -> Vec<Notification> {
+        sorted(&self.notifications.lock().unwrap())
+    }
+
+    /// A viewer acted on a notification: no action closes it (dismissed); an action key the
+    /// application offered is invoked and closes it; `default` without such an action brings the
+    /// application's newest window forward instead.
+    pub async fn notification_action(&self, id: u32, action: Option<&str>) -> Result<(), ApiError> {
+        let (rev, offered, names) = {
             let open = self.notifications.lock().unwrap();
             let o = open.get(&id).ok_or(ApiError::NotFound)?;
-            let has_action = o.info.actions.iter().any(|(k, _)| k == action);
-            let names = [o.desktop_entry.clone().unwrap_or_default().to_lowercase(), o.info.app.to_lowercase()];
-            let target = (action == "default" && !has_action).then(|| {
-                self.viewers.lock().unwrap().window_list.iter().filter(|w| names.contains(&w.app_id.to_lowercase())).map(|w| w.id).max()
-            }).flatten();
-            (has_action, target)
+            let offered = action.is_some_and(|a| o.info.actions.iter().any(|(k, _)| k == a));
+            (o.info.rev, offered, [o.desktop_entry.clone().unwrap_or_default().to_lowercase(), o.info.app.to_lowercase()])
         };
-        if has_action {
-            let key = action.to_string();
-            self.emit(|e| async move { Daemon::action_invoked(&e, id, key).await }).await;
-        } else if let Some(window) = target {
-            let _ = self.send(Command::Control(ControlMsg { id: window, op: ControlOp::Activate }));
+        if offered
+            && let Some(e) = self.emitter()
+            && let Err(e) = Daemon::action_invoked(&e, id, action.unwrap_or_default().to_string()).await
+        {
+            tracing::debug!("notification signal: {e}");
+        } else if action == Some("default") {
+            let target = self.viewers.lock().unwrap().window_list.iter().filter(|w| names.contains(&w.app_id.to_lowercase())).map(|w| w.id).max();
+            if let Some(window) = target {
+                let _ = self.send(Command::Control(ControlMsg { id: window, op: ControlOp::Activate }));
+            }
         }
-        self.close_notification(id, None, 2).await; // 2: dismissed by the user
+        self.close_notification(id, Some(rev), 2).await; // 2: dismissed by the user
         Ok(())
     }
 
-    /// A notification's picture: what the application named or sent, else its launcher's icon.
+    /// A notification's picture: what the application sent or named, else its launcher's icon.
     pub async fn notification_icon(&self, id: u32) -> Result<(Vec<u8>, &'static str), ApiError> {
-        let found = {
+        let (path, mime) = {
             let open = self.notifications.lock().unwrap();
-            let o = open.get(&id).ok_or(ApiError::NotFound)?;
-            match &o.icon {
+            match &open.get(&id).ok_or(ApiError::NotFound)?.icon {
                 Some(Icon::Png(png)) => return Ok((png.clone(), "image/png")),
-                Some(Icon::Path(p)) => apps::icon_file(p),
-                Some(Icon::Name(n)) => apps::named_icon(n),
-                None => None,
+                Some(Icon::File(p, m)) => (p.clone(), *m),
+                None => return Err(ApiError::NotFound),
             }
-            .or_else(|| apps::launcher_icon(o.desktop_entry.as_deref()?))
         };
-        let (path, mime) = found.ok_or(ApiError::NotFound)?;
         tokio::task::spawn_blocking(move || std::fs::read(path).map(|b| (b, mime)).map_err(|e| ApiError::Internal(e.to_string())))
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
     }
+}
+
+fn sorted(open: &HashMap<u32, Open>) -> Vec<Notification> {
+    let mut list: Vec<Notification> = open.values().map(|o| o.info.clone()).collect();
+    list.sort_by_key(|n| n.id);
+    list
 }

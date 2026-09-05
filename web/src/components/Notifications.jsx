@@ -21,10 +21,12 @@ export function Notifications({ viewer }) {
 function Toast({ n, viewer }) {
   const [icon, setIcon] = useState(null);
   useEffect(() => {
-    let live = true;
-    if (n.icon) notificationIcon(n.id).then(u => { if (live) setIcon(u); });
-    return () => { live = false; };
-  }, [n.id, n.icon]);
+    // fetched again when the application replaces the notification (rev); the old picture is released
+    let live = true, url = null;
+    setIcon(null);
+    if (n.icon) notificationIcon(n.id).then(u => { if (live) { url = u; setIcon(u); } else if (u) URL.revokeObjectURL(u); });
+    return () => { live = false; if (url) URL.revokeObjectURL(url); };
+  }, [n.id, n.rev, n.icon]);
   const act = (e, action) => { e.stopPropagation(); viewer.notify(n.id, action); };
   const buttons = n.actions.filter(([key]) => key !== 'default');
   return (
@@ -45,7 +47,7 @@ function Toast({ n, viewer }) {
             </div>
           )}
         </div>
-        <button type="button" onClick={e => act(e, 'dismiss')} title="Dismiss" className="-mt-1 -mr-1 rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><X className="size-4" /></button>
+        <button type="button" onClick={e => act(e, undefined)} title="Dismiss" className="-mt-1 -mr-1 rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"><X className="size-4" /></button>
       </div>
     </div>
   );

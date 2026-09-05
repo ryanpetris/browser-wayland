@@ -164,20 +164,22 @@ the mechanism.
 ## Notifications
 
 `notify.rs`. Applications send desktop notifications to `org.freedesktop.Notifications` on the session
-bus; with no panel nobody would answer, so the server requests that name at startup (without replacing
-an owner: on a host with a real daemon it logs and does nothing) and serves the interface with zbus:
-`Notify` stores the notification (a `replaces_id` takes that id's place), sends every viewer and window
-session a `Notification` message, and arms its expiry (`expire_timeout` −1 becomes 5 s, 0 means until
-closed); `CloseNotification` and the expiry remove it and send `{"id", "closed": true}`; `GetCapabilities`
-says `actions`, `body`, `icon-static`, `persistence`. A viewer's `Notify` message or `POST
-/api/notifications/{id}` with an action key emits `ActionInvoked` and closes the notification (reason 2);
-`dismiss` just closes it; `default` when the application registered no such action brings its newest
-window forward instead, matched by the `desktop-entry` hint or the application name against `app_id`.
-Icons: `app_icon` as a stock name or path, the `image-data` hint (converted to PNG), or `image-path`,
-served at `GET /api/notifications/{id}/icon`, falling back to the launcher's icon from `desktop-entry`.
-Open notifications are replayed to a connecting viewer. The page stacks them top-right on the stage with
-the icon, summary, body (markup stripped) and action buttons; the ✕ dismisses (a view-only session only
-hides it locally).
+bus; with no panel nobody would answer, so the server requests that name at startup with
+`DoNotQueue` (an owner keeps it: on a host with a real daemon we log and do nothing) and serves the
+interface with zbus: `Notify` stores the notification (a nonzero `replaces_id` is its id, with `rev`
+counting the replacements), sends every viewer and window session the whole open list as one
+`Notifications` message (a snapshot, so a dropped message loses nothing), and arms its expiry
+(`expire_timeout` −1 becomes 5 s, 0 or a critical urgency means until closed); `CloseNotification` and
+the expiry remove it and send the list again; `GetCapabilities` says `actions`, `body`, `icon-static`. A
+viewer's `Notify` message or `POST /api/notifications/{id}` with an action key the application offered
+emits `ActionInvoked` and closes the notification (reason 2); no action just closes it; `default` when the
+application offered no such action brings its newest window forward instead, matched by the
+`desktop-entry` hint or the application name against `app_id`. The picture is resolved when the
+notification arrives, in the specification's order (`image-data`, `image-path`, `app_icon` as a name, path
+or `file://` URI, the launcher's icon from `desktop-entry`, the legacy `icon_data`), and served at `GET
+/api/notifications/{id}/icon`. The page stacks the notifications top-right on the stage with the icon,
+summary, body (markup stripped) and action buttons; the ✕ dismisses (a view-only session only hides it
+locally).
 
 ## Clipboard
 

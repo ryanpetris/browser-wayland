@@ -18,7 +18,7 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
 | `GET /api/windows/{id}/icon` | | the window's icon (its own, else its launcher's), SVG or PNG; `404` none |
 | `GET /api/notifications` | | JSON array of **Notification**: what applications reported and the viewers show |
-| `POST /api/notifications/{id}` | `{"action": "default" \| "<key>" \| "dismiss"}` | click, invoke an action of, or dismiss a notification; `202`, `404` |
+| `POST /api/notifications/{id}` | `{"action": "default" \| "<key>"}`, or `{}` to dismiss | click, invoke an action of, or dismiss a notification; `202`, `404` |
 | `GET /api/notifications/{id}/icon` | | the notification's picture (the application's, else its launcher's); `404` none |
 | `GET /api/windows/{id}/elements` | | **Elements**; `501` without `--elements`, `503` tree unreadable, `404` unknown window |
 | `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
@@ -265,6 +265,12 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
       "format": "uint32",
       "minimum": 0
     },
+    "rev": {
+      "description": "counts up when the application replaces the notification under the same id",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
     "summary": {
       "type": "string"
     },
@@ -277,6 +283,7 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
   },
   "required": [
     "id",
+    "rev",
     "app",
     "summary",
     "body",
@@ -1010,7 +1017,7 @@ Move a floating window's geometry to x y (output logical px).
 
 ### `notifications`
 
-The desktop notifications currently shown (id, app, summary, body, actions, timeout_ms): what applications reported. POST /api/notifications/{id} acts on one.
+The desktop notifications currently shown (id, app, summary, body, actions, timeout_ms): what applications reported. POST /api/notifications/{id} with {"action": key} acts on one, {} dismisses it.
 
 ```json
 {

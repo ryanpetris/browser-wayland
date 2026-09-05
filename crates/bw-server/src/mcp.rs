@@ -256,7 +256,7 @@ impl Mcp {
         json(self.app.applications().await)
     }
 
-    #[tool(description = "The desktop notifications currently shown (id, app, summary, body, actions, timeout_ms): what applications reported. POST /api/notifications/{id} acts on one.")]
+    #[tool(description = "The desktop notifications currently shown (id, app, summary, body, actions, timeout_ms): what applications reported. POST /api/notifications/{id} with {\"action\": key} acts on one, {} dismisses it.")]
     fn notifications(&self) -> ToolResult {
         json(self.app.notifications())
     }

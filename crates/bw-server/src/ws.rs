@@ -143,6 +143,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     control.set_codec(app.choose_codec(hw, sw));
     let (etx, mut erx) = mpsc::channel::<Bytes>(32);
     let (atx, mut arx) = mpsc::channel::<Bytes>(4);
+    let notifications = protocol::notifications(&app.notifications()); // its own lock: never inside the viewers'
     let (id, replay) = {
         // registered under the lock a rotation clears, so a session that came in with an old token is
         // either cleared by it or refused here
@@ -157,8 +158,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         if key == Key::Control && v.controller.is_none() {
             v.controller = Some(id);
         }
-        let mut replay: Vec<Bytes> = [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id)))].into_iter().flatten().collect();
-        replay.extend(app.notifications().iter().map(protocol::notification));
+        let replay: Vec<Bytes> = [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id))), Some(notifications.clone())].into_iter().flatten().collect();
         (id, replay)
     };
     for msg in replay {
@@ -397,7 +397,7 @@ impl App {
     fn spawn_notification_action(self: &Arc<Self>, n: protocol::NotifyMsg) {
         let app = self.clone();
         tokio::spawn(async move {
-            let _ = app.notification_action(n.id, &n.action).await;
+            let _ = app.notification_action(n.id, n.action.as_deref()).await;
         });
     }
 
