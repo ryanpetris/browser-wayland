@@ -6,7 +6,8 @@ import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, clipboar
 import { createStore } from './store.js';
 import { startMic, stopMic } from './mic.js';
 import { startCam, stopCam } from './cam.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, BTN } from './protocol.js';
+import { openRtc } from './rtc.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -32,6 +33,9 @@ export function createViewer() {
     touchMouse: pref.get('touchmouse', false), // fingers as a mouse with gestures, instead of real touch points
     mic: false, // the local microphone is going to the desktop
     micAvailable: false, // the desktop takes one (audio is on there)
+    transport: pref.getStr('transport', 'auto'), // this viewer's pick: auto, webrtc, websocket
+    rtcAvailable: false, // the server does WebRTC (it sent ICE servers)
+    videoVia: 'websocket', // where the video comes from now
     cam: false, // the local webcam is going to the desktop
     camAvailable: false, // the desktop takes one (--webcam)
     codecs: [], // what the server encodes, in Auto's order: [{ codec, hardware }]
@@ -150,7 +154,8 @@ export function createViewer() {
     ws.onclose = e => {
       closes.push(`${e.code}:${e.reason}`);
       micStop(); camStop(); // nobody hears or sees them now, and the role is whatever the next connection says
-      store.set({ role: null, micAvailable: false, camAvailable: false });
+      clearTimeout(rtcTimer); rtc?.close(); rtc = null; // the next connection offers again
+      store.set({ role: null, micAvailable: false, camAvailable: false, rtcAvailable: false, videoVia: 'websocket' });
       if (e.code === 4001) {
         stream = null;
         forgetToken();
@@ -307,6 +312,12 @@ export function createViewer() {
       case NOTIFICATIONS:
         store.set({ notifications: JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1))) });
         break;
+      case RTC: {
+        const v = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
+        if (v.ice_servers) { iceServers = v.ice_servers; store.set({ rtcAvailable: true }); maybeRtc(); }
+        if (v.answer) rtc?.answer(v.answer);
+        break;
+      }
       case STREAM_STATE:
         store.set({ streamState: JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1))) });
         break;
@@ -433,6 +444,38 @@ export function createViewer() {
     let peak = 0;
     for (let i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
     return { packets: audioPackets, decoded: audioDecoded, state: audioCtx.state, level: bins[peak], lead: (nextPlay - audioCtx.currentTime) * 1000 };
+  }
+
+  // --- WebRTC transport ------------------------------------------------------------------------
+  // Unless the viewer picked the socket, a data channel is offered as soon as the server says it does
+  // WebRTC; the video moves there when it opens (the server sends where the channel is open) and comes
+  // back to the socket when it closes. Auto gives up after 3 s (UDP blocked, say) and stays on the socket.
+  let rtc = null, iceServers = [], rtcTimer;
+  function maybeRtc() {
+    if (rtc || state().transport === 'websocket' || !state().rtcAvailable || ws?.readyState !== WebSocket.OPEN) return;
+    const mine = (rtc = openRtc({
+      iceServers,
+      signal: o => sendText(RTC_CLIENT, JSON.stringify(o)),
+      onMessage,
+      onOpen: () => { if (rtc === mine) { clearTimeout(rtcTimer); store.set({ videoVia: 'webrtc' }); send(REQUEST_KEYFRAME, 0); } },
+      onClose: () => { if (rtc === mine) { closeRtc(); } },
+    }));
+    if (state().transport === 'auto') rtcTimer = setTimeout(() => { if (rtc === mine && state().videoVia !== 'webrtc') closeRtc(); }, 3000);
+  }
+  // back to the socket: the server is told (the channel may still look open to it), and asked for a keyframe
+  function closeRtc() {
+    clearTimeout(rtcTimer);
+    if (!rtc) return;
+    rtc.close();
+    rtc = null;
+    if (ws?.readyState === WebSocket.OPEN) { sendText(RTC_CLIENT, '{"close":true}'); send(REQUEST_KEYFRAME, 0); }
+    store.set({ videoVia: 'websocket' });
+  }
+  function setTransport(transport) {
+    pref.setStr('transport', transport);
+    store.set({ transport });
+    closeRtc();
+    maybeRtc();
   }
 
   // --- microphone -----------------------------------------------------------------------------
@@ -824,6 +867,8 @@ export function createViewer() {
     },
     takeControl: () => send(TAKE_CONTROL, 0),
     setChoice,
+    setTransport,
+    rtcStats: () => rtc?.stats(),
     uploadFiles,
     // a click ('default'), an action key, or nothing to dismiss; a session that can't act only hides it for itself
     notify(id, action) {

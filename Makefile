@@ -39,7 +39,7 @@ docker:
 # the render node's group, for hosts where it isn't world-accessible
 docker-run: docker
 	docker run --rm --device /dev/dri --group-add $$(stat -c %g /dev/dri/renderD128) --shm-size 1g \
-		-p 8443:8443 -v bw-data:/home/bw/.config/browser-wayland browser-wayland $(ARGS)
+		-p 8443:8443 -p 8443:8443/udp -v bw-data:/home/bw/.config/browser-wayland browser-wayland $(ARGS)
 
 clean:
 	rm -rf web/dist target

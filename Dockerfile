@@ -3,7 +3,7 @@
 #
 #   make docker-run          builds the image and runs it (the two commands below)
 #   docker build -t browser-wayland .
-#   docker run --rm --device /dev/dri --shm-size 1g -p 8443:8443 -v bw-data:/home/bw/.config/browser-wayland browser-wayland
+#   docker run --rm --device /dev/dri --shm-size 1g -p 8443:8443 -p 8443:8443/udp -v bw-data:/home/bw/.config/browser-wayland browser-wayland
 #
 # The desktop starts empty: the viewer's own menu lists the installed applications and launches them,
 # and its power menu shuts browser-wayland down. To have the Xfce panel as well, add

@@ -9,6 +9,7 @@ mod elements;
 mod mcp;
 pub mod files;
 mod notify;
+pub mod rtc;
 mod protocol;
 #[cfg(test)]
 mod reference;
@@ -79,6 +80,8 @@ pub struct Config {
     /// Where the browser's webcam frames (VP8) go to be played into the loopback camera; `None` without
     /// `--webcam`, or when its device couldn't be opened.
     pub cam: Option<mpsc::Sender<Bytes>>,
+    /// The WebRTC data-channel transport for the video (`rtc.rs`); `None` with `--no-rtc`.
+    pub rtc: Option<rtc::Config>,
 }
 
 impl Config {
@@ -104,6 +107,7 @@ pub struct App {
     sinks: SinkFactory,
     mic: Option<mpsc::Sender<Bytes>>,
     cam: Option<mpsc::Sender<Bytes>>,
+    rtc: Option<rtc::Hub>,
     /// The webcam pipeline died (the device refused the frames; the log says why): the feature is withdrawn.
     cam_dead: std::sync::atomic::AtomicBool,
     /// Event senders of the window-stream sessions (cursor, clipboard, window list go to them too).
@@ -172,6 +176,10 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
     fs::create_dir_all(&cfg.data_dir)?;
     let token = load_or_create(&cfg.data_dir.join("token"), || Ok(random_hex(32)))?;
     let viewer_token = load_or_create(&cfg.data_dir.join("viewer-token"), || Ok(random_hex(32)))?;
+    let rtc = match cfg.rtc {
+        Some(c) => rtc::Hub::start(c).await.map_err(|e| tracing::warn!("WebRTC disabled: {e:#}")).ok(),
+        None => None,
+    };
     let app = Arc::new(App {
         tokens: RwLock::new((token, viewer_token)),
         data_dir: cfg.data_dir.clone(),
@@ -184,6 +192,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         sinks: cfg.sinks,
         mic: cfg.mic,
         cam: cfg.cam,
+        rtc,
         cam_dead: Default::default(),
         window_viewers: Mutex::default(),
         snapshot_lock: tokio::sync::Semaphore::new(1),

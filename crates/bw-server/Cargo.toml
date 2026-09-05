@@ -25,3 +25,4 @@ serde = { version = "1", features = ["derive"] }
 rmcp = { version = "3", features = ["transport-streamable-http-server"] }
 schemars = "1"
 base64 = "0.22"
+str0m = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }

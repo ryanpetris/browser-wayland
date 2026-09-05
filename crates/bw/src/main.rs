@@ -42,6 +42,22 @@ struct Cli {
     /// No audio either way: neither the clients' for the browser nor the browser's microphone for them.
     #[arg(long)]
     no_audio: bool,
+    /// No WebRTC: the video stays on the WebSocket (TCP) for every viewer.
+    #[arg(long)]
+    no_rtc: bool,
+    /// UDP port for the WebRTC data channels (default: the listen port's number), on every local address.
+    #[arg(long)]
+    rtc_port: Option<u16>,
+    /// A STUN server for the browsers (`stun:host:3478`); none means host candidates only, enough on a LAN.
+    #[arg(long)]
+    stun: Vec<String>,
+    /// A TURN server for browsers behind a strict NAT (`turn:host:3478`), with its credentials.
+    #[arg(long)]
+    turn: Option<String>,
+    #[arg(long, requires = "turn")]
+    turn_user: Option<String>,
+    #[arg(long, requires = "turn")]
+    turn_pass: Option<String>,
     /// A v4l2loopback device (`modprobe v4l2loopback exclusive_caps=1 card_label=browser-wayland`, then its
     /// /dev/videoN) that the browser's webcam is played into, for applications to use as a camera.
     #[arg(long)]
@@ -229,7 +245,14 @@ fn main() -> Result<()> {
         let _ = exited_tx.send(join.join().is_ok());
     });
 
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, software, bitrate_kbps: cli.bitrate, refresh_mhz: if software { 30_000 } else { 60_000 }, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: std::path::absolute(cli.files_dir.unwrap_or_else(bw_server::files::default_dir))?, version: env!("BW_VERSION"), sinks, mic: mic.as_ref().map(|(_, _, tx)| tx.clone()), cam: cam.as_ref().map(|(_, tx)| tx.clone()) };
+    let rtc = (!cli.no_rtc).then(|| {
+        let mut ice_servers: Vec<serde_json::Value> = cli.stun.iter().map(|s| serde_json::json!({ "urls": s })).collect();
+        if let Some(turn) = &cli.turn {
+            ice_servers.push(serde_json::json!({ "urls": turn, "username": cli.turn_user, "credential": cli.turn_pass }));
+        }
+        bw_server::rtc::Config { port: cli.rtc_port.unwrap_or(cli.listen.port()), ice_servers }
+    });
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, software, bitrate_kbps: cli.bitrate, refresh_mhz: if software { 30_000 } else { 60_000 }, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: std::path::absolute(cli.files_dir.unwrap_or_else(bw_server::files::default_dir))?, version: env!("BW_VERSION"), sinks, mic: mic.as_ref().map(|(_, _, tx)| tx.clone()), cam: cam.as_ref().map(|(_, tx)| tx.clone()), rtc };
     // Ctrl+C and SIGTERM (`docker stop`, a service manager) return here so the audio devices get unloaded
     // and the pipelines stopped.
     let result = tokio::runtime::Runtime::new()?.block_on(async {

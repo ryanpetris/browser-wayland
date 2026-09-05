@@ -165,7 +165,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         }
         let id = v.next_id;
         v.next_id += 1;
-        v.sessions.insert(id, ViewerSession { key, events: etx, audio: atx, audio_seq: 0, size: None, control, hw, sw, want_codec, codec, preset, quality, cam_wait_key: false });
+        v.sessions.insert(id, ViewerSession { key, events: etx.clone(), audio: atx, audio_seq: 0, size: None, control, hw, sw, want_codec, codec, preset, quality, cam_wait_key: false });
         if key == Key::Control && v.controller.is_none() {
             v.controller = Some(id);
         }
@@ -174,6 +174,9 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     };
     for msg in replay {
         let _ = socket.send(Message::Binary(msg)).await;
+    }
+    if let Some(hub) = &app.rtc {
+        let _ = socket.send(Message::Binary(protocol::rtc(&serde_json::json!({ "ice_servers": *hub.ice_servers })))).await; // the page may offer now
     }
     let _ = app.commands.send(Command::ViewerStream { key: id, sink: Some(sink) });
 
@@ -197,7 +200,11 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                         // while we do, so nothing goes missing between encoder and page (no keyframe dance)
                         let backlog = rx.len();
                         let t = Instant::now();
-                        if !send(&mut socket, protocol::video(&f, seq)).await { break None }
+                        match &app.rtc {
+                            // the data channel, while the page has one open: a lost packet costs one frame, not a stall
+                            Some(hub) if hub.is_open(id) => hub.frame(id, protocol::video(&f, seq)),
+                            _ => if !send(&mut socket, protocol::video(&f, seq)).await { break None },
+                        }
                         seq = seq.wrapping_add(1);
                         if let Some(q) = auto.frame(backlog, t.elapsed()) {
                             app.set_quality(id, q);
@@ -242,6 +249,11 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                             let Some(state) = app.stream_state(id) else { break Some((UNAUTHORIZED, "token rotated")) };
                             if !send(&mut socket, state).await { break None }
                         }
+                        Some(ClientMsg::Rtc(v)) => match (&app.rtc, v.get("offer").and_then(|o| o.as_str())) {
+                            (Some(hub), Some(sdp)) => hub.offer(id, sdp.to_string(), etx.clone()),
+                            (Some(hub), None) => hub.close(id),
+                            (None, _) => {}
+                        },
                         Some(m) => app.viewer_message(id, key, m),
                         None => {}
                     }
@@ -276,6 +288,9 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         }
     }
     let _ = app.commands.send(Command::ViewerStream { key: id, sink: None });
+    if let Some(hub) = &app.rtc {
+        hub.close(id);
+    }
     if let Some((code, reason)) = ended {
         close(&mut socket, code, reason).await;
     }

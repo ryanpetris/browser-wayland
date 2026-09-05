@@ -1,7 +1,7 @@
 // One line of numbers under the display, and this viewer's codec and quality choice.
 import { Activity, Camera, CameraOff, ClipboardCheck, Download, Lock, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
 import { useStore } from '../store.js';
-import { PRESETS } from '../protocol.js';
+import { PRESETS, TRANSPORTS } from '../protocol.js';
 import { codecName } from './ui.jsx';
 import { downloadClipboardFile } from '../api.js';
 
@@ -15,7 +15,11 @@ function Choice({ viewer }) {
   const codecs = useStore(viewer.store, s => s.codecs);
   const decodable = useStore(viewer.store, s => s.decodable);
   const status = useStore(viewer.store, s => s.status);
+  const transport = useStore(viewer.store, s => s.transport);
+  const rtcAvailable = useStore(viewer.store, s => s.rtcAvailable);
+  const videoVia = useStore(viewer.store, s => s.videoVia);
   if (status !== 'connected') return null;
+  const TRANSPORT_LABEL = { webrtc: 'WebRTC', websocket: 'WebSocket' };
   const both = codecs.filter(c => decodable.includes(c.codec));
   const cls = 'rounded border border-zinc-700 bg-zinc-800 px-1 py-0.5 text-[11px] text-zinc-300 focus:outline-none';
   return (
@@ -28,6 +32,12 @@ function Choice({ viewer }) {
         <option value="auto">Auto{st?.auto_quality ? ` (${mbit(st.bitrate_kbps)}${st.max_fps ? `, ${st.max_fps} fps` : ''})` : ''}</option>
         {PRESETS.filter(p => p !== 'auto').map(p => <option key={p} value={p}>{PRESET_LABEL[p]}</option>)}
       </select>
+      {rtcAvailable && (
+        <select value={transport} onChange={e => viewer.setTransport(e.target.value)} className={cls} title="Transport: how the video travels">
+          <option value="auto">Auto ({TRANSPORT_LABEL[videoVia]})</option>
+          {TRANSPORTS.filter(t => t !== 'auto').map(t => <option key={t} value={t}>{TRANSPORT_LABEL[t]}</option>)}
+        </select>
+      )}
     </>
   );
 }

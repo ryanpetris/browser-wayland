@@ -27,6 +27,12 @@ pub const NOTIFICATIONS: u8 = 0x0B;
 /// JSON `{"codec","auto_codec","bitrate_kbps","max_fps","auto_quality"}`: what this session's
 /// encoder does right now; after every `Config` and whenever the automatic quality changes.
 pub const STREAM_STATE: u8 = 0x0C;
+/// `[RTC][JSON]`: WebRTC signalling, server side: `{"ice_servers": [...]}` once the session is up (the
+/// browser may then offer), `{"answer": "<sdp>"}` to its offer.
+pub const RTC: u8 = 0x0D;
+/// `[FRAGMENT][u32 id][u16 index][u16 count][bytes]`: on the data channel only, a piece of one WebSocket
+/// message (a video frame), reassembled by id.
+pub const FRAGMENT: u8 = 0x0E;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
@@ -70,6 +76,9 @@ pub const MIC: u8 = 0x93;
 /// `[CAM][VP8 frame]`: one encoded frame of the browser's webcam, played into the loopback camera.
 /// Controlling session only.
 pub const CAM: u8 = 0x94;
+/// `[RTC][JSON]`: WebRTC signalling, browser side: `{"offer": "<sdp>"}` to connect the video data channel,
+/// `{"close": true}` to go back to the socket. Any session, its own connection only.
+pub const RTC_CLIENT: u8 = 0x95;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,6 +130,12 @@ pub fn cursor(img: Option<&CursorImage>) -> Bytes {
     b.extend_from_slice(&(img.logical_w as u16).to_le_bytes());
     b.extend_from_slice(&(img.logical_h as u16).to_le_bytes());
     b.extend_from_slice(&img.rgba);
+    b.into()
+}
+
+pub fn rtc(v: &serde_json::Value) -> Bytes {
+    let mut b = vec![RTC];
+    serde_json::to_writer(&mut b, v).expect("json serializes");
     b.into()
 }
 
@@ -245,6 +260,8 @@ pub enum ClientMsg {
     Touch { kind: u8, id: u8, x: f32, y: f32 },
     Mic(Bytes),
     Cam(Bytes),
+    /// `{"offer": "<sdp>"}` or `{"close": true}` (see `RTC_CLIENT`).
+    Rtc(serde_json::Value),
 }
 
 #[derive(Debug, PartialEq, serde::Deserialize)]
@@ -301,6 +318,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         TOUCH => ClientMsg::Touch { kind: u8_at(1)?, id: u8_at(2)?, x: f32_at(3)?, y: f32_at(7)? },
         MIC => ClientMsg::Mic(Bytes::copy_from_slice(b.get(1..)?)),
         CAM => ClientMsg::Cam(Bytes::copy_from_slice(b.get(1..)?)),
+        RTC_CLIENT => ClientMsg::Rtc(serde_json::from_slice(&b[1..]).ok()?),
         _ => return None,
     })
 }

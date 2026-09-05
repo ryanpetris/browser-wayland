@@ -3,7 +3,8 @@
 browser-wayland is a headless Wayland compositor whose display is a browser tab. Clients render on
 the GPU as usual; the composited frame is hardware-encoded (VA-API through GStreamer) and streamed
 over a WebSocket; the browser decodes it with WebCodecs and paints it on a canvas. Mouse, keyboard
-and (optionally) audio travel the same socket. The compositor is also the window manager, and it
+and (optionally) audio travel the same socket, and the video moves to a WebRTC data channel (`bw-server`'s
+`rtc.rs`, str0m) when the page opens one. The compositor is also the window manager, and it
 exposes what it knows and can do as an HTTP/WebSocket API (see [desktop-api.md](desktop-api.md)).
 
 Other documents: [protocol.md](protocol.md) (wire formats and HTTP API), [panels.md](panels.md)
@@ -67,7 +68,7 @@ small shared-types crate. That boundary keeps encoders and transports pluggable 
 | `bw-core` | Plain types shared by everything: `Command` (server → compositor), `Event` (compositor → server), `Frame`/`FrameBuffer`, `FrameSink`, `StreamMsg`, `WindowInfo`, `ControlMsg`, `InputMsg`, `Snapshot`, the decoration layout. Serde and JSON schemas on the API types. |
 | `bw-compositor` | Smithay. `lib.rs` (state, loop, output, resize, spawn), `handlers.rs` (protocol delegates), `input.rs` (browser and API input → seat, focus, decorations), `render.rs` (frame), `gpu.rs` (render node, GBM, EGL and dmabuf swapchains, or the surfaceless platform and a texture read back), `grabs.rs` (move/resize), `decor.rs` (title bars), `xwayland.rs`, `foreign_toplevel.rs`, `workspace.rs`, `desktop.rs` (window list, control, snapshots), `window_stream.rs`, `clipboard.rs`, `cursor.rs`. |
 | `bw-stream` | GStreamer. `GstSink: FrameSink` (dmabuf import or memory frames, pipeline build/rebuild, keyframes, codec and size switch), `lease.rs` (a custom `GstMeta` whose `free` drops the swapchain lease), the Opus audio source, the microphone and webcam sinks. |
-| `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`; its build script insists on a web build first), `/ws` (viewer sessions, roles) and `/ws/window/{id}` sessions, `/api` (`api.rs` holds the operations, `elements.rs` the accessibility walk), `/mcp` (`mcp.rs`), audio and event broadcast. |
+| `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`; its build script insists on a web build first), `/ws` (viewer sessions, roles) and `/ws/window/{id}` sessions, `rtc.rs` (the WebRTC data-channel transport: str0m peers on one UDP socket per address, the video's other pipe), `/api` (`api.rs` holds the operations, `elements.rs` the accessibility walk), `/mcp` (`mcp.rs`), audio and event broadcast. |
 | `bw` | The `browser-wayland` binary: clap CLI, thread spawning, channel wiring, the audio devices, the render node or its absence. |
 
 `web/` is the viewer: React 19 and Tailwind CSS 4, built by Vite into `web/dist` by `make web` (the

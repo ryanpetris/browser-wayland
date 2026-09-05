@@ -125,6 +125,19 @@ in the Dockerfile's header.
 The page says when the server closed its socket with a token dialog ("wrong token" or "token
 rotated"; the tokens change with the data directory, e.g. a fresh container without a volume).
 
+## Transport
+
+Video normally travels on a WebRTC data channel (UDP): a lost packet costs one frame instead of stalling
+everything behind it as a WebSocket over TCP does, and ICE finds a way across NAT. The page offers as soon
+as it is connected, the server answers with its own addresses (it needs no STUN of its own), and the
+frames move to the channel once it opens; input, audio and events stay on the WebSocket. The status bar's
+Transport select shows what carries the video (`Auto (WebRTC)`) and lets a viewer pick one; Auto falls
+back to the socket when the channel doesn't open in three seconds (UDP blocked, say). The server listens
+on UDP on the listen port's number (`--rtc-port` for another; Docker needs `-p 8443:8443/udp`) on every
+local address. For browsers behind a strict NAT give them a STUN server (`--stun stun:host:3478`) or a
+TURN server (`--turn turn:host:3478 --turn-user … --turn-pass …`; coturn is easy to self-host); the
+server itself must be reachable at one of its addresses. `--no-rtc` keeps everything on the WebSocket.
+
 ## Without a GPU
 
 On a machine with no `/dev/dri` at all (a VPS, a CI runner, a container started without devices) the
@@ -255,8 +268,8 @@ Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`
 `--codec auto|h264|hevc|vp9|av1|vp8` (what Auto resolves to when the browser decodes it; a codec this
 machine can't encode stops startup; auto prefers whatever the browser decodes in hardware, among what
 this machine encodes: AV1, then HEVC, VP9, H.264 on the GPU; VP8 first on the CPU),
-`--software-encoding`, `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--webcam`, `--socket-name`, `--render-node`
-(`none` for no GPU). `--help`
+`--software-encoding`, `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--webcam`, `--no-rtc`, `--rtc-port`, `--stun`,
+`--turn`, `--turn-user`, `--turn-pass`, `--socket-name`, `--render-node` (`none` for no GPU). `--help`
 lists them all.
 
 Games and other clients that lock the pointer get raw mouse deltas: the page mirrors the lock with the
