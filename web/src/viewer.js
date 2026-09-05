@@ -163,9 +163,9 @@ export function createViewer() {
   /// A window action or spawn for the compositor, as JSON.
   const sendControl = obj => sendText(CONTROL, JSON.stringify(obj));
 
-  // Which codec families this browser decodes, in hardware and at all (bit0 H.264, bit1 HEVC, bit2 VP9, bit3 AV1).
+  // Which codec families this browser decodes, in hardware and at all (bit0 H.264, bit1 HEVC, bit2 VP9, bit3 AV1, bit4 VP8).
   async function sendHello() {
-    const probes = ['avc1.640028', 'hev1.1.6.L120.90', 'vp09.00.40.08', 'av01.0.09M.08'];
+    const probes = ['avc1.640028', 'hev1.1.6.L120.90', 'vp09.00.40.08', 'av01.0.09M.08', 'vp8'];
     let hw = 0, sw = 0;
     for (const [i, codec] of probes.entries()) {
       const ok = async hardwareAcceleration => (await VideoDecoder.isConfigSupported({ codec, hardwareAcceleration }).catch(() => ({}))).supported;

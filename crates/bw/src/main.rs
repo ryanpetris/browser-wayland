@@ -17,10 +17,14 @@ struct Cli {
     /// Encoder bitrate in kbit/s.
     #[arg(long, default_value_t = 8000)]
     bitrate: u32,
-    /// Video codec: auto picks AV1, HEVC, VP9 or H.264 by what the browser decodes in hardware, among
-    /// what the GPU encodes.
-    #[arg(long, default_value = "auto", value_parser = ["auto", "h264", "hevc", "vp9", "av1"])]
+    /// Video codec: auto picks AV1, HEVC, VP9 or H.264 (or VP8 with --software-encoding) by what the
+    /// browser decodes in hardware, among what this machine encodes.
+    #[arg(long, default_value = "auto", value_parser = ["auto", "h264", "hevc", "vp9", "av1", "vp8"])]
     codec: String,
+    /// Encode on the CPU (libvpx, x264, x265, SVT-AV1: whichever is installed) instead of with VA-API,
+    /// for machines without a usable GPU encoder. Slower, and capped at 30 fps.
+    #[arg(long)]
+    software_encoding: bool,
     /// Command to run (via `sh -c`) at startup, with WAYLAND_DISPLAY, DISPLAY, PULSE_SINK and a
     /// Wayland session's environment set for it.
     #[arg(long)]
@@ -89,13 +93,19 @@ fn main() -> Result<()> {
         "hevc" => Some(Codec::Hevc),
         "vp9" => Some(Codec::Vp9),
         "av1" => Some(Codec::Av1),
+        "vp8" => Some(Codec::Vp8),
         _ => None,
     };
     let va = bw_stream::va_prefix(&cli.render_node);
-    let codecs = bw_stream::hardware_codecs(&va);
-    anyhow::ensure!(!codecs.is_empty(), "no VA-API video encoder found for {} (gst-plugin-va and a driver for this GPU are needed)", cli.render_node.display());
-    anyhow::ensure!(codec.is_none_or(|c| codecs.contains(&c)), "this GPU has no {codec:?} encoder; it has {codecs:?}");
-    tracing::info!(?codecs, "hardware encoders");
+    let software = cli.software_encoding;
+    let codecs = bw_stream::codecs(&va, software);
+    if software {
+        anyhow::ensure!(!codecs.is_empty(), "no software video encoder found (GStreamer's vpx, x264, x265 or svtav1 plugins)");
+    } else {
+        anyhow::ensure!(!codecs.is_empty(), "no VA-API video encoder found for {} (gst-plugin-va and a driver for this GPU are needed; --software-encoding encodes on the CPU)", cli.render_node.display());
+    }
+    anyhow::ensure!(codec.is_none_or(|c| codecs.contains(&c)), "no {codec:?} encoder here; available: {codecs:?}");
+    tracing::info!(?codecs, software, "video encoders");
     let (audio_tx, audio_rx) = mpsc::channel(16);
     let (events_tx, events_rx) = mpsc::unbounded_channel();
 
@@ -114,7 +124,7 @@ fn main() -> Result<()> {
     let bitrate = cli.bitrate;
     let va_for_sinks = va.clone();
     let sinks: bw_server::SinkFactory = Box::new(move |tx| {
-        let sink = bw_stream::GstSink::new(bitrate, &va_for_sinks, tx)?;
+        let sink = bw_stream::GstSink::new(bitrate, &va_for_sinks, software, tx)?;
         Ok((Box::new(sink.clone()) as Box<dyn FrameSink>, Box::new(sink.control()) as Box<dyn StreamControl>))
     });
     let mut exec_env: Vec<(String, String)> = audio.as_ref().map(|(sink, _)| ("PULSE_SINK".to_string(), sink.name.clone())).into_iter().collect();
@@ -122,7 +132,7 @@ fn main() -> Result<()> {
         // GTK always publishes its tree; Firefox and Qt only when asked. (Chromium needs --force-renderer-accessibility.)
         exec_env.extend([("GNOME_ACCESSIBILITY", "1"), ("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1")].map(|(k, v)| (k.to_string(), v.to_string())));
     }
-    let accepted_formats = bw_stream::accepted_formats(&va);
+    let accepted_formats = bw_stream::accepted_formats(&va, software);
     tracing::info!(?accepted_formats, "vapostproc dmabuf import formats (fourcc, modifier)");
     let bw_compositor::CompositorHandle { commands, socket_name, x11_display, join } = bw_compositor::spawn(
         bw_compositor::Config {

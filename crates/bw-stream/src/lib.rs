@@ -51,26 +51,71 @@ struct EncodeOpts {
     width: u32,
     height: u32,
     scale: f64,
-    bitrate_kbps: u32,
     codec: Codec,
 }
 
-/// Encoder + parser for a codec, producing one WebCodecs chunk per buffer. `enc` is the VA encoder element.
-fn encode_tail(codec: Codec, enc: &str, bitrate_kbps: u32) -> String {
+/// The parser after an encoder, producing one WebCodecs chunk per buffer.
+fn parse_tail(codec: Codec) -> &'static str {
+    match codec {
+        Codec::H264 => "! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au",
+        Codec::Hevc => "! h265parse config-interval=-1 ! video/x-h265,stream-format=byte-stream,alignment=au",
+        Codec::Vp9 => "! vp9parse ! video/x-vp9",
+        // low-overhead OBUs, one temporal unit per buffer: what WebCodecs takes; the encoders put a
+        // sequence header in every keyframe's unit
+        Codec::Av1 => "! av1parse ! video/x-av1,stream-format=obu-stream,alignment=tu",
+        Codec::Vp8 => "! video/x-vp8",
+    }
+}
+
+/// A VA encoder with its parser. `enc` is the element for this device.
+fn hardware_tail(codec: Codec, enc: &str, bitrate_kbps: u32) -> String {
     let common = format!("{enc} name=enc rate-control=cbr bitrate={bitrate_kbps} target-usage=7 ref-frames=1");
     match codec {
-        Codec::H264 => format!(
-            "{common} b-frames=0 ! video/x-h264,profile=high ! h264parse config-interval=-1 \
-             ! video/x-h264,stream-format=byte-stream,alignment=au"
-        ),
-        Codec::Hevc => format!(
-            "{common} b-frames=0 ! video/x-h265,profile=main ! h265parse config-interval=-1 \
-             ! video/x-h265,stream-format=byte-stream,alignment=au"
-        ),
-        Codec::Vp9 => format!("{common} ! vp9parse ! video/x-vp9"),
-        // low-overhead OBUs, one temporal unit per buffer: what WebCodecs takes; the encoder puts a
-        // sequence header in every keyframe's unit
-        Codec::Av1 => format!("{common} ! av1parse ! video/x-av1,stream-format=obu-stream,alignment=tu"),
+        Codec::H264 => format!("{common} b-frames=0 ! video/x-h264,profile=high {}", parse_tail(codec)),
+        Codec::Hevc => format!("{common} b-frames=0 ! video/x-h265,profile=main {}", parse_tail(codec)),
+        Codec::Vp9 | Codec::Av1 => format!("{common} {}", parse_tail(codec)),
+        Codec::Vp8 => unreachable!("VA has no VP8 encoder"),
+    }
+}
+
+/// A CPU encoder (`--software-encoding`) with its parser, at its fastest low-latency settings. `enc` is
+/// the element `software_encoder` found.
+fn software_tail(codec: Codec, enc: &str, bitrate_kbps: u32) -> String {
+    let bps = bitrate_kbps * 1000;
+    let encoder = match (codec, enc) {
+        (Codec::Vp8, _) => format!("vp8enc name=enc deadline=1 cpu-used=8 end-usage=cbr target-bitrate={bps} lag-in-frames=0 threads=4"),
+        (Codec::Vp9, _) => format!("vp9enc name=enc deadline=1 cpu-used=8 end-usage=cbr target-bitrate={bps} lag-in-frames=0 row-mt=true threads=4"),
+        (Codec::H264, "x264enc") => format!("x264enc name=enc tune=zerolatency speed-preset=superfast bitrate={bitrate_kbps} bframes=0 ! video/x-h264,profile=main"),
+        (Codec::H264, _) => format!("openh264enc name=enc rate-control=bitrate bitrate={bps}"),
+        (Codec::Hevc, _) => format!("x265enc name=enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate_kbps} ! video/x-h265,profile=main"),
+        // no lookahead and a flat GOP: about ten frames of delay instead of sixty
+        (Codec::Av1, _) => format!("svtav1enc name=enc preset=12 target-bitrate={bitrate_kbps} parameters-string=lookahead=0:hierarchical-levels=1"),
+    };
+    format!("{encoder} {}", parse_tail(codec))
+}
+
+/// The CPU encoder element for a codec, if its plugin is installed.
+fn software_encoder(codec: Codec) -> Option<&'static str> {
+    let names: &[&str] = match codec {
+        Codec::Vp8 => &["vp8enc"],
+        Codec::Vp9 => &["vp9enc"],
+        Codec::H264 => &["x264enc", "openh264enc"],
+        Codec::Hevc => &["x265enc"],
+        Codec::Av1 => &["svtav1enc"],
+    };
+    names.iter().copied().find(|n| gst::ElementFactory::find(n).is_some())
+}
+
+/// What this machine can encode, best first: with `software`, the CPU encoders that are installed
+/// (VP8 is the cheapest); else the GPU's VA encoders (see `hardware_codecs`).
+pub fn codecs(prefix: &str, software: bool) -> Vec<Codec> {
+    if gst::init().is_err() {
+        return vec![];
+    }
+    if software {
+        [Codec::Vp8, Codec::H264, Codec::Vp9, Codec::Hevc, Codec::Av1].into_iter().filter(|&c| software_encoder(c).is_some()).collect()
+    } else {
+        hardware_codecs(prefix)
     }
 }
 
@@ -90,6 +135,7 @@ fn va_encoder(prefix: &str, codec: Codec) -> Option<String> {
         Codec::Hevc => "h265",
         Codec::Vp9 => "vp9",
         Codec::Av1 => "av1",
+        Codec::Vp8 => return None,
     };
     ["enc", "lpenc"].iter().map(|kind| format!("{prefix}{base}{kind}")).find(|name| gst::ElementFactory::find(name).is_some())
 }
@@ -104,13 +150,10 @@ pub fn hardware_codecs(prefix: &str) -> Vec<Codec> {
 
 static STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
 
-/// Build `<head> ! <encoder> ! <parser> ! appsink` and start it. `head` must end at NV12/VAMemory.
-fn build(head: &str, enc: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<Stream> {
+/// Build `<head> ! <tail: encoder and parser> ! appsink` and start it.
+fn build(head: &str, tail: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<Stream> {
     let stream_id = STREAM_SEQ.fetch_add(1, Ordering::Relaxed);
-    let desc = format!(
-        "{head} ! {} ! appsink name=sink sync=false max-buffers=0",
-        encode_tail(opts.codec, enc, opts.bitrate_kbps)
-    );
+    let desc = format!("{head} ! {tail} ! appsink name=sink sync=false max-buffers=0");
     let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
     let encoder = pipeline.by_name("enc").context("enc element")?;
     let sink = pipeline.by_name("sink").context("sink element")?.downcast::<gst_app::AppSink>().unwrap();
@@ -136,6 +179,7 @@ fn build(head: &str, enc: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -
                             Codec::Hevc => "hev1.1.6.L120.90",
                             Codec::Vp9 => "vp09.00.41.08",
                             Codec::Av1 => "av01.0.09M.08",
+                            Codec::Vp8 => "vp8",
                         }
                         .into()
                     });
@@ -213,6 +257,7 @@ fn codec_string(codec: Codec, au: &[u8], width: u32, height: u32) -> Option<Stri
             let level = if width * height <= 2048 * 1088 { "09" } else if width * height <= 4096 * 2176 { "13" } else { "17" };
             Some(format!("av01.0.{level}M.08"))
         }
+        Codec::Vp8 => Some("vp8".into()),
     }
 }
 
@@ -290,6 +335,9 @@ struct Inner {
     tx: mpsc::Sender<StreamMsg>,
     /// `va` or `va<node>`: which device's elements (see `va_prefix`).
     prefix: String,
+    /// CPU encoders on linear frames instead of the GPU's, at 30 fps at most.
+    software: bool,
+    last_push: std::time::Instant,
     bitrate_kbps: u32,
     codec: Codec,
     /// Set by `output_changed`; the pipeline is (re)built lazily on the next frame.
@@ -329,11 +377,13 @@ impl GstSink {
         GstControl(Arc::downgrade(&self.0))
     }
 
-    pub fn new(bitrate_kbps: u32, prefix: &str, tx: mpsc::Sender<StreamMsg>) -> Result<GstSink> {
+    pub fn new(bitrate_kbps: u32, prefix: &str, software: bool, tx: mpsc::Sender<StreamMsg>) -> Result<GstSink> {
         gst::init()?;
         Ok(GstSink(Arc::new(Mutex::new(Inner {
             tx,
             prefix: prefix.to_string(),
+            software,
+            last_push: std::time::Instant::now() - std::time::Duration::from_secs(1), // the first frame always goes
             bitrate_kbps,
             codec: Codec::H264,
             geo: None,
@@ -433,19 +483,34 @@ impl Inner {
         // vapostproc scales the frame to the viewer's size on the way to NV12; the stream's scale then
         // maps its pixels to the desktop's logical pixels
         let (width, height) = self.target.unwrap_or((geo.width_px, geo.height_px));
-        let head = format!(
-            "appsrc name=src is-live=true format=time do-timestamp=true block=false max-buffers=2 leaky-type=downstream \
-             caps=\"video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format={},width={},height={},framerate=60/1\" \
-             ! {}postproc ! video/x-raw(memory:VAMemory),format=NV12,width={width},height={height}",
-            drm_format_string(fourcc, modifier),
-            geo.width_px,
-            geo.height_px,
-            self.prefix
-        );
+        let src = "appsrc name=src is-live=true format=time do-timestamp=true block=false max-buffers=2 leaky-type=downstream";
+        let (head, tail) = if self.software {
+            // linear frames the CPU can map: plain raw caps on the dmabuf memory, converted and scaled on the CPU
+            let format = gst_video::dma_drm_fourcc_to_format(fourcc).context("unmappable fourcc")?;
+            let head = format!(
+                "{src} caps=\"video/x-raw,format={},width={},height={},framerate=60/1\" \
+                 ! videoconvertscale n-threads=4 ! video/x-raw,format=I420,width={width},height={height}",
+                format.to_str(),
+                geo.width_px,
+                geo.height_px
+            );
+            let enc = software_encoder(self.codec).with_context(|| format!("no software encoder for {:?}", self.codec))?;
+            (head, software_tail(self.codec, enc, self.bitrate_kbps))
+        } else {
+            let head = format!(
+                "{src} caps=\"video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format={},width={},height={},framerate=60/1\" \
+                 ! {}postproc ! video/x-raw(memory:VAMemory),format=NV12,width={width},height={height}",
+                drm_format_string(fourcc, modifier),
+                geo.width_px,
+                geo.height_px,
+                self.prefix
+            );
+            let enc = va_encoder(&self.prefix, self.codec).with_context(|| format!("no VA encoder for {:?}", self.codec))?;
+            (head, hardware_tail(self.codec, &enc, self.bitrate_kbps))
+        };
         let scale = geo.scale * width as f64 / geo.width_px as f64;
-        let opts = EncodeOpts { width, height, scale, bitrate_kbps: self.bitrate_kbps, codec: self.codec };
-        let enc = va_encoder(&self.prefix, self.codec).with_context(|| format!("no VA encoder for {:?}", self.codec))?;
-        let stream = build(&head, &enc, opts, self.tx.clone())?;
+        let opts = EncodeOpts { width, height, scale, codec: self.codec };
+        let stream = build(&head, &tail, opts, self.tx.clone())?;
         let appsrc = stream.pipeline.by_name("src").unwrap().downcast::<gst_app::AppSrc>().unwrap();
         self.stream = Some((stream, appsrc));
         Ok(())
@@ -455,6 +520,11 @@ impl Inner {
         if self.stream.is_none() {
             self.start()?;
         }
+        // ponytail: a fixed 30 fps cap for the CPU encoders; per-viewer rates come with the quality controls
+        if self.software && self.last_push.elapsed() < std::time::Duration::from_millis(32) {
+            return Ok(()); // the lease goes back with the frame; the next one is whole anyway
+        }
+        self.last_push = std::time::Instant::now();
         let mem = match self.mems.get(&frame.slot_id) {
             Some(m) => m.clone(), // frame.fd (a dup) is closed on drop; GStreamer already holds one
             None => {
@@ -492,10 +562,15 @@ fn drm_format_string(fourcc: u32, modifier: u64) -> String {
     if modifier == 0 { code } else { format!("{code}:0x{modifier:016x}") }
 }
 
-/// `(fourcc, modifier)` pairs the device's vapostproc advertises for `memory:DMABuf` input: what the compositor may render into.
-pub fn accepted_formats(prefix: &str) -> Vec<(u32, u64)> {
+/// `(fourcc, modifier)` pairs the encoders take: what the compositor may render into. With `software`,
+/// linear XR24 and AR24, which the CPU maps; else what the device's vapostproc advertises for
+/// `memory:DMABuf` input.
+pub fn accepted_formats(prefix: &str, software: bool) -> Vec<(u32, u64)> {
     if gst::init().is_err() {
         return vec![];
+    }
+    if software {
+        return vec![(u32::from_le_bytes(*b"XR24"), 0), (u32::from_le_bytes(*b"AR24"), 0)];
     }
     let Some(factory) = gst::ElementFactory::find(&format!("{prefix}postproc")) else { return vec![] };
     let mut out = vec![];

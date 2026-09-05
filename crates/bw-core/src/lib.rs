@@ -292,6 +292,8 @@ pub enum Codec {
     Hevc,
     Vp9,
     Av1,
+    /// software only
+    Vp8,
 }
 
 /// What the server may ask of the running encoder.

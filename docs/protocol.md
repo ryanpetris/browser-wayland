@@ -47,7 +47,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | Type | Name | Payload |
 |---|---|---|
 | `0x80` | Auth | the token as UTF-8. First message. |
-| `0x81` | Hello | `u8 hw` `u8 sw`: codec families the browser decodes with hardware, and at all (bit 0 H.264, bit 1 HEVC, bit 2 VP9, bit 3 AV1). Picks the codec, among those the GPU encodes, and starts the stream. |
+| `0x81` | Hello | `u8 hw` `u8 sw`: codec families the browser decodes with hardware, and at all (bit 0 H.264, bit 1 HEVC, bit 2 VP9, bit 3 AV1, bit 4 VP8). Picks the codec, among those this machine encodes, and starts the stream. |
 | `0x82` | Resize | `u16 css_w` `u16 css_h` `f32 dpr`. Output = CSS size × dpr, rounded down to even, capped at 8K. |
 | `0x83` | MotionAbs | `f32 x` `f32 y` in logical (CSS) pixels. |
 | `0x84` | MotionRel | `f32 dx` `f32 dy` while pointer-locked. |

@@ -20,7 +20,9 @@ GStreamer (core and base), libgbm, libEGL and libxkbcommon; `make` builds the vi
 ## Requirements
 
 - Linux with a GPU render node (`/dev/dri/renderD128`) and Mesa.
-- GStreamer 1.24+ with the VA plugin: `gst-plugin-va` on Arch (`vapostproc`, `vah264enc`).
+- GStreamer 1.24+ with the VA plugin: `gst-plugin-va` on Arch (`vapostproc`, `vah264enc`), for
+  hardware encoding; or `--software-encoding` with the vpx (good), x264 (ugly), x265 or svtav1 (bad)
+  plugins, which encodes on the CPU at up to 30 fps for machines without a usable GPU encoder.
 - `xorg-xwayland` for X11 clients, and PipeWire or PulseAudio with `pactl` for audio (both optional).
 - Rust stable and Node 24 to build. The browser needs WebCodecs (Chromium, Firefox 130+, Safari 26+).
 
@@ -199,8 +201,8 @@ viewer, and a `cargo build` without `web/dist` stops with that hint. `npm run de
 page with hot reload, proxying `/ws` and `/api` to a server started with `--no-tls --listen 127.0.0.1:8080`.
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
-`--codec auto|h264|hevc|vp9|av1` (auto prefers whatever the browser decodes in hardware, among what the
-GPU encodes: AV1, then HEVC, VP9, H.264), `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--socket-name`, `--render-node`. `--help`
+`--codec auto|h264|hevc|vp9|av1|vp8` (auto prefers whatever the browser decodes in hardware, among what
+this machine encodes: AV1, then HEVC, VP9, H.264 on the GPU; VP8 first on the CPU), `--software-encoding`, `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--socket-name`, `--render-node`. `--help`
 lists them all.
 
 Games and other clients that lock the pointer get raw mouse deltas: the page mirrors the lock with the

@@ -40,7 +40,7 @@ RUN cargo build --release --locked
 FROM archlinux:latest
 RUN pacman -Sy --noconfirm archlinux-keyring \
     && pacman -Syu --noconfirm --needed \
-        gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugin-va \
+        gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-plugin-va \
         mesa vulkan-intel vulkan-radeon libva intel-media-driver libva-mesa-driver xorg-xwayland \
         mesa-utils mesa-demos vulkan-tools \
         dbus pipewire pipewire-pulse wireplumber libpulse \

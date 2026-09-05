@@ -415,7 +415,7 @@ impl App {
     }
 
     /// Pick the codec for a browser whose `hw` mask passed the prefer-hardware probe and `sw` the plain one
-    /// (bit0 H.264, bit1 HEVC, bit2 VP9, bit3 AV1), among those the encoder side produces (best first):
+    /// (bit0 H.264, bit1 HEVC, bit2 VP9, bit3 AV1, bit4 VP8), among those the encoder side produces (best first):
     /// `--codec` if both sides can, else the first the browser decodes in hardware, else at all; none is `None`.
     fn choose_codec(&self, hw: u8, sw: u8) -> Option<Codec> {
         let bit = |c: Codec| match c {
@@ -423,6 +423,7 @@ impl App {
             Codec::Hevc => 2,
             Codec::Vp9 => 4,
             Codec::Av1 => 8,
+            Codec::Vp8 => 16,
         };
         let usable = |mask: u8| self.codecs.iter().copied().find(|&c| mask & bit(c) != 0);
         match self.policy {
