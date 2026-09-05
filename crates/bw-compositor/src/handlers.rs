@@ -20,7 +20,7 @@ use smithay::{
     input::{
         Seat, SeatHandler, SeatState,
         keyboard::{KeyboardTarget, KeysymHandle, ModifiersState},
-        pointer::{CursorImageStatus, Focus, GrabStartData, PointerHandle},
+        pointer::{CursorImageStatus, Focus, PointerHandle},
     },
     reexports::{
         calloop::Interest,
@@ -183,15 +183,17 @@ impl State {
         self.space.map_element(window.clone(), loc, false);
     }
 
-    /// The pointer grab this request belongs to, if the requesting client owns the focused surface.
-    fn grab_start(&self, seat: &Seat<State>, surface: &WlSurface, serial: Serial) -> Option<GrabStartData<State>> {
-        let pointer = seat.get_pointer()?;
-        if !pointer.has_grab(serial) {
-            return None;
+    /// The grab this request belongs to (the pointer's or a finger's), if the requesting client owns the
+    /// surface it began on.
+    fn grab_start(&self, seat: &Seat<State>, surface: &WlSurface, serial: Serial) -> Option<grabs::Start> {
+        let same = |focus: &WlSurface| focus.id().same_client_as(&surface.id());
+        if let Some(start) = seat.get_pointer().filter(|p| p.has_grab(serial)).and_then(|p| p.grab_start_data())
+            && start.focus.as_ref().is_some_and(|(f, _)| same(f))
+        {
+            return Some(grabs::Start::Pointer(start));
         }
-        let start = pointer.grab_start_data()?;
-        let (focus, _) = start.focus.as_ref()?;
-        focus.id().same_client_as(&surface.id()).then_some(start)
+        let start = seat.get_touch().filter(|t| t.has_grab(serial))?.grab_start_data()?;
+        start.focus.as_ref().is_some_and(|(f, _)| same(f)).then_some(grabs::Start::Touch(start))
     }
 
     pub(crate) fn unconstrain_popup(&self, popup: &PopupSurface) {
@@ -445,28 +447,28 @@ impl XdgShellHandler for State {
             }
             pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
         }
+        if let Some(touch) = seat.get_touch() {
+            if touch.is_grabbed() && !(touch.has_grab(serial) || touch.has_grab(grab.previous_serial().unwrap_or_else(|| grab.serial()))) {
+                grab.ungrab(PopupUngrabStrategy::All);
+                return;
+            }
+            let start_data = touch.grab_start_data().unwrap_or(smithay::input::touch::GrabStartData { focus: None, slot: Default::default(), location: Default::default() });
+            touch.set_grab(self, grabs::PopupTouchGrab { start_data, grab }, serial);
+        }
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
         let seat = Seat::from_resource(&seat).unwrap();
-        let Some(start_data) = self.grab_start(&seat, surface.wl_surface(), serial) else { return };
+        let Some(start) = self.grab_start(&seat, surface.wl_surface(), serial) else { return };
         let Some(window) = self.window_for(surface.wl_surface()) else { return };
-        let initial_location = self.space.element_location(&window).unwrap();
-        let grab = grabs::MoveGrab { start_data, window, initial_location };
-        seat.get_pointer().unwrap().set_grab(self, grab, serial, Focus::Clear);
+        self.start_move(start, window, serial);
     }
 
     fn resize_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial, edges: ResizeEdge) {
         let seat = Seat::from_resource(&seat).unwrap();
-        let Some(start_data) = self.grab_start(&seat, surface.wl_surface(), serial) else { return };
+        let Some(start) = self.grab_start(&seat, surface.wl_surface(), serial) else { return };
         let Some(window) = self.window_for(surface.wl_surface()) else { return };
-        let mut initial_rect = window.geometry();
-        initial_rect.loc = self.space.element_location(&window).unwrap();
-        grabs::ResizeState::with(surface.wl_surface(), |s| *s = grabs::ResizeState::Resizing { edges, initial_rect });
-        surface.with_pending_state(|s| s.states.set(xdg_toplevel::State::Resizing));
-        surface.send_pending_configure();
-        let grab = grabs::ResizeGrab { start_data, window, edges, initial_rect, last_size: initial_rect.size };
-        seat.get_pointer().unwrap().set_grab(self, grab, serial, Focus::Clear);
+        self.start_resize(start, &window, edges, serial);
     }
 
     fn toplevel_destroyed(&mut self, _surface: ToplevelSurface) {

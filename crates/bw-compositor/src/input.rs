@@ -12,7 +12,7 @@ use smithay::{
         touch::{DownEvent, GrabStartData as TouchStart, MotionEvent as TouchMotion, UpEvent},
     },
     reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel::{self, ResizeEdge},
+        wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::protocol::wl_surface::WlSurface,
     },
     utils::{Logical, Point, SERIAL_COUNTER, Serial},
@@ -257,49 +257,54 @@ impl State {
             pointer.button(self, &ButtonEvent { button, state: ButtonState::Released, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
         }
         pointer.frame(self);
-        let touch = self.seat.get_touch().unwrap();
-        touch.cancel(self); // fingers the browser won't lift any more
-        touch.frame(self);
+        for slot in std::mem::take(&mut self.touch_down) {
+            self.touch(TouchKind::Up, slot, Point::default()); // fingers the browser won't lift any more
+        }
     }
 
     /// A finger from the browser as a `wl_touch` point; the pointer stays where it is. A down focuses and
-    /// raises like a click; on a drawn title bar or resize band it moves or resizes the window through a
-    /// touch grab (the same as the pointer's, ended by the finger that began it), and a bar button acts at
-    /// once. Every event is its own frame: a browser delivers one touch point per event.
-    fn touch(&mut self, kind: TouchKind, slot: u32, location: Point<f64, Logical>) {
+    /// raises like a click (a panel above the windows gets the keyboard if it asked); on a drawn title bar
+    /// or resize band it moves or resizes the window through a touch grab (the same as the pointer's,
+    /// ended by the finger that began it), and a bar button acts at once. Every event is its own frame: a
+    /// browser delivers one touch point per event. (Smithay's `cancel` skips framed points, so a finger
+    /// is always lifted with `up`.)
+    fn touch(&mut self, kind: TouchKind, slot_id: u32, location: Point<f64, Logical>) {
         let touch = self.seat.get_touch().unwrap();
         let (serial, time) = (SERIAL_COUNTER.next_serial(), self.now());
-        let slot = TouchSlot::from(Some(slot));
+        let slot = TouchSlot::from(Some(slot_id));
         match kind {
             TouchKind::Down => {
+                self.touch_down.insert(slot_id);
+                let under = self.surface_under(location); // before a bar button changes what is there
                 if !touch.is_grabbed() {
                     match self.window_under(location) {
+                        _ if let Some((layer, _, _)) = self.layer_under(location, true) => {
+                            // a panel: the windows under it stay where they are; it gets the keyboard only if it asked
+                            if layer.can_receive_keyboard_focus() {
+                                self.focus_window(None, serial);
+                                self.seat.get_keyboard().unwrap().set_focus(self, Some(layer.wl_surface().clone().into()), serial);
+                            }
+                        }
                         Some(Under::Decoration(window, hit)) => {
                             self.focus_window(Some(&window), serial);
-                            let start_data = TouchStart { focus: None, slot, location };
-                            let pointer_start = GrabStartData { focus: None, button: BTN_LEFT, location };
+                            let start = crate::grabs::Start::Touch(TouchStart { focus: None, slot, location });
                             match hit {
                                 Hit::Button(b) => self.control(ControlMsg { id: window_id(&window), op: decor_op(b, &window) }),
-                                Hit::Bar if !maximized(&window) => {
-                                    let initial_location = self.space.element_location(&window).unwrap();
-                                    let grab = crate::grabs::MoveGrab { start_data: pointer_start, window, initial_location };
-                                    touch.set_grab(self, crate::grabs::TouchMoveGrab { start_data, grab }, serial);
-                                }
-                                Hit::Edge(edges) => {
-                                    let grab = self.resize_grab(&window, edges, pointer_start);
-                                    touch.set_grab(self, crate::grabs::TouchResizeGrab { start_data, grab }, serial);
-                                }
+                                Hit::Bar if !maximized(&window) => self.start_move(start, window, serial),
+                                Hit::Edge(edges) => self.start_resize(start, &window, edges, serial),
                                 _ => {}
                             }
                         }
                         _ => self.focus_at(location, serial),
                     }
                 }
-                touch.down(self, self.surface_under(location), &DownEvent { slot, location, serial, time });
+                touch.down(self, under, &DownEvent { slot, location, serial, time });
             }
-            TouchKind::Motion => touch.motion(self, self.surface_under(location), &TouchMotion { slot, location, time }),
-            TouchKind::Up => touch.up(self, &UpEvent { slot, serial, time }),
-            TouchKind::Cancel => touch.cancel(self),
+            TouchKind::Motion => touch.motion(self, None, &TouchMotion { slot, location, time }), // the focus is the down's
+            TouchKind::Up => {
+                self.touch_down.remove(&slot_id);
+                touch.up(self, &UpEvent { slot, serial, time });
+            }
         }
         touch.frame(self);
     }
@@ -428,12 +433,14 @@ impl State {
                             self.bar_click = Some((window.clone(), now));
                         }
                         if !again && !maximized(&window) {
-                            let initial_location = self.space.element_location(&window).unwrap();
                             let start_data = GrabStartData { focus: None, button, location: self.pointer_location };
-                            pointer.set_grab(self, crate::grabs::MoveGrab { start_data, window, initial_location }, serial, Focus::Clear);
+                            self.start_move(crate::grabs::Start::Pointer(start_data), window, serial);
                         }
                     }
-                    Hit::Edge(edges) if button == BTN_LEFT => self.start_resize(&window, edges, button, serial),
+                    Hit::Edge(edges) if button == BTN_LEFT => {
+                        let start_data = GrabStartData { focus: None, button, location: self.pointer_location };
+                        self.start_resize(crate::grabs::Start::Pointer(start_data), &window, edges, serial);
+                    }
                     _ => {}
                 }
             } else {
@@ -487,24 +494,6 @@ impl State {
     }
 
     /// A resize from our decoration band, like an xdg resize request but started by us.
-    fn start_resize(&mut self, window: &Window, edges: ResizeEdge, button: u32, serial: Serial) {
-        let pointer = self.seat.get_pointer().unwrap();
-        let grab = self.resize_grab(window, edges, GrabStartData { focus: None, button, location: self.pointer_location });
-        pointer.set_grab(self, grab, serial, Focus::Clear);
-    }
-
-    /// A resize from `edges` beginning now: the client is told it is being resized.
-    fn resize_grab(&mut self, window: &Window, edges: ResizeEdge, start_data: GrabStartData<State>) -> crate::grabs::ResizeGrab {
-        let mut initial_rect = window.geometry();
-        initial_rect.loc = self.space.element_location(window).unwrap();
-        if let Some(toplevel) = window.toplevel() {
-            crate::grabs::ResizeState::with(toplevel.wl_surface(), |s| *s = crate::grabs::ResizeState::Resizing { edges, initial_rect });
-            toplevel.with_pending_state(|s| s.states.set(xdg_toplevel::State::Resizing));
-            toplevel.send_pending_configure();
-        }
-        crate::grabs::ResizeGrab { start_data, window: window.clone(), edges, initial_rect, last_size: initial_rect.size }
-    }
-
     /// Raise and activate `window` (none: just deactivate everything) and give it the keyboard.
     pub fn focus_window(&mut self, window: Option<&Window>, serial: Serial) {
         self.active = window.cloned();

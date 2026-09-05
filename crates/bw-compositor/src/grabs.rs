@@ -3,10 +3,10 @@
 use std::cell::RefCell;
 
 use smithay::{
-    desktop::{Space, Window, WindowSurface},
+    desktop::{PopupGrab, PopupUngrabStrategy, Space, Window, WindowSurface},
     input::{
         pointer::{
-            AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
+            AxisFrame, ButtonEvent, Focus, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
             GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData,
             MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
         },
@@ -14,7 +14,7 @@ use smithay::{
     },
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{self, ResizeEdge},
-        wayland_server::protocol::wl_surface::WlSurface,
+        wayland_server::{Resource, protocol::wl_surface::WlSurface},
     },
     utils::{Logical, Point, Rectangle, Serial, Size},
     wayland::{compositor::with_states, seat::WaylandFocus, shell::xdg::SurfaceCachedState},
@@ -211,8 +211,9 @@ macro_rules! touch_grab {
                     self.grab.drag(data, event.location);
                 }
             }
-            fn up(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &UpEvent, _seq: Serial) {
+            fn up(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &UpEvent, seq: Serial) {
                 if event.slot == self.start_data.slot {
+                    handle.up(data, event, seq); // a client whose own request began this got the down: it gets the up
                     handle.unset_grab(self, data);
                     let $g = &self.grab;
                     $finish;
@@ -235,6 +236,96 @@ macro_rules! touch_grab {
 }
 touch_grab!(TouchMoveGrab, MoveGrab, |_g| ());
 touch_grab!(TouchResizeGrab, ResizeGrab, |g| g.finish());
+
+/// Where a move or resize begins: with the pointer's grab or a finger's.
+pub enum Start {
+    Pointer(GrabStartData<State>),
+    Touch(TouchGrabStartData<State>),
+}
+
+impl Start {
+    /// The pointer grab's view of it (a finger counts as the left button), which the grab bodies work from.
+    fn pointer(&self) -> GrabStartData<State> {
+        match self {
+            Start::Pointer(s) => s.clone(),
+            Start::Touch(s) => GrabStartData { focus: None, button: 0x110, location: s.location },
+        }
+    }
+}
+
+impl State {
+    /// Move `window` with the pointer or finger from `start`.
+    pub fn start_move(&mut self, start: Start, window: Window, serial: Serial) {
+        let initial_location = self.space.element_location(&window).unwrap();
+        let grab = MoveGrab { start_data: start.pointer(), window, initial_location };
+        match start {
+            Start::Pointer(_) => self.seat.get_pointer().unwrap().set_grab(self, grab, serial, Focus::Clear),
+            Start::Touch(start_data) => self.seat.get_touch().unwrap().set_grab(self, TouchMoveGrab { start_data, grab }, serial),
+        }
+    }
+
+    /// Resize `window` from `edges` with the pointer or finger from `start`; the client is told it is being resized.
+    pub fn start_resize(&mut self, start: Start, window: &Window, edges: ResizeEdge, serial: Serial) {
+        let mut initial_rect = window.geometry();
+        initial_rect.loc = self.space.element_location(window).unwrap();
+        if let Some(toplevel) = window.toplevel() {
+            ResizeState::with(toplevel.wl_surface(), |s| *s = ResizeState::Resizing { edges, initial_rect });
+            toplevel.with_pending_state(|s| s.states.set(xdg_toplevel::State::Resizing));
+            toplevel.send_pending_configure();
+        }
+        let grab = ResizeGrab { start_data: start.pointer(), window: window.clone(), edges, initial_rect, last_size: initial_rect.size };
+        match start {
+            Start::Pointer(_) => self.seat.get_pointer().unwrap().set_grab(self, grab, serial, Focus::Clear),
+            Start::Touch(start_data) => self.seat.get_touch().unwrap().set_grab(self, TouchResizeGrab { start_data, grab }, serial),
+        }
+    }
+}
+
+/// A popup's grab for touch, which Smithay 0.7 has for the pointer and the keyboard only: a finger down
+/// on another client's surface (or nothing) dismisses the popup and goes through; everything else goes
+/// through as it is. Over once the popup's grab is.
+pub struct PopupTouchGrab {
+    pub start_data: TouchGrabStartData<State>,
+    pub grab: PopupGrab<State>,
+}
+
+impl TouchGrab<State> for PopupTouchGrab {
+    fn down(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, focus: Option<(WlSurface, Point<f64, Logical>)>, event: &DownEvent, seq: Serial) {
+        let popup_client = self.grab.current_grab().and_then(|k| WlSurface::try_from(k).ok()).map(|s| s.id());
+        let outside = focus.as_ref().map(|(s, _)| s.id()).zip(popup_client).is_none_or(|(a, b)| !a.same_client_as(&b));
+        if self.grab.has_ended() || outside {
+            self.grab.ungrab(PopupUngrabStrategy::All);
+            handle.unset_grab(self, data);
+        }
+        handle.down(data, focus, event, seq);
+    }
+    fn motion(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, focus: Option<(WlSurface, Point<f64, Logical>)>, event: &TouchMotionEvent, seq: Serial) {
+        handle.motion(data, focus, event, seq);
+    }
+    fn up(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &UpEvent, seq: Serial) {
+        handle.up(data, event, seq);
+        if self.grab.has_ended() {
+            handle.unset_grab(self, data);
+        }
+    }
+    fn frame(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, seq: Serial) {
+        handle.frame(data, seq);
+    }
+    fn cancel(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, seq: Serial) {
+        handle.cancel(data, seq);
+        handle.unset_grab(self, data);
+    }
+    fn shape(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &ShapeEvent, seq: Serial) {
+        handle.shape(data, event, seq);
+    }
+    fn orientation(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &OrientationEvent, seq: Serial) {
+        handle.orientation(data, event, seq);
+    }
+    fn start_data(&self) -> &TouchGrabStartData<State> {
+        &self.start_data
+    }
+    fn unset(&mut self, _data: &mut State) {}
+}
 
 /// Tracks a resize so top/left resizes can re-anchor the window when the client commits its new size.
 #[derive(Default, Clone, Copy)]

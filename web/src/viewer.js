@@ -465,11 +465,15 @@ export function createViewer() {
   // left button goes down on the first movement, so a hold never clicks); two fingers scroll (finger
   // source, pixel deltas), or pinch to zoom the picture on this screen (the desktop keeps its size; any
   // session may, it acts on nothing) and, while zoomed, pan it; pinched back near 1, the zoom snaps off.
-  const TOUCH_KIND = { pointerdown: 0, pointermove: 1, pointerup: 2, pointercancel: 3 };
+  const TOUCH_KIND = { pointerdown: 0, pointermove: 1, pointerup: 2, pointercancel: 2 }; // a cancelled finger is lifted
+  const slots = new Map(); // pointerId -> the small slot number the wire carries, for the fingers down now
   function sendTouch(e) {
+    if (e.type === 'pointerdown') slots.set(e.pointerId, [...Array(256).keys()].find(n => ![...slots.values()].includes(n)));
+    const slot = slots.get(e.pointerId);
+    if (slot === undefined) return; // a finger from before the mode switch
+    if (TOUCH_KIND[e.type] === 2) slots.delete(e.pointerId);
     const p = toDesktop(e);
-    // pointer ids count up per contact; the low byte tells the fingers down at once apart
-    send(TOUCH, 10, dv => { dv.setUint8(1, TOUCH_KIND[e.type]); dv.setUint8(2, e.pointerId & 0xff); dv.setFloat32(3, p.x, true); dv.setFloat32(7, p.y, true); });
+    send(TOUCH, 10, dv => { dv.setUint8(1, TOUCH_KIND[e.type]); dv.setUint8(2, slot); dv.setFloat32(3, p.x, true); dv.setFloat32(7, p.y, true); });
   }
   const touches = new Map(); // pointerId -> { x, y } in client px, every finger down
   let touch = null; // the one-finger gesture: where it started, whether the button went down, the hold timer
@@ -767,7 +771,13 @@ export function createViewer() {
     type: text => sendText(INPUT, JSON.stringify({ type: 'text', text })),
     key: keys => sendText(INPUT, JSON.stringify({ type: 'key', keys })),
     touch: navigator.maxTouchPoints > 0,
-    setTouchMouse(on) { pref.set('touchmouse', on); store.set({ touchMouse: on }); },
+    setTouchMouse(on) {
+      // fingers down now end here, on both sides: the desktop lets go of everything, the page forgets them
+      send(BLUR, 0);
+      slots.clear(); touches.clear(); pinch = null;
+      if (touch) { clearTimeout(touch.timer); touch = null; }
+      pref.set('touchmouse', on); store.set({ touchMouse: on });
+    },
     takeControl: () => send(TAKE_CONTROL, 0),
     setChoice,
     uploadFiles,

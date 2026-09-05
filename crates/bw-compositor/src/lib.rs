@@ -219,6 +219,8 @@ pub struct State {
     /// The browser's drag (`State::drag`, `ServerDndGrabHandler`): whether one is under way, the URI list
     /// once it is known, what the target under the pointer accepts and which action it chose, the deadline
     /// for letting go once the list is there, and whether the drop was taken.
+    /// The browser's fingers down (`State::touch`), by slot; `release_all` lifts them.
+    pub touch_down: std::collections::HashSet<u32>,
     pub drag_active: bool,
     pub drag_data: Option<Arc<Vec<u8>>>,
     pub drag_accepted: bool,
@@ -314,6 +316,7 @@ impl State {
             frame_interval: Duration::from_nanos(1_000_000_000_000 / cfg.initial.refresh_mhz as u64),
             last_render: Instant::now(),
             refine_due: None,
+            touch_down: Default::default(),
             drag_active: false,
             drag_data: None,
             drag_accepted: false,

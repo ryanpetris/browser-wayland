@@ -5,7 +5,6 @@ use std::{os::fd::OwnedFd, process::Stdio};
 use smithay::{
     delegate_xwayland_shell,
     desktop::Window,
-    input::pointer::Focus,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Logical, Rectangle},
     wayland::{
@@ -192,10 +191,7 @@ impl XwmHandler for State {
     }
 
     fn resize_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32, edges: ResizeEdge) {
-        let pointer = self.seat.get_pointer().unwrap();
-        let (Some(start_data), Some(win)) = (self.x11_grab_start(&window), self.window_for_x11(&window)) else { return };
-        let mut initial_rect = win.geometry();
-        initial_rect.loc = self.space.element_location(&win).unwrap();
+        let (Some(start), Some(win)) = (self.x11_grab_start(&window), self.window_for_x11(&window)) else { return };
         let edges = match edges {
             ResizeEdge::Top => xdg_toplevel::ResizeEdge::Top,
             ResizeEdge::Bottom => xdg_toplevel::ResizeEdge::Bottom,
@@ -206,8 +202,7 @@ impl XwmHandler for State {
             ResizeEdge::TopRight => xdg_toplevel::ResizeEdge::TopRight,
             ResizeEdge::BottomRight => xdg_toplevel::ResizeEdge::BottomRight,
         };
-        let grab = grabs::ResizeGrab { start_data, window: win, edges, initial_rect, last_size: initial_rect.size };
-        pointer.set_grab(self, grab, smithay::utils::SERIAL_COUNTER.next_serial(), Focus::Clear);
+        self.start_resize(start, &win, edges, smithay::utils::SERIAL_COUNTER.next_serial());
     }
 
     // --- clipboard / primary selection, X11 side ---
@@ -267,22 +262,26 @@ impl XwmHandler for State {
     }
 
     fn move_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32) {
-        let pointer = self.seat.get_pointer().unwrap();
-        let (Some(start_data), Some(win)) = (self.x11_grab_start(&window), self.window_for_x11(&window)) else { return };
-        let initial_location = self.space.element_location(&win).unwrap();
-        let grab = grabs::MoveGrab { start_data, window: win, initial_location };
-        pointer.set_grab(self, grab, smithay::utils::SERIAL_COUNTER.next_serial(), Focus::Clear);
+        let (Some(start), Some(win)) = (self.x11_grab_start(&window), self.window_for_x11(&window)) else { return };
+        self.start_move(start, win, smithay::utils::SERIAL_COUNTER.next_serial());
     }
 }
 
 impl State {
-    /// The pointer grab a move/resize request may take over: a left press on that very window.
-    fn x11_grab_start(&self, window: &X11Surface) -> Option<smithay::input::pointer::GrabStartData<State>> {
+    /// The grab a move/resize request may take over: a left press, or a finger, on that very window.
+    fn x11_grab_start(&self, window: &X11Surface) -> Option<grabs::Start> {
         if window.is_override_redirect() || window.is_maximized() || window.is_fullscreen() {
             return None;
         }
-        let start = self.seat.get_pointer()?.grab_start_data()?;
-        (start.button == 0x110 && start.focus.as_ref().map(|(s, _)| s.clone()) == window.wl_surface()).then_some(start)
+        let on_window = |focus: &Option<(smithay::reexports::wayland_server::protocol::wl_surface::WlSurface, _)>| focus.as_ref().map(|(s, _)| s.clone()) == window.wl_surface();
+        if let Some(start) = self.seat.get_pointer()?.grab_start_data()
+            && start.button == 0x110
+            && on_window(&start.focus)
+        {
+            return Some(grabs::Start::Pointer(start));
+        }
+        let start = self.seat.get_touch()?.grab_start_data()?;
+        on_window(&start.focus).then_some(grabs::Start::Touch(start))
     }
 
     pub(crate) fn fill_x11(&mut self, window: X11Surface, set: impl Fn(&X11Surface) -> Result<(), smithay::reexports::x11rb::rust_connection::ConnectionError>) {

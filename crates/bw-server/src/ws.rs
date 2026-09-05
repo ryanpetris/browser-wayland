@@ -417,7 +417,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                             app.spawn_notification_action(n);
                             None
                         }
-
+                        Some(ClientMsg::Touch { .. }) => None, // tab coordinates aren't the desktop's; the page sends fingers as a pointer here
                         Some(m) => input_command(m),
                         None => None,
                     };
@@ -598,7 +598,7 @@ impl App {
             m if controls => input_command(m),
             _ => None,
         };
-        drop(v);
+        // sent under the lock: a handover's ReleaseAllInput then follows everything the old controller got in
         if let Some(cmd) = cmd {
             let _ = self.commands.send(cmd);
         }
@@ -659,8 +659,7 @@ fn input_command(m: ClientMsg) -> Option<Command> {
             let kind = match kind {
                 0 => TouchKind::Down,
                 1 => TouchKind::Motion,
-                2 => TouchKind::Up,
-                _ => TouchKind::Cancel,
+                _ => TouchKind::Up,
             };
             Command::Touch { kind, slot: id as u32, x: x as f64, y: y as f64 }
         }

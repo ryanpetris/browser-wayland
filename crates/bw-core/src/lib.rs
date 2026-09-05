@@ -264,9 +264,8 @@ pub enum Event {
 pub enum TouchKind {
     Down,
     Motion,
+    /// Lifted, or taken by the browser for a gesture of its own: the same to the application.
     Up,
-    /// The browser took the touch for itself (a gesture of its own); the application forgets the points.
-    Cancel,
 }
 
 /// A drag from the browser, carried by the compositor as its own drag-and-drop offering `text/uri-list`.

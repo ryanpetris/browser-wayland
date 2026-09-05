@@ -58,9 +58,9 @@ pub const DRAG: u8 = 0x90;
 /// `{"type": "key", "keys": …}`, …), resolved on the compositor thread; the on-screen keyboard types with
 /// it, in order with the rest of the session's input. Controlling session only.
 pub const INPUT: u8 = 0x91;
-/// `[TOUCH][u8 kind: 0 down, 1 motion, 2 up, 3 cancel][u8 id][f32 x][f32 y]`: a finger on the browser's
-/// touchscreen, passed on as a `wl_touch` point (`id` tells fingers apart; x, y in logical px). Controlling
-/// session only.
+/// `[TOUCH][u8 kind: 0 down, 1 motion, 2 up][u8 id][f32 x][f32 y]`: a finger on the browser's touchscreen,
+/// passed on as a `wl_touch` point (`id` tells the fingers down at once apart; x, y in logical px).
+/// Controlling session only.
 pub const TOUCH: u8 = 0x92;
 
 /// What a session may do, as sent in `ROLE`.
@@ -305,6 +305,7 @@ mod tests {
         assert_eq!(decode(&[0x87, 0x1e, 0x00, 0x00]), Some(ClientMsg::Key { evdev: 0x1e, pressed: false }));
         assert_eq!(decode(&[0x86, 0x01, 0, 0, 0, 0, 0, 0, 0x40, 0x40]), Some(ClientMsg::Axis { mode: 1, dx: 0.0, dy: 3.0 }));
         assert_eq!(decode(&[0x89]), Some(ClientMsg::Blur));
+        assert_eq!(decode(&[0x92, 0, 3, 0, 0, 0x80, 0x3f, 0, 0, 0, 0x40]), Some(ClientMsg::Touch { kind: 0, id: 3, x: 1.0, y: 2.0 }));
         assert_eq!(decode(&[0x8D]), Some(ClientMsg::TakeControl));
         assert_eq!(role(Role::Controller).as_ref(), &[0x08, 2]);
         let control = |json: &str| decode(&[&[CONTROL][..], json.as_bytes()].concat());
