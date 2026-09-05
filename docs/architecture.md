@@ -84,7 +84,8 @@ Each slot's `Dmabuf` is bound directly (the renderer caches FBOs by dmabuf ident
 **Frame loop.** A calloop timer at the output refresh, plus on-demand rendering right after input or
 commits once a frame period has passed. `render_frame` renders only if something is dirty; if the
 damage tracker reports no damage, or no viewer is connected, nothing is encoded; otherwise the frame
-goes to every viewer's encoder, each holding a share of the slot's lease. After rendering the
+goes to every viewer's encoder, each holding a share of the slot's lease (carried by copies that still
+hold the dmabuf, not by the converted frames the VPP or the CPU make of it, which the encoders keep). After rendering the
 GPU is waited on (`SyncPoint::wait`) before any early return, because the next commit releases client
 buffers. The rendered slot leaves as a `DmabufFrame` whose lease (the `Slot`) is attached to the
 `gst::Buffer` as a custom meta; the slot is free again when GStreamer drops the buffer.
@@ -155,7 +156,10 @@ appsrc (memory:DMABuf, DMA_DRM caps) ! vapostproc ! video/x-raw(memory:VAMemory)
 ```
 
 with low-latency encoder settings (constant bitrate from `--bitrate`, no B-frames, one reference);
-`vapostproc` scales the shared frame to the viewer's size on the GPU. Frames are sent to each viewer in
+`vapostproc` scales the shared frame to the viewer's size on the GPU. With `--software-encoding` the
+compositor renders into linear dmabufs instead, the pipeline maps them as plain raw video
+(`videoconvertscale` on the CPU) and encodes with vp8enc, x264enc (or openh264enc), vp9enc, x265enc or
+svtav1enc, whichever are installed, at most 30 frames a second; the two modes never mix. Frames are sent to each viewer in
 order; while a socket is busy, `appsrc` drops raw frames before the encoder, so no delta ever refers to
 a frame the viewer missed. A decoder error on the page asks for a keyframe (`UpstreamForceKeyUnitEvent`)
 plus `Command::RequestFullFrame`, since without damage no frame would be produced. Codec choice comes

@@ -94,7 +94,10 @@ impl State {
 
     fn render_frame(&mut self) -> Result<()> {
         // No free slot means the encoder still holds every buffer: skip this tick, stay dirty.
-        let Some(slot) = self.gpu.swapchain.acquire()? else { return Ok(()) };
+        let Some(slot) = self.gpu.swapchain.acquire()? else {
+            tracing::debug!("no free swapchain slot: every frame is still with an encoder");
+            return Ok(());
+        };
         let age = if self.force_full_frame { 0 } else { slot.age() as usize };
 
         let mut dmabuf = (*slot).clone();

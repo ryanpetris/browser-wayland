@@ -5,6 +5,7 @@ use std::{any::Any, ptr, sync::{Arc, OnceLock}};
 
 use gstreamer as gst;
 use gstreamer::glib;
+use gstreamer_allocators as gst_allocators;
 
 type Lease = Arc<dyn Any + Send + Sync>;
 
@@ -23,7 +24,10 @@ unsafe extern "C" fn free(meta: *mut gst::ffi::GstMeta, _: *mut gst::ffi::GstBuf
     unsafe { ptr::drop_in_place(&mut (*meta.cast::<LeaseMeta>()).lease) };
 }
 
-/// Buffer copies share the lease, so a copy keeps the slot busy too.
+/// A buffer copy that still holds the dmabuf shares the lease, so the slot stays busy while anything
+/// may read it. A converted frame (the VPP's NV12 surface, the CPU's I420 copy) doesn't reference the
+/// dmabuf any more: with the lease it would hold the swapchain for as long as the encoder keeps it,
+/// which the VP9 and AV1 encoders do for several frames, and the compositor would starve.
 unsafe extern "C" fn transform(
     dest: *mut gst::ffi::GstBuffer,
     meta: *mut gst::ffi::GstMeta,
@@ -32,6 +36,11 @@ unsafe extern "C" fn transform(
     _data: glib::ffi::gpointer,
 ) -> glib::ffi::gboolean {
     unsafe {
+        let n = gst::ffi::gst_buffer_n_memory(dest);
+        let dmabuf = (0..n).any(|i| gst_allocators::ffi::gst_is_dmabuf_memory(gst::ffi::gst_buffer_peek_memory(dest, i)) != glib::ffi::GFALSE);
+        if !dmabuf {
+            return glib::ffi::GTRUE;
+        }
         let copy = gst::ffi::gst_buffer_add_meta(dest, info(), ptr::null_mut()).cast::<LeaseMeta>();
         if copy.is_null() {
             return glib::ffi::GFALSE;
