@@ -1,20 +1,21 @@
-//! One window as its own video stream: rendered from its buffers (popups included) into a private
-//! dmabuf swapchain and handed to its own encoder, at the output's scale, only when it changed.
+//! One window as its own video stream: rendered from its buffers (popups included) into targets of its
+//! own (a dmabuf swapchain, or a texture read back without a GPU) and handed to its own encoder, at the
+//! output's scale, only when it changed.
 
 use std::{os::fd::AsFd, time::{Duration, Instant}};
 
 use anyhow::{Context, Result};
-use bw_core::{DmabufFrame, FrameSink, OutputGeometry};
+use bw_core::{Frame, FrameBuffer, FrameSink, OutputGeometry};
 use smithay::{
     backend::{
         allocator::Buffer as _,
-        renderer::{Bind, damage::OutputDamageTracker, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
+        renderer::{damage::OutputDamageTracker, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
     },
     desktop::Window,
     utils::{Physical, Point, Scale, Size, Transform},
 };
 
-use crate::{State, gpu::DmabufSwapchain, render::{CLEAR, SlotId}};
+use crate::{State, gpu::{Target, Targets, read_pixels}, render::{CLEAR, SlotId}};
 
 /// An interactive resize commits a new size every frame; the encoder is rebuilt once it stops.
 const SETTLE: Duration = Duration::from_millis(150);
@@ -22,7 +23,7 @@ const SETTLE: Duration = Duration::from_millis(150);
 pub struct WindowStream {
     pub key: u64,
     pub window: Window,
-    swapchain: DmabufSwapchain,
+    targets: Targets,
     tracker: OutputDamageTracker,
     sink: Box<dyn FrameSink>,
     size: Size<i32, Physical>,
@@ -39,10 +40,10 @@ pub struct WindowStream {
 impl State {
     pub fn start_window_stream(&mut self, key: u64, id: u64, sink: Box<dyn FrameSink>) {
         let Some(window) = self.window_by_id(id) else { return }; // the session ends on its own: nothing ever arrives
-        let swapchain = self.gpu.swapchain(2, 2); // resized to the window before the first frame
+        let targets = self.gpu.targets(2, 2); // resized to the window before the first frame
         let tracker = OutputDamageTracker::new((2, 2), 1.0, Transform::Normal);
         let modifier = u64::from(self.gpu.modifier);
-        self.window_streams.push(WindowStream { key, window, swapchain, tracker, sink, size: Size::default(), scale: 0.0, settling: None, modifier, pending: true, seq: 0 });
+        self.window_streams.push(WindowStream { key, window, targets, tracker, sink, size: Size::default(), scale: 0.0, settling: None, modifier, pending: true, seq: 0 });
         self.dirty = true;
     }
 
@@ -96,7 +97,7 @@ impl State {
             }
             s.settling = None;
             if size != s.size {
-                s.swapchain.resize(size.w as u32, size.h as u32);
+                s.targets.resize(size.w as u32, size.h as u32);
             }
             s.size = size;
             s.scale = scale;
@@ -104,51 +105,48 @@ impl State {
             let (geo, fourcc, modifier) = geometry(s.modifier);
             s.sink.output_changed(geo, fourcc, modifier);
         }
-        let Some(slot) = s.swapchain.acquire()? else {
+        let Some((mut target, age)) = s.targets.acquire(&mut gpu.renderer, gpu.fourcc)? else {
             s.pending = true; // the encoder holds every buffer: next tick
             return Ok(());
         };
-        let age = if force || s.pending { 0 } else { slot.age() as usize };
-        let mut dmabuf = (*slot).clone();
-        let modifier = u64::from(dmabuf.format().modifier);
-        if modifier != s.modifier {
+        let age = if force || s.pending { 0 } else { age };
+        if let Target::Slot { dmabuf, .. } = &target
+            && u64::from(dmabuf.format().modifier) != s.modifier
+        {
             // GBM gave another layout than asked (see render.rs); the encoder must import it as it is
-            s.modifier = modifier;
-            let (geo, fourcc, modifier) = geometry(modifier);
+            s.modifier = u64::from(dmabuf.format().modifier);
+            let (geo, fourcc, modifier) = geometry(s.modifier);
             s.sink.output_changed(geo, fourcc, modifier);
         }
         // the geometry's corner at the origin, as for snapshots
         let loc = Point::from((-geo.loc.x, -geo.loc.y)).to_f64().to_physical(scale).to_i32_round();
         let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = s.window.render_elements(&mut gpu.renderer, loc, Scale::from(scale), 1.0);
-        let (sync, damaged) = {
-            let mut fb = gpu.renderer.bind(&mut dmabuf)?;
+        let texture = matches!(target, Target::Texture);
+        let (sync, damaged, pixels) = {
+            let mut fb = s.targets.bind(&mut gpu.renderer, &mut target)?;
             let res = s.tracker.render_output(&mut gpu.renderer, &mut fb, age, &elements, CLEAR)?;
-            (res.sync, res.damage.is_some())
+            let pixels = if texture && res.damage.is_some() { Some(read_pixels(&mut gpu.renderer, &fb, (size.w, size.h).into(), gpu.fourcc)?) } else { None };
+            (res.sync, res.damage.is_some(), pixels)
         };
         while sync.wait().is_err() {}
         if !damaged {
             s.pending = false;
             return Ok(());
         }
-        s.swapchain.submitted(&slot);
-        slot.userdata().insert_if_missing_threadsafe(|| SlotId(s.seq as u32));
-        let slot_id = slot.userdata().get::<SlotId>().unwrap().0;
         s.seq += 1;
-        let fd = dmabuf.handles().next().context("dmabuf has no plane")?.as_fd().try_clone_to_owned().context("dup dmabuf fd")?;
-        let submitted = s.sink.submit(DmabufFrame {
-            fd,
-            width: size.w as u32,
-            height: size.h as u32,
-            fourcc,
-            modifier,
-            stride: dmabuf.strides().next().unwrap(),
-            offset: dmabuf.offsets().next().unwrap(),
-            slot_id,
-            pts: now.into(),
-            seq: s.seq,
-            refine: false,
-            lease: Box::new(slot),
-        });
+        let buffer = match target {
+            Target::Slot { slot, dmabuf } => {
+                if let Targets::Dmabuf(sc) = &mut s.targets {
+                    sc.submitted(&slot);
+                }
+                slot.userdata().insert_if_missing_threadsafe(|| SlotId(s.seq as u32));
+                let slot_id = slot.userdata().get::<SlotId>().unwrap().0;
+                let fd = dmabuf.handles().next().context("dmabuf has no plane")?.as_fd().try_clone_to_owned().context("dup dmabuf fd")?;
+                FrameBuffer::Dmabuf { fd, modifier: s.modifier, stride: dmabuf.strides().next().unwrap(), offset: dmabuf.offsets().next().unwrap(), slot_id, lease: Box::new(slot) }
+            }
+            Target::Texture => FrameBuffer::Memory { data: pixels.unwrap_or_default(), stride: size.w as u32 * 4 },
+        };
+        let submitted = s.sink.submit(Frame { width: size.w as u32, height: size.h as u32, fourcc, pts: now.into(), seq: s.seq, refine: false, buffer });
         s.pending = !matches!(submitted, Ok(bw_core::Submit::Encoded)); // the tracker advanced: a retry redraws everything
         submitted.map(|_| ()).map_err(|e| anyhow::anyhow!("{e}"))
     }

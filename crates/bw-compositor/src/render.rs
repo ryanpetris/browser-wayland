@@ -1,7 +1,7 @@
 use std::{os::fd::AsFd, sync::Arc, time::{Duration, Instant}};
 
 use anyhow::{Context, Result};
-use bw_core::{DmabufFrame, Submit};
+use bw_core::{Frame, FrameBuffer, Submit};
 
 /// How long after the last change the refine frame follows.
 const REFINE_AFTER: Duration = Duration::from_millis(150);
@@ -12,7 +12,7 @@ use smithay::{
     desktop::Window,
     utils::{Logical, Point},
     backend::allocator::Buffer as _,
-    backend::renderer::{Bind, ImportAll, ImportMem, utils::with_renderer_surface_state, element::{AsRenderElements, Id, memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
+    backend::renderer::{ImportAll, ImportMem, utils::with_renderer_surface_state, element::{AsRenderElements, Id, memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
     desktop::{
         WindowSurface, layer_map_for_output,
         utils::{OutputPresentationFeedback, send_frames_surface_tree},
@@ -24,7 +24,7 @@ use smithay::{
     input::pointer::CursorImageStatus,
 };
 
-use crate::State;
+use crate::{State, gpu::{Gpu, Target, Targets, read_pixels}};
 
 pub const CLEAR: [f32; 4] = [0.12, 0.12, 0.14, 1.0];
 
@@ -104,14 +104,13 @@ impl State {
 
     fn render_frame(&mut self, refine: bool) -> Result<()> {
         // No free slot means the encoder still holds every buffer: skip this tick, stay dirty.
-        let Some(slot) = self.gpu.swapchain.acquire()? else {
+        let Some((mut target, age)) = self.gpu.targets.acquire(&mut self.gpu.renderer, self.gpu.fourcc)? else {
             tracing::debug!("no free swapchain slot: every frame is still with an encoder");
             return Ok(());
         };
-        let age = if self.force_full_frame { 0 } else { slot.age() as usize };
+        let age = if self.force_full_frame { 0 } else { age };
 
-        let mut dmabuf = (*slot).clone();
-        if !self.gpu.modifier_verified {
+        if let (false, Target::Slot { dmabuf, .. }) = (self.gpu.modifier_verified, &target) {
             // The allocator was asked for exactly the negotiated modifier, but GBM can fall back to another
             // (or an implicit one); the encoder would then copy every frame through system memory, silently.
             self.gpu.modifier_verified = true;
@@ -130,10 +129,15 @@ impl State {
         }
         // The pointer is drawn by the browser, so there are no custom elements.
         let elements = self.output_elements(self.geometry.scale);
-        let (sync, damaged, states) = {
-            let mut fb = self.gpu.renderer.bind(&mut dmabuf)?;
-            let res = self.damage_tracker.render_output(&mut self.gpu.renderer, &mut fb, age, &elements, CLEAR)?;
-            (res.sync, res.damage.is_some(), res.states)
+        let size = (self.geometry.width_px as i32, self.geometry.height_px as i32).into();
+        let texture = matches!(target, Target::Texture);
+        let (sync, damaged, states, pixels) = {
+            let Gpu { renderer, targets, fourcc, .. } = &mut self.gpu;
+            let mut fb = targets.bind(renderer, &mut target)?;
+            let res = self.damage_tracker.render_output(renderer, &mut fb, age, &elements, CLEAR)?;
+            // no GPU: the pixels come back through the CPU now, while the framebuffer is bound
+            let pixels = if texture && res.damage.is_some() && !self.viewer_sinks.is_empty() { Some(read_pixels(renderer, &fb, size, *fourcc)?) } else { None };
+            (res.sync, res.damage.is_some(), res.states, pixels)
         };
         self.last_render = Instant::now();
 
@@ -152,11 +156,15 @@ impl State {
         }
         for window in self.space.elements() {
             window.send_frame(&self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
-            window.send_dmabuf_feedback(&self.output, |_, _| Some(self.output.clone()), |_, _| &self.dmabuf_feedback);
+            if let Some(feedback) = &self.dmabuf_feedback {
+                window.send_dmabuf_feedback(&self.output, |_, _| Some(self.output.clone()), |_, _| feedback);
+            }
         }
         for layer in layer_map_for_output(&self.output).layers() {
             layer.send_frame(&self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
-            layer.send_dmabuf_feedback(&self.output, |_, _| Some(self.output.clone()), |_, _| &self.dmabuf_feedback);
+            if let Some(feedback) = &self.dmabuf_feedback {
+                layer.send_dmabuf_feedback(&self.output, |_, _| Some(self.output.clone()), |_, _| feedback);
+            }
         }
         if let CursorImageStatus::Surface(s) = &self.cursor_status {
             send_frames_surface_tree(s, &self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
@@ -172,34 +180,33 @@ impl State {
             return Ok(()); // nothing new to show (or nobody watching): don't encode
         }
 
-        self.gpu.swapchain.submitted(&slot);
-        slot.userdata().insert_if_missing_threadsafe(|| SlotId(self.frame_seq as u32));
-        let slot_id = slot.userdata().get::<SlotId>().unwrap().0;
         self.frame_seq += 1;
-
-        // one frame, every viewer's encoder: each gets its own dup of the fd and a share of the lease,
-        // so the slot is free again when the last of them is done with it
-        let lease = Arc::new(slot);
+        // one frame, every viewer's encoder: a dmabuf goes to each with its own dup of the fd and a share
+        // of the lease, so the slot is free again when the last of them is done with it; memory is copied
+        let buffer: Box<dyn Fn() -> Result<FrameBuffer>> = match target {
+            Target::Slot { slot, dmabuf } => {
+                if let Targets::Dmabuf(s) = &mut self.gpu.targets {
+                    s.submitted(&slot);
+                }
+                slot.userdata().insert_if_missing_threadsafe(|| SlotId(self.frame_seq as u32));
+                let slot_id = slot.userdata().get::<SlotId>().unwrap().0;
+                let (lease, modifier) = (Arc::new(slot), u64::from(self.gpu.modifier));
+                Box::new(move || {
+                    let fd = dmabuf.handles().next().context("dmabuf has no plane")?.as_fd().try_clone_to_owned().context("dup dmabuf fd")?;
+                    Ok(FrameBuffer::Dmabuf { fd, modifier, stride: dmabuf.strides().next().unwrap(), offset: dmabuf.offsets().next().unwrap(), slot_id, lease: Box::new(lease.clone()) })
+                })
+            }
+            Target::Texture => {
+                let (data, stride) = (pixels.unwrap_or_default(), self.geometry.width_px * 4);
+                Box::new(move || Ok(FrameBuffer::Memory { data: data.clone(), stride }))
+            }
+        };
         let now = self.clock.now(); // after the GPU wait: when the frame really left
         let (mut encoded, mut failed) = (0, false);
         for (key, sink) in &mut self.viewer_sinks {
-            let fd = dmabuf.handles().next().context("dmabuf has no plane").and_then(|fd| fd.as_fd().try_clone_to_owned().context("dup dmabuf fd"));
-            let submitted = fd.and_then(|fd| {
-                sink.submit(DmabufFrame {
-                    fd,
-                    width: self.geometry.width_px,
-                    height: self.geometry.height_px,
-                    fourcc: self.gpu.fourcc as u32,
-                    modifier: u64::from(self.gpu.modifier),
-                    stride: dmabuf.strides().next().unwrap(),
-                    offset: dmabuf.offsets().next().unwrap(),
-                    slot_id,
-                    pts: now.into(),
-                    seq: self.frame_seq,
-                    refine,
-                    lease: Box::new(lease.clone()),
-                })
-                .map_err(|e| anyhow::anyhow!("{e}"))
+            let submitted = buffer().and_then(|buffer| {
+                sink.submit(Frame { width: self.geometry.width_px, height: self.geometry.height_px, fourcc: self.gpu.fourcc as u32, pts: now.into(), seq: self.frame_seq, refine, buffer })
+                    .map_err(|e| anyhow::anyhow!("{e}"))
             });
             match submitted {
                 Ok(Submit::Encoded) => encoded += 1,

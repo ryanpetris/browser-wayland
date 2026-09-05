@@ -726,7 +726,9 @@ impl DmabufHandler for State {
     }
     fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
         if self.gpu.renderer.import_dmabuf(&dmabuf, None).is_ok() {
-            dmabuf.set_node(self.gpu.node);
+            if let Some(device) = &self.gpu.device {
+                dmabuf.set_node(device.node);
+            }
             let _ = notifier.successful::<State>();
         } else {
             notifier.failed();

@@ -14,7 +14,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use bw_core::{Bytes, Codec, DmabufFrame, EncodedFrame, FrameSink, OutputGeometry, Quality, SinkError, StreamControl, StreamInfo, StreamMsg, Submit};
+use bw_core::{Bytes, Codec, EncodedFrame, Frame, FrameBuffer, FrameSink, OutputGeometry, Quality, SinkError, StreamControl, StreamInfo, StreamMsg, Submit};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_allocators as gst_allocators;
@@ -534,7 +534,7 @@ impl FrameSink for GstSink {
         discard(old);
     }
 
-    fn submit(&mut self, frame: DmabufFrame) -> Result<Submit, SinkError> {
+    fn submit(&mut self, frame: Frame) -> Result<Submit, SinkError> {
         let mut i = self.0.lock().unwrap();
         if i.stream.as_ref().is_some_and(|(s, _)| s.dead.load(Ordering::Relaxed)) {
             let old = i.take_stream();
@@ -598,7 +598,7 @@ impl Inner {
         Ok(())
     }
 
-    fn push(&mut self, frame: DmabufFrame) -> Result<Submit> {
+    fn push(&mut self, frame: Frame) -> Result<Submit> {
         if self.stream.is_none() {
             self.start()?;
             self.restore_kbps = None;
@@ -621,29 +621,38 @@ impl Inner {
             set_bitrate(&enc, self.quality.bitrate_kbps.saturating_mul(4).min(60_000));
             self.restore_kbps = Some(self.quality.bitrate_kbps);
         }
-        let mem = match self.mems.get(&frame.slot_id) {
-            Some(m) => m.clone(), // frame.fd (a dup) is closed on drop; GStreamer already holds one
-            None => {
-                let size = dmabuf_size(&frame.fd)?;
-                // Safety: the fd is a dmabuf and GStreamer takes ownership of it.
-                // the CPU maps a software frame every time: keep the mapping instead of faulting it in again
-                let flags = if self.software { gst_allocators::FdMemoryFlags::KEEP_MAPPED } else { gst_allocators::FdMemoryFlags::NONE };
-                let m = unsafe { self.alloc.alloc_dmabuf_with_flags(std::os::fd::IntoRawFd::into_raw_fd(frame.fd), size, flags) }?;
-                if self.mems.len() >= 8 {
-                    self.mems.clear(); // slots get replaced now and then; in-flight buffers hold their own refs
-                }
-                self.mems.insert(frame.slot_id, m.clone());
-                m
+        let format = gst_video::dma_drm_fourcc_to_format(frame.fourcc).context("unmappable fourcc")?;
+        let buffer = match frame.buffer {
+            FrameBuffer::Dmabuf { fd, stride, offset, slot_id, lease, .. } => {
+                let mem = match self.mems.get(&slot_id) {
+                    Some(m) => m.clone(), // fd (a dup) is closed on drop; GStreamer already holds one
+                    None => {
+                        let size = dmabuf_size(&fd)?;
+                        // Safety: the fd is a dmabuf and GStreamer takes ownership of it.
+                        // the CPU maps a software frame every time: keep the mapping instead of faulting it in again
+                        let flags = if self.software { gst_allocators::FdMemoryFlags::KEEP_MAPPED } else { gst_allocators::FdMemoryFlags::NONE };
+                        let m = unsafe { self.alloc.alloc_dmabuf_with_flags(std::os::fd::IntoRawFd::into_raw_fd(fd), size, flags) }?;
+                        if self.mems.len() >= 8 {
+                            self.mems.clear(); // slots get replaced now and then; in-flight buffers hold their own refs
+                        }
+                        self.mems.insert(slot_id, m.clone());
+                        m
+                    }
+                };
+                let mut buffer = gst::Buffer::new();
+                let b = buffer.get_mut().unwrap();
+                b.append_memory(mem);
+                gst_video::VideoMeta::add_full(b, gst_video::VideoFrameFlags::empty(), format, frame.width, frame.height, &[offset as usize], &[stride as i32])?;
+                lease::attach(b, lease);
+                buffer
+            }
+            // read back by a software renderer: the pixels themselves, for the (software) pipeline's plain raw caps
+            FrameBuffer::Memory { data, stride } => {
+                let mut buffer = gst::Buffer::from_mut_slice(data);
+                gst_video::VideoMeta::add_full(buffer.get_mut().unwrap(), gst_video::VideoFrameFlags::empty(), format, frame.width, frame.height, &[0], &[stride as i32])?;
+                buffer
             }
         };
-        let format = gst_video::dma_drm_fourcc_to_format(frame.fourcc).context("unmappable fourcc")?;
-        let mut buffer = gst::Buffer::new();
-        {
-            let b = buffer.get_mut().unwrap();
-            b.append_memory(mem);
-            gst_video::VideoMeta::add_full(b, gst_video::VideoFrameFlags::empty(), format, frame.width, frame.height, &[frame.offset as usize], &[frame.stride as i32])?;
-            lease::attach(b, frame.lease);
-        }
         let (_, appsrc) = self.stream.as_ref().unwrap();
         appsrc.push_buffer(buffer)?; // leaky appsrc drops on its own; the lease then frees the slot
         Ok(Submit::Encoded)

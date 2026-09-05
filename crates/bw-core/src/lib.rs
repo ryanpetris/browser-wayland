@@ -295,24 +295,34 @@ pub struct CursorImage {
 }
 
 /// One composited frame, handed from the compositor to the encoder.
-pub struct DmabufFrame {
-    /// A dup the sink owns.
-    pub fd: OwnedFd,
+pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub fourcc: u32,
-    pub modifier: u64,
-    pub stride: u32,
-    pub offset: u32,
-    /// Stable per swapchain slot; the sink caches its import per slot.
-    pub slot_id: u32,
     pub pts: Duration,
     pub seq: u64,
     /// The picture didn't change since the last frame: this one is for the encoder to spend bits on
     /// what the motion before left rough (sent once, a moment after the last change).
     pub refine: bool,
-    /// Whatever keeps the buffer alive; dropping it frees the slot.
-    pub lease: Box<dyn Any + Send + Sync>,
+    pub buffer: FrameBuffer,
+}
+
+/// Where a frame's pixels are.
+pub enum FrameBuffer {
+    /// A GPU buffer the encoder imports without a copy.
+    Dmabuf {
+        /// A dup the sink owns.
+        fd: OwnedFd,
+        modifier: u64,
+        stride: u32,
+        offset: u32,
+        /// Stable per swapchain slot; the sink caches its import per slot.
+        slot_id: u32,
+        /// Whatever keeps the buffer alive; dropping it frees the slot.
+        lease: Box<dyn Any + Send + Sync>,
+    },
+    /// Pixels read back from a software renderer: linear, rows of `stride` bytes, the top row first.
+    Memory { data: Vec<u8>, stride: u32 },
 }
 
 /// What one viewer's encoder aims for.
@@ -357,7 +367,7 @@ pub type SinkError = Box<dyn std::error::Error + Send + Sync>;
 
 pub trait FrameSink: Send {
     /// Must not block. `Err` means the frame was not handed to the encoder and something is wrong.
-    fn submit(&mut self, frame: DmabufFrame) -> Result<Submit, SinkError>;
+    fn submit(&mut self, frame: Frame) -> Result<Submit, SinkError>;
     fn output_changed(&mut self, geo: OutputGeometry, fourcc: u32, modifier: u64);
 }
 

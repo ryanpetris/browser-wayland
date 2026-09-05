@@ -33,6 +33,8 @@ struct Cli {
     /// `--exec 'dbus-run-session -- gnome-shell --devkit'`.
     #[arg(long)]
     kiosk: bool,
+    /// The GPU's render node. `none`, or a node that isn't there, renders with Mesa's llvmpipe (no GPU at
+    /// all: a VPS, a container without devices) and encodes in software.
     #[arg(long, default_value = "/dev/dri/renderD128")]
     render_node: PathBuf,
     #[arg(long, default_value = "wayland-browser")]
@@ -134,8 +136,12 @@ fn main() -> Result<()> {
         "vp8" => Some(Codec::Vp8),
         _ => None,
     };
+    let render_node = (cli.render_node.as_os_str() != "none" && cli.render_node.exists()).then(|| cli.render_node.clone());
+    if render_node.is_none() {
+        tracing::info!("no GPU ({}): rendering in software, encoding in software", cli.render_node.display());
+    }
     let va = bw_stream::va_prefix(&cli.render_node);
-    let software = cli.software_encoding;
+    let software = cli.software_encoding || render_node.is_none();
     let codecs = bw_stream::codecs(&va, software);
     if software {
         anyhow::ensure!(!codecs.is_empty(), "no software video encoder found (GStreamer's vpx, x264, x265 or svtav1 plugins)");
@@ -197,7 +203,7 @@ fn main() -> Result<()> {
     tracing::info!(?accepted_formats, "render target formats the encoders take (fourcc, modifier)");
     let bw_compositor::CompositorHandle { commands, socket_name, x11_display, join } = bw_compositor::spawn(
         bw_compositor::Config {
-            render_node: cli.render_node,
+            render_node,
             socket_name: cli.socket_name,
             // the CPU encoders get every frame at half the rate instead of every other frame
             initial: bw_core::OutputGeometry { refresh_mhz: if software { 30_000 } else { 60_000 }, ..bw_core::INITIAL_OUTPUT },

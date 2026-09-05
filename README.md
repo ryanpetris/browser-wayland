@@ -124,6 +124,16 @@ in the Dockerfile's header.
 The page says when the server closed its socket with a token dialog ("wrong token" or "token
 rotated"; the tokens change with the data directory, e.g. a fresh container without a volume).
 
+## Without a GPU
+
+On a machine with no `/dev/dri` at all (a VPS, a CI runner, a container started without devices) the
+server renders with Mesa's llvmpipe through the surfaceless EGL platform and encodes on the CPU: pass
+`--render-node none`, or nothing (a default node that isn't there means the same). Frames are read back
+into memory for the software encoders, clients draw into shared memory (there is no dmabuf global to
+offer them GPU buffers), and X11 clients render in software too. The same binary with the node present
+behaves as before. If the surfaceless platform picks a GPU driver you don't want, `LIBGL_ALWAYS_SOFTWARE=1`
+in the environment forces llvmpipe.
+
 ## Files
 
 Drop a file on the page and it lands in the desktop's Downloads folder (`--files-dir` for another);
@@ -244,7 +254,8 @@ Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`
 `--codec auto|h264|hevc|vp9|av1|vp8` (what Auto resolves to when the browser decodes it; a codec this
 machine can't encode stops startup; auto prefers whatever the browser decodes in hardware, among what
 this machine encodes: AV1, then HEVC, VP9, H.264 on the GPU; VP8 first on the CPU),
-`--software-encoding`, `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--webcam`, `--socket-name`, `--render-node`. `--help`
+`--software-encoding`, `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--webcam`, `--socket-name`, `--render-node`
+(`none` for no GPU). `--help`
 lists them all.
 
 Games and other clients that lock the pointer get raw mouse deltas: the page mirrors the lock with the

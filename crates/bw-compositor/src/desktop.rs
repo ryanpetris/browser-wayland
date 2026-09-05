@@ -11,7 +11,7 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
-            Bind, ExportMem, Offscreen, TextureMapping,
+            Bind, Offscreen,
             damage::OutputDamageTracker,
             element::{AsRenderElements, RenderElement, surface::WaylandSurfaceRenderElement},
             gles::{GlesRenderer, GlesTexture},
@@ -237,16 +237,7 @@ fn readback<E: RenderElement<GlesRenderer>>(renderer: &mut GlesRenderer, element
     let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, Size::<i32, Buffer>::from((size.w, size.h))).context("create texture")?;
     let mut fb = renderer.bind(&mut texture).context("bind texture")?;
     OutputDamageTracker::new(size, scale, Transform::Normal).render_output(renderer, &mut fb, 0, elements, clear).context("render")?;
-    let mapping = renderer.copy_framebuffer(&fb, Rectangle::from_size(Size::from((size.w, size.h))), Fourcc::Abgr8888).context("copy framebuffer")?;
-    let data = renderer.map_texture(&mapping).context("map texture")?;
-    let (w, h) = (size.w as usize, size.h as usize);
-    let stride = w * 4;
-    let mut rgba = vec![0u8; stride * h];
-    // `flipped()` means row 0 is the top (GLES renders that way); otherwise GL's rows start at the bottom
-    for y in 0..h {
-        let src = if mapping.flipped() { y } else { h - 1 - y };
-        rgba[y * stride..(y + 1) * stride].copy_from_slice(&data[src * stride..(src + 1) * stride]);
-    }
+    let mut rgba = crate::gpu::read_pixels(renderer, &fb, Size::from((size.w, size.h)), Fourcc::Abgr8888)?;
     // GL gives premultiplied alpha; PNG wants straight
     for px in rgba.chunks_exact_mut(4) {
         let a = px[3] as u32;

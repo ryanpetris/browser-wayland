@@ -80,7 +80,8 @@ use smithay::{
 };
 
 pub struct Config {
-    pub render_node: PathBuf,
+    /// The GPU's render node; none renders in software (llvmpipe) and reads frames back for the CPU encoders.
+    pub render_node: Option<PathBuf>,
     pub socket_name: String,
     /// Output size until a viewer connects and resizes it.
     pub initial: OutputGeometry,
@@ -141,7 +142,7 @@ pub struct State {
     pub damage_tracker: OutputDamageTracker,
     pub dmabuf_state: DmabufState,
     pub syncobj_state: Option<DrmSyncobjState>,
-    pub dmabuf_feedback: DmabufFeedback,
+    pub dmabuf_feedback: Option<DmabufFeedback>,
     /// The viewers' encoders, by the server's key: every output frame goes to each of them.
     pub viewer_sinks: Vec<(u64, Box<dyn FrameSink>)>,
     pub events: tokio::sync::mpsc::UnboundedSender<Event>,
@@ -251,7 +252,7 @@ impl State {
         let display: Display<State> = Display::new()?;
         let dh = display.handle();
 
-        let gpu = gpu::Gpu::new(&cfg.render_node, &cfg.initial, &cfg.accepted_formats)?;
+        let gpu = gpu::Gpu::new(cfg.render_node.as_deref(), &cfg.initial, &cfg.accepted_formats)?;
 
         let output = Output::new(
             "BROWSER-1".into(),
@@ -275,9 +276,10 @@ impl State {
         seat.add_pointer();
         seat.add_touch();
 
+        // clients get GPU buffers only where there is a GPU; without one they draw into shared memory
         let mut dmabuf_state = DmabufState::new();
-        let dmabuf_feedback = DmabufFeedbackBuilder::new(gpu.node.dev_id(), gpu.renderer.dmabuf_formats()).build()?;
-        let _dmabuf_global = dmabuf_state.create_global_with_default_feedback::<State>(&dh, &dmabuf_feedback);
+        let dmabuf_feedback = gpu.device.as_ref().map(|d| DmabufFeedbackBuilder::new(d.node.dev_id(), gpu.renderer.dmabuf_formats()).build()).transpose()?;
+        let _dmabuf_global = dmabuf_feedback.as_ref().map(|feedback| dmabuf_state.create_global_with_default_feedback::<State>(&dh, feedback));
 
         let socket = ListeningSocketSource::with_name(&cfg.socket_name)?;
         let socket_name = socket.socket_name().to_string_lossy().into_owned();
@@ -291,7 +293,7 @@ impl State {
         })?;
 
         // Explicit sync: Vulkan clients (GTK4 by default) put no implicit fences on their dmabufs.
-        let syncobj_state = supports_syncobj_eventfd(&gpu.drm).then(|| DrmSyncobjState::new::<State>(&dh, gpu.drm.clone()));
+        let syncobj_state = gpu.device.as_ref().filter(|d| supports_syncobj_eventfd(&d.drm)).map(|d| DrmSyncobjState::new::<State>(&dh, d.drm.clone()));
         dh.create_global::<State, ZwlrForeignToplevelManagerV1, ()>(foreign_toplevel::VERSION, ());
         dh.create_global::<State, ExtWorkspaceManagerV1, ()>(workspace::VERSION, ());
 
@@ -587,7 +589,7 @@ impl State {
         self.output.change_current_state(Some(mode), None, Some(Scale::Fractional(geo.scale)), None);
         self.output.set_preferred(mode);
         if (geo.width_px, geo.height_px) != (self.geometry.width_px, self.geometry.height_px) {
-            self.gpu.swapchain.resize(geo.width_px, geo.height_px); // a scale-only change keeps the buffers
+            self.gpu.targets.resize(geo.width_px, geo.height_px); // a scale-only change keeps the buffers
             self.gpu.modifier_verified = false;
         }
         if let CursorImageStatus::Surface(s) = &self.cursor_status {
