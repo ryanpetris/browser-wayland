@@ -187,12 +187,15 @@ the drag grab turns into `wl_data_device` enter/motion for the application under
 lets go over nothing (`cancel`). The browser gives file contents only on `drop`, so the files are
 uploaded then (the drag holds still; the page shows the upload) and `drop` names them: the compositor
 leaves and re-enters the target with a fresh offer whose list it can read now (Thunar reads it during
-the drag to decide, once per offer, and refuses without it; a request before the drop gets EOF at once,
-because GTK 3 never asks again if the pointer leaves while a read is pending), then releases the button
-once the target has accepted a mime and chosen an action, sending a motion every 100 ms so it looks
-again, or after 1.5 s regardless. The page is told whether the application took the files (`Notice`); a
-refused drop leaves them in the transfer folder. The button counts as pressed meanwhile, so a viewer
-that disconnects mid-drag lets go too. X11 applications get no drop (Smithay's XWM does not speak XDND).
+the drag to decide, once per offer, and refuses without it; Nautilus preloads it and keeps what it read;
+a request before the drop gets EOF at once, because GTK 3 never asks again if the pointer leaves while a
+read is pending), then releases the button once the target has accepted a mime and chosen an action,
+sending a motion every 100 ms so it looks again, or after 1.5 s regardless. The release happens on the
+next loop turn: the accept and action callbacks run inside the offer's request handler, which holds the
+lock the drop takes. The page is told whether the application took the files (`Notice`); a refused drop
+leaves them in the transfer folder. A blur, disconnect or handover mid-drag cancels it (`release_all`),
+and a drop whose upload outlived the grab is answered as not taken. X11 applications get no drop
+(Smithay's XWM does not speak XDND).
 
 ## Notifications
 

@@ -464,25 +464,26 @@ export function createViewer() {
   // pointer sees a text/uri-list coming and shows its drop zone; on drop the files are uploaded to the
   // transfer folder first (the drag holds still meanwhile), then dropped as their URIs. Elsewhere on the
   // page a drop is a plain upload.
-  let dragging = false;
+  let dragging = false; // 'over' while the files are over the stage, 'dropping' until the upload is done and the desktop told
   const drag = msg => sendText(DRAG, JSON.stringify(msg));
   function onDragEnter(e) {
-    if (dragging || !driving() || !e.dataTransfer?.types.includes('Files')) return;
-    dragging = true;
+    if (dragging || WINDOW || !driving() || !e.dataTransfer?.types.includes('Files')) return; // a window tab's session has no desktop drag
+    dragging = 'over';
     onPointerMove(e);
     drag({ op: 'start' });
   }
-  function onDragOver(e) { if (dragging) onPointerMove(e); }
-  function onDragLeave() { if (dragging) { dragging = false; drag({ op: 'cancel' }); } }
+  function onDragOver(e) { if (dragging === 'over') onPointerMove(e); }
+  function onDragLeave() { if (dragging === 'over') { dragging = false; drag({ op: 'cancel' }); } }
   async function onDrop(e) {
-    if (!dragging) return; // not ours (a view-only session): the page's own drop handler answers
+    if (dragging !== 'over') return; // not ours (a view-only session, a window tab): the page's own drop handler answers
     e.preventDefault();
     e.stopPropagation();
-    dragging = false;
+    dragging = 'dropping';
     onPointerMove(e);
     const files = e.dataTransfer.files;
     const names = await uploadFiles(files);
     drag(names.length === files.length ? { op: 'drop', names } : { op: 'cancel' });
+    dragging = false;
   }
   document.addEventListener('drop', e => {
     if (!e.dataTransfer?.files.length) return;
@@ -586,7 +587,9 @@ export function createViewer() {
   }
   window.addEventListener('keydown', onKey);
   window.addEventListener('keyup', onKey);
-  const blur = () => { pendingPaste = null; send(BLUR, 0); }; // a deferred paste chord must not fire after its modifier was released
+  // a deferred paste chord must not fire after its modifier was released; no key is held during a native
+  // drag, and the release would let go of the drag while its files are still uploading
+  const blur = () => { pendingPaste = null; if (!dragging) send(BLUR, 0); };
   window.addEventListener('blur', blur);
   document.addEventListener('visibilitychange', () => { if (document.hidden) blur(); });
   if (WINDOW) window.addEventListener('focus', () => sendControl({ id: +WINDOW, op: 'activate' })); // keyboard focus follows the tab

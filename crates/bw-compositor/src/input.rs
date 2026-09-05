@@ -243,6 +243,9 @@ impl State {
     }
 
     fn release_all(&mut self) {
+        if self.drag_active {
+            self.drag(bw_core::Drag::Cancel); // a drag the browser can't finish any more lets go over nothing
+        }
         let keyboard = self.seat.get_keyboard().unwrap();
         for key in keyboard.pressed_keys() {
             keyboard.input::<(), _>(self, key, KeyState::Released, SERIAL_COUNTER.next_serial(), self.now(), |_, _, _| FilterResult::Forward);

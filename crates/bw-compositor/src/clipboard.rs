@@ -159,16 +159,18 @@ impl State {
     /// `text/uri-list` from there; the browser's pointer motion moves it, and the application under it is
     /// told what is coming. `Drop` supplies the list, which the files were uploaded for after the user let
     /// go, so the target only now learns what it is being given: it is left and entered again with a fresh
-    /// offer (Thunar reads the list during the drag to decide, once per offer, and refuses without it), and
-    /// the button is released once it has accepted a mime and chosen an action, with a motion every 100 ms
-    /// to make it look again, or after 1.5 s regardless. `Cancel` lets go over nothing. The button counts
-    /// as pressed meanwhile, so a viewer that goes away lets go too.
+    /// offer (Thunar reads the list during the drag to decide, once per offer, and refuses without it;
+    /// Nautilus preloads it and keeps what it read), and the button is released
+    /// once it has accepted a mime and chosen an action, with a motion every 100 ms to make it look again,
+    /// or after 1.5 s regardless. `Cancel` lets go over nothing; `release_all` cancels too, so a viewer
+    /// that goes away or loses control mid-drag lets go.
     pub fn drag(&mut self, drag: Drag) {
         let pointer = self.seat.get_pointer().unwrap();
         let location = self.pointer_location;
         let (serial, time) = (SERIAL_COUNTER.next_serial(), self.now());
         match drag {
             Drag::Start => {
+                self.drag_active = true;
                 self.drag_data = None;
                 self.drag_accepted = false;
                 self.drag_action = DndAction::empty();
@@ -183,26 +185,31 @@ impl State {
                 start_dnd(&dh, &seat, self, serial, Some(start), None, source);
                 self.pointer_motion(location); // enter the application under the pointer
             }
+            Drag::Drop(_) if !self.drag_active => {
+                // the grab ended while the files were uploading (the viewer blurred or lost control)
+                let _ = self.events.send(Event::DragEnded { taken: false });
+            }
             Drag::Drop(list) => {
                 self.drag_data = Some(Arc::new(list));
                 self.drag_dropping = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
+                // out and back in: a fresh offer, readable now (a target that asked early keeps what it read,
+                // an empty list; its predecessor's late accept/action requests can't count for the new one:
+                // the flags start over)
                 self.drag_accepted = false;
                 self.drag_action = DndAction::empty();
-                pointer.motion(self, None, &MotionEvent { location, serial, time }); // out and back in: a fresh offer, readable now
+                pointer.motion(self, None, &MotionEvent { location, serial, time });
                 self.pointer_motion(location);
-                if self.drag_dropping.is_some() {
-                    let _ = self.handle.insert_source(Timer::from_duration(std::time::Duration::from_millis(100)), |_, _, state| match state.drag_dropping {
-                        None => TimeoutAction::Drop,
-                        Some(deadline) if std::time::Instant::now() >= deadline => {
-                            state.drag_release();
-                            TimeoutAction::Drop
-                        }
-                        Some(_) => {
-                            state.pointer_motion(state.pointer_location); // the target looks at the offer again
-                            TimeoutAction::ToDuration(std::time::Duration::from_millis(100))
-                        }
-                    });
-                }
+                let _ = self.handle.insert_source(Timer::from_duration(std::time::Duration::from_millis(100)), |_, _, state| match state.drag_dropping {
+                    None => TimeoutAction::Drop,
+                    Some(deadline) if std::time::Instant::now() >= deadline => {
+                        state.drag_release();
+                        TimeoutAction::Drop
+                    }
+                    Some(_) => {
+                        state.pointer_motion(state.pointer_location); // the target looks at the offer again
+                        TimeoutAction::ToDuration(std::time::Duration::from_millis(100))
+                    }
+                });
             }
             Drag::Cancel => {
                 self.drag_dropping = None;
@@ -218,7 +225,7 @@ impl State {
     pub fn drag_settle(&mut self) {
         if self.drag_dropping.is_some() && self.drag_accepted && !self.drag_action.is_empty() {
             self.handle.insert_idle(|state| {
-                if state.drag_dropping.is_some() {
+                if state.drag_dropping.is_some() && state.drag_accepted && !state.drag_action.is_empty() {
                     state.drag_release();
                 }
             });
@@ -229,6 +236,7 @@ impl State {
     fn drag_release(&mut self) {
         let pointer = self.seat.get_pointer().unwrap();
         let ended = self.drag_dropping.take().is_some();
+        self.drag_active = false;
         pointer.button(self, &ButtonEvent { button: crate::input::BTN_LEFT, state: ButtonState::Released, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
         pointer.frame(self);
         self.pressed_buttons.remove(&crate::input::BTN_LEFT);

@@ -24,6 +24,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use bw_core::{Command, Event, FrameSink, OutputGeometry, WindowInfo};
+use smithay::reexports::wayland_server::protocol::wl_data_device_manager::DndAction;
 use smithay::{
     wayland::seat::WaylandFocus,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -215,13 +216,14 @@ pub struct State {
     pub content_type_state: ContentTypeState,
     pub xwayland_shell_state: XWaylandShellState,
     pub xwm: Option<X11Wm>,
-    /// The browser's drag in progress (`State::drag`, `ServerDndGrabHandler`): the URI list once it is
-    /// known, what the target under the pointer accepts and which action it chose, the deadline for letting
-    /// go once the list is there, and whether the drop was taken.
-    pub drag_data: Option<std::sync::Arc<Vec<u8>>>,
+    /// The browser's drag (`State::drag`, `ServerDndGrabHandler`): whether one is under way, the URI list
+    /// once it is known, what the target under the pointer accepts and which action it chose, the deadline
+    /// for letting go once the list is there, and whether the drop was taken.
+    pub drag_active: bool,
+    pub drag_data: Option<Arc<Vec<u8>>>,
     pub drag_accepted: bool,
-    pub drag_action: smithay::reexports::wayland_server::protocol::wl_data_device_manager::DndAction,
-    pub drag_dropping: Option<std::time::Instant>,
+    pub drag_action: DndAction,
+    pub drag_dropping: Option<Instant>,
     pub drag_taken: bool,
     pub x11_display: Option<u32>,
     pub xwayland_pending: bool,
@@ -311,9 +313,10 @@ impl State {
             frame_interval: Duration::from_nanos(1_000_000_000_000 / cfg.initial.refresh_mhz as u64),
             last_render: Instant::now(),
             refine_due: None,
+            drag_active: false,
             drag_data: None,
             drag_accepted: false,
-            drag_action: smithay::reexports::wayland_server::protocol::wl_data_device_manager::DndAction::empty(),
+            drag_action: DndAction::empty(),
             drag_dropping: None,
             drag_taken: false,
             dirty: true,

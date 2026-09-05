@@ -124,8 +124,8 @@ impl App {
         Ok(list.into_bytes())
     }
 
-    /// The browser's drag as a compositor command; a drop names files of the transfer folder (one that
-    /// isn't there cancels instead, so the desktop lets go).
+    /// The browser's drag as a compositor command; a drop names files of the transfer folder (a name that
+    /// isn't a plain file name cancels instead, so the desktop lets go).
     pub fn drag_command(&self, msg: crate::protocol::DragMsg) -> bw_core::Command {
         use crate::protocol::DragMsg;
         bw_core::Command::Drag(match msg {
