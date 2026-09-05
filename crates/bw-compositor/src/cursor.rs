@@ -99,7 +99,8 @@ impl State {
     pub fn export_cursor(&mut self) {
         let image = match &self.cursor_status {
             CursorImageStatus::Hidden => None,
-            CursorImageStatus::Named(icon) => self.cursor.image(*icon),
+            // a theme may lack some of the shapes cursor-shape-v1 lets clients name: show an arrow, not nothing
+            CursorImageStatus::Named(icon) => self.cursor.image(*icon).or_else(|| self.cursor.image(CursorIcon::Default)),
             CursorImageStatus::Surface(surface) => surface_cursor(surface),
         };
         let _ = self.events.send(Event::Cursor(image));
