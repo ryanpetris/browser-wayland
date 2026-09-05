@@ -523,7 +523,7 @@ export function createViewer() {
     activate: id => sendControl({ id, op: 'activate' }),
     spawn: cmd => sendControl({ op: 'spawn', cmd }),
     launch: app => control({ op: 'launch', app }),
-    quit: () => { quitting = true; return control({ op: 'quit' }); },
+    quit: () => control({ op: 'quit' }).then(r => { quitting = r.ok; }), // only an accepted quit explains the socket's end
     setElementsOn(on) { store.set({ elementsOn: on }); fetchElements(); },
     setStatsOn(on) { store.set({ statsOn: on }); inflight.clear(); stage_.decode.length = stage_.paint.length = stage_.interval.length = 0; lastPaint = 0; },
     releaseInput: () => send(BLUR, 0), // a key held on the canvas must not stay held while a text field has the keyboard

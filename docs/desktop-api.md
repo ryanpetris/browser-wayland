@@ -245,8 +245,8 @@ read it with `useSyncExternalStore` and send actions back through the engine.
   their freedesktop main category (`Network` shows as Internet, `Utility` as Accessories, and so on), with
   a search box that filters by name and comment and launches the first match on Enter; a click sends
   `launch`. Icons come through `fetch()` and blob URLs like thumbnails, cached per page, with a generic
-  glyph for entries without one. The **power menu** asks twice, then sends `quit`; the page remembers it
-  asked and shows "shut down" instead of reconnecting when the socket ends. Both are for sessions that
+  glyph for entries without one. The **power menu** confirms, then sends `quit`; once the server accepts
+  it, the page shows "shut down" instead of reconnecting when the socket ends. Both are for sessions that
   act (not the viewer token, not a window popup); together with the window list they cover what a panel
   provides, so the desktop can run without one.
 - **Windows tab**: one row per window, top-most first, minimized last: a thumbnail, a colour dot, the

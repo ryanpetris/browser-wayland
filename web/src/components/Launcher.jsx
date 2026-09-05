@@ -43,7 +43,7 @@ export function Launcher({ viewer, onClose }) {
           value={q}
           onChange={e => setQ(e.target.value)}
           onFocus={viewer.releaseInput}
-          onKeyDown={e => { if (e.key === 'Enter' && shown[0]) launch(shown[0]); }}
+          onKeyDown={e => { if (e.key === 'Enter' && needle && shown[0]) launch(shown[0]); }}
           placeholder="Search applications…"
           spellCheck={false}
           autoComplete="off"
@@ -82,18 +82,19 @@ function AppIcon({ id }) {
   return src ? <img src={src} alt="" className="size-8 shrink-0 object-contain" /> : <AppWindow className="size-8 shrink-0 p-1 text-zinc-600" strokeWidth={1.5} />;
 }
 
-/// Shut browser-wayland down, after a second click.
+/// Shut browser-wayland down, after a second click. The keyboard stays on the menu's own buttons
+/// (and any key held in the compositor is released), so nothing typed here reaches the desktop.
 export function PowerMenu({ viewer, onClose }) {
   const [sure, setSure] = useState(false);
   const ref = useRef(null);
-  useEffect(() => { ref.current?.focus(); }, []);
+  useEffect(() => { viewer.releaseInput(); ref.current?.focus(); }, [viewer, sure]);
   return (
     <Popover onClose={onClose} className="right-3 w-72 p-3">
       {sure ? (
         <>
           <p className="mb-3 text-sm text-zinc-300">Quit browser-wayland? Every window closes with it, and the desktop is gone until it is started again.</p>
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">Cancel</button>
+            <button ref={ref} type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">Cancel</button>
             <button type="button" onClick={() => { viewer.quit(); onClose(); }} className="rounded-md bg-rose-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-400">Quit</button>
           </div>
         </>

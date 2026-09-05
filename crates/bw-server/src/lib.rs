@@ -268,11 +268,11 @@ async fn api_screenshot(Query(q): Query<HashMap<String, String>>, State(app): St
 }
 
 async fn api_applications(State(app): State<Arc<App>>) -> Response {
-    (NO_STORE, Json(app.applications())).into_response()
+    (NO_STORE, Json(app.applications().await)).into_response()
 }
 
 async fn api_application_icon(UrlPath(id): UrlPath<String>, State(app): State<Arc<App>>) -> Response {
-    match app.application_icon(&id) {
+    match app.application_icon(id).await {
         Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=86400")], bytes).into_response(),
         Err(e) => e.into_response(),
     }

@@ -172,15 +172,19 @@ impl App {
         })
     }
 
-    /// The installed applications, by name.
-    pub fn applications(&self) -> Vec<apps::AppInfo> {
-        apps::list()
+    /// The installed applications, by name. A few hundred small files: read off the async workers.
+    pub async fn applications(&self) -> Vec<apps::AppInfo> {
+        tokio::task::spawn_blocking(apps::list).await.unwrap_or_default()
     }
 
     /// An application's icon as bytes and media type.
-    pub fn application_icon(&self, id: &str) -> Result<(Vec<u8>, &'static str), ApiError> {
-        let (path, mime) = apps::icon(id).ok_or(ApiError::NoSuchApp)?;
-        Ok((std::fs::read(path).map_err(|e| ApiError::Internal(e.to_string()))?, mime))
+    pub async fn application_icon(&self, id: String) -> Result<(Vec<u8>, &'static str), ApiError> {
+        tokio::task::spawn_blocking(move || {
+            let (path, mime) = apps::icon(&id).ok_or(ApiError::NoSuchApp)?;
+            Ok((std::fs::read(path).map_err(|e| ApiError::Internal(e.to_string()))?, mime))
+        })
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
     }
 
     /// Pointer and keyboard input. `window` makes coordinates relative to that window's geometry; the

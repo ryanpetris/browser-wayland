@@ -4,6 +4,7 @@
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
@@ -30,10 +31,12 @@ struct Entry {
     exec: String,
 }
 
-/// `$XDG_DATA_HOME` then `$XDG_DATA_DIRS`, with the spec's defaults; the first that has a file wins.
+/// `$XDG_DATA_HOME` then `$XDG_DATA_DIRS`, with the spec's defaults (an empty variable counts as
+/// unset); the first that has a file wins.
 fn data_dirs() -> Vec<PathBuf> {
-    let home = env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
-    let dirs = env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+    let set = |name: &str| env::var(name).ok().filter(|v| !v.is_empty());
+    let home = set("XDG_DATA_HOME").map(PathBuf::from).or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+    let dirs = set("XDG_DATA_DIRS").unwrap_or_else(|| "/usr/local/share:/usr/share".into());
     home.into_iter().chain(dirs.split(':').filter(|d| !d.is_empty()).map(PathBuf::from)).collect()
 }
 
@@ -69,10 +72,11 @@ fn parse(text: &str) -> Option<Entry> {
 }
 
 fn installed(bin: &str) -> bool {
+    let executable = |p: &Path| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
     if bin.contains('/') {
-        return Path::new(bin).is_file();
+        return executable(Path::new(bin));
     }
-    env::var_os("PATH").is_some_and(|p| env::split_paths(&p).any(|d| d.join(bin).is_file()))
+    env::var_os("PATH").is_some_and(|p| env::split_paths(&p).any(|d| executable(&d.join(bin))))
 }
 
 /// The Exec line without its field codes (`%u`, `%F`, ...: there is nothing to open).
@@ -89,7 +93,7 @@ fn command(exec: &str) -> String {
             c => out.push(c),
         }
     }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    out.trim().to_string()
 }
 
 /// Every application in the data directories, by name.
@@ -127,7 +131,7 @@ pub fn exec(id: &str) -> Option<String> {
     entry(id).map(|e| e.exec)
 }
 
-const SIZES: [&str; 8] = ["scalable", "512x512", "256x256", "128x128", "96x96", "64x64", "48x48", "32x32"];
+const SIZES: [&str; 10] = ["scalable", "512x512", "256x256", "128x128", "96x96", "64x64", "48x48", "32x32", "24x24", "16x16"];
 
 /// An application's icon: the file and its media type. SVG or PNG from the icon themes (hicolor,
 /// where applications install their own, then the others) or the pixmaps directory.

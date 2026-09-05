@@ -252,8 +252,8 @@ impl Mcp {
     }
 
     #[tool(description = "The applications installed on the desktop (its .desktop launchers): id, name, comment, categories. `launch` starts one.")]
-    fn applications(&self) -> ToolResult {
-        json(self.app.applications())
+    async fn applications(&self) -> ToolResult {
+        json(self.app.applications().await)
     }
 
     #[tool(description = "Start an installed application by its id from `applications`, as a click in the menu would. Its window appears in `windows` after a moment.")]
