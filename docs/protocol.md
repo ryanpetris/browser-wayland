@@ -206,7 +206,7 @@ Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; se
 | `maximize`, `unmaximize`, `fullscreen`, `unfullscreen` | through the same paths as the client's own requests; a minimized window is restored first |
 | `move` (`x`, `y`) | floating windows only (mapped, not maximized or fullscreen) |
 | `resize` (`w`, `h`) | floating windows only; a size hint for Wayland clients, a configure for X11 |
-| `spawn` (`cmd`) | `sh -c cmd` with the `--exec` environment: `WAYLAND_DISPLAY`, `DISPLAY`, `BW_WIDTH`/`BW_HEIGHT`, `PULSE_SINK`, toolkit backends |
+| `spawn` (`cmd`) | `sh -c cmd` with the `--exec` environment: `WAYLAND_DISPLAY`, `DISPLAY`, `PULSE_SINK`, `XDG_SESSION_TYPE` and the toolkits' backend switches |
 
 Unknown ids and impossible requests are ignored. `spawn` is remote code execution by design; the token
 is the boundary.

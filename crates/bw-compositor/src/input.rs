@@ -12,13 +12,14 @@ use smithay::{
     },
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{self, ResizeEdge},
-        wayland_server::protocol::wl_surface::WlSurface,
+        wayland_server::{Resource, protocol::wl_surface::WlSurface},
     },
     utils::{Logical, Point, SERIAL_COUNTER, Serial},
     wayland::{
         pointer_constraints::{PointerConstraint, with_pointer_constraint},
         shell::wlr_layer::Layer,
     },
+    xwayland::XWaylandClientData,
 };
 
 use crate::{
@@ -254,10 +255,10 @@ impl State {
 
     pub(crate) fn pointer_motion(&mut self, location: Point<f64, Logical>) {
         let pointer = self.seat.get_pointer().unwrap();
+        let delta = location - self.pointer_location;
+        let relative = RelativeMotionEvent { delta, delta_unaccel: delta, utime: self.clock.now().as_micros() };
         if self.locked(&pointer) {
             // Locked: the pointer stays put and the client only gets deltas.
-            let delta = location - self.pointer_location;
-            let relative = RelativeMotionEvent { delta, delta_unaccel: delta, utime: self.clock.now().as_micros() };
             let under = self.surface_under(self.pointer_location);
             pointer.relative_motion(self, under, &relative);
             pointer.frame(self);
@@ -270,9 +271,13 @@ impl State {
         ));
         self.pointer_location = location;
         let under = self.surface_under(location);
-        // the absolute motion is the whole story; a relative one on top of it makes Xwayland move its
-        // pointer by the delta a second time when a button follows in the same frame
         pointer.motion(self, under.clone(), &MotionEvent { location, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
+        // relative-pointer clients get the delta too, except Xwayland: given both in one frame it moves its
+        // pointer by the delta a second time when a button follows (its own locks take the branch above)
+        let xwayland = under.as_ref().is_some_and(|(s, _)| s.client().is_some_and(|c| c.get_data::<XWaylandClientData>().is_some()));
+        if !xwayland {
+            pointer.relative_motion(self, under.clone(), &relative);
+        }
         pointer.frame(self);
         if under.is_none() && !pointer.is_grabbed() {
             // over our decorations or the bare desktop: the cursor is ours to set

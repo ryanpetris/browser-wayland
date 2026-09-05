@@ -131,7 +131,7 @@ impl State {
     /// A request from the viewer page or `/api/control`. Unknown ids and impossible requests are ignored.
     pub fn control(&mut self, msg: ControlMsg) {
         if let ControlOp::Spawn { cmd } = &msg.op {
-            return self.spawn_client(cmd, self.geometry);
+            return self.spawn_client(cmd);
         }
         let Some(window) = self.window_by_id(msg.id) else { return };
         let info = self.window_info(&window, None);

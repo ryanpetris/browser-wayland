@@ -119,6 +119,11 @@ impl XwmHandler for State {
         } else if let Some(win) = self.minimized.iter().map(|(w, ..)| w).find(|w| w.x11_surface() == Some(&window)).cloned() {
             self.forget_window(&win);
         }
+        // the X11Surface outlives its unmap, so the keyboard would keep it (and a remap would bring no new enter)
+        if self.seat.get_keyboard().unwrap().current_focus() == Some(crate::handlers::KeyboardFocus::X11(window)) {
+            let next = self.top_window();
+            self.focus_window(next.as_ref(), smithay::utils::SERIAL_COUNTER.next_serial());
+        }
         self.dirty = true;
     }
 

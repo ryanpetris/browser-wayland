@@ -119,9 +119,12 @@ constraints) are mirrored to the browser's Pointer Lock API; the browser then se
 **Xwayland.** Started at boot; its `DISPLAY` is printed and passed to `--exec` children. X11 windows
 are ordinary space elements; clipboard and primary selection are bridged both ways; `WM_CHANGE_STATE`
 iconify goes through the same minimize code. The keyboard focuses an X11 window as an `X11Surface`
-(`KeyboardFocus` in `handlers.rs`), so Smithay also sets the X input focus and sends `WM_TAKE_FOCUS`;
-an X11 client that only ever saw its surface focused gets no `FocusIn`, and Chromium, for one, then
-opens no menus. Clicks on override-redirect windows (X11 menus, tooltips) leave the focus alone.
+(`KeyboardFocus` in `handlers.rs`), so Smithay applies the window's focus model from `WM_HINTS` and
+`WM_TAKE_FOCUS` (X input focus, the take-focus message, or both); an X11 client that only ever saw its
+surface focused gets no `FocusIn`, and Chromium, for one, then opens no menus. Clicks on
+override-redirect windows (X11 menus, tooltips) leave the focus alone, and an unmapped window hands it
+to the top-most one left. Xwayland gets no relative-pointer motion unless a lock is active: with a
+delta next to the absolute motion it moved its pointer twice when a button followed in the same frame.
 
 **Panels and taskbars.** wlr-layer-shell and a hand-written wlr-foreign-toplevel-management (v2)
 make waybar and xfce4-panel work as ordinary clients. Details in [panels.md](panels.md).
@@ -183,9 +186,9 @@ as JSON.
 ## Running and deployment
 
 See the README for flags and the `Dockerfile` for a complete Arch Linux image with the Xfce panel,
-Xfce applications, Firefox, Chromium, PipeWire and Mesa's GL and Vulkan drivers (`make docker-run`). Practical notes: `--exec` runs at startup, with `BW_WIDTH`/`BW_HEIGHT`
-set to the output size (1920×1080 until the first viewer resizes it); nested desktops need `--kiosk`; the data
-directory should be persisted in containers or every start prints a new token.
+Xfce applications, Firefox, Chromium, PipeWire and Mesa's GL and Vulkan drivers (`make docker-run`). Practical notes: `--exec` runs at startup, with a Wayland session's
+environment; nested desktops need `--kiosk`; the data directory should be persisted in containers or every
+start prints a new token.
 
 ## Known limitations
 

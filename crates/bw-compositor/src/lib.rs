@@ -74,8 +74,7 @@ pub struct Config {
     pub socket_name: String,
     /// Output size until a viewer connects and resizes it.
     pub initial: OutputGeometry,
-    /// Shell command started with the compositor, with WAYLAND_DISPLAY, DISPLAY,
-    /// BW_WIDTH/BW_HEIGHT (logical output size) and `exec_env` set.
+    /// Shell command started with the compositor, with WAYLAND_DISPLAY, DISPLAY and `exec_env` set.
     pub exec: Option<String>,
     pub exec_env: Vec<(String, String)>,
     /// Every new window is fullscreened (for running a nested desktop).
@@ -329,16 +328,14 @@ impl State {
         Ok((event_loop, state))
     }
 
-    /// Run a shell command as a client of this compositor: WAYLAND_DISPLAY, DISPLAY,
-    /// BW_WIDTH/BW_HEIGHT (logical size of `geo`) and the toolkit backends set.
-    pub fn spawn_client(&self, cmd: &str, geo: OutputGeometry) {
+    /// Run a shell command as a client of this compositor: WAYLAND_DISPLAY, DISPLAY and a Wayland
+    /// session's environment set.
+    pub fn spawn_client(&self, cmd: &str) {
         let mut command = std::process::Command::new("sh");
         command
             .arg("-c")
             .arg(cmd)
             .env("WAYLAND_DISPLAY", &self.socket_name)
-            .env("BW_WIDTH", ((geo.width_px as f64 / geo.scale).round() as u32).to_string())
-            .env("BW_HEIGHT", ((geo.height_px as f64 / geo.scale).round() as u32).to_string())
             .env_remove("WAYLAND_SOCKET")
             // the environment a Wayland session gives its programs: each toolkit's own switch, and the
             // session type, which Chromium's and Electron's `auto` platform hints go by
@@ -369,7 +366,7 @@ impl State {
     fn run(mut self, event_loop: &mut EventLoop<'static, State>, rx: channel::Channel<Command>) {
         // at the initial output size; a viewer that connects later resizes the output like any other time
         if let Some(cmd) = self.exec.take() {
-            self.spawn_client(&cmd, self.geometry);
+            self.spawn_client(&cmd);
         }
         let handle = event_loop.handle();
         handle
@@ -447,6 +444,11 @@ impl State {
         self.minimized.retain(|(w, ..)| w != window);
     }
 
+    /// The top-most window that isn't an X11 menu or tooltip: what gets the focus when its holder goes.
+    pub fn top_window(&self) -> Option<Window> {
+        self.space.elements().rev().find(|w| w.x11_surface().is_none_or(|x| !x.is_override_redirect())).cloned()
+    }
+
     /// Hide a window until a taskbar (or its own client) asks for it back; focus moves to the top-most window left.
     pub fn minimize(&mut self, window: &Window) {
         let Some(loc) = self.space.element_location(window) else { return };
@@ -457,7 +459,7 @@ impl State {
         if let Some(t) = window.toplevel() {
             t.send_pending_configure();
         }
-        let next = self.space.elements().rev().find(|w| w.x11_surface().is_none_or(|x| !x.is_override_redirect())).cloned();
+        let next = self.top_window();
         self.focus_window(next.as_ref(), SERIAL_COUNTER.next_serial());
         self.dirty = true;
     }
