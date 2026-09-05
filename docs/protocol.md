@@ -37,9 +37,9 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x05` | Audio | `u8 0` `u16 seq` `u64 pts_us` then one 20 ms Opus packet. `seq` counts every packet, sent or not. |
 | `0x06` | Windows | JSON array of window objects (see below), the whole list, whenever anything in it changed. Replayed to a new viewer. |
 | `0x07` | Clipboard | UTF-8 text a desktop application put on the clipboard (at most 1 MiB). Not replayed: a viewer that reconnects keeps its browser clipboard. |
-| `0x0A` | ClipboardData | A desktop application put something other than text on the clipboard; the payload is its mime type (`image/png`). The bytes are at `GET /api/clipboard`; the page fetches them and writes them to the browser clipboard. |
 | `0x08` | Role | `u8`: what this session may do. 0 watch only (the viewer token); 1 act but not drive (a control token while another session controls); 2 control: its pointer, keyboard and window size are the desktop's. Sent with the replay after `Hello` and whenever it changes. |
 | `0x09` | Notice | UTF-8 text about the session's last action, for the page to show briefly. Sent to a window stream whose press aims past the desktop's edge at an X11 window: Xwayland's screen is the desktop, and the X server pins the pointer to it, so that click cannot arrive. |
+| `0x0A` | ClipboardData | A desktop application put something other than text on the clipboard; the payload is its mime type (`image/png`). The bytes are at `GET /api/clipboard`; the page fetches them and writes them to the browser clipboard. |
 
 ### Client → server
 

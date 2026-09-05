@@ -169,7 +169,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
                 .route("/api/windows/{id}/elements", get(api_window_elements))
                 .route("/api/windows/{id}/icon", get(api_window_icon))
                 .route("/api/token/rotate", post(api_token_rotate))
-                .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard).layer(DefaultBodyLimit::max(1 + (16 << 20))))
+                .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard).layer(DefaultBodyLimit::disable()))
                 .nest_service("/mcp", mcp_service(app.clone()))
                 .layer(middleware::from_fn_with_state(app.clone(), bearer)),
         )
@@ -320,9 +320,16 @@ async fn api_clipboard(State(app): State<Arc<App>>) -> Response {
 }
 
 /// The body becomes the desktop clipboard: a PNG with `Content-Type: image/png` (up to 16 MiB), else UTF-8 text (up to 1 MiB).
-async fn api_set_clipboard(Extension(key): Extension<Key>, State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> Response {
-    let png = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with(api::PNG));
-    match writable(key).and_then(|()| app.set_clipboard(if png { api::PNG } else { api::TEXT }, body)) {
+/// The body is read only for a control token, and only up to its mime's limit.
+async fn api_set_clipboard(Extension(key): Extension<Key>, State(app): State<Arc<App>>, req: Request) -> Response {
+    if let Err(e) = writable(key) {
+        return e.into_response();
+    }
+    let png = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with(api::PNG));
+    let mime = if png { api::PNG } else { api::TEXT };
+    let Ok(body) = axum::body::to_bytes(req.into_body(), api::clipboard_limit(mime)).await else { return ApiError::TooLarge.into_response() };
+    let body = if png { body } else { Bytes::from(String::from_utf8_lossy(&body).into_owned()) };
+    match app.set_clipboard(mime, body) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e) => e.into_response(),
     }

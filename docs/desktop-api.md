@@ -177,15 +177,20 @@ calloop source on the non-blocking pipe, so a slow reader never blocks the compo
 are offered it too. The selection user data distinguishes relayed X11 selections from our own. Setting
 the clipboard drops a read still in flight, so an application's older clipboard can't land after the
 new one. Either pipe is closed after ten seconds if its peer stalls. The primary selection is not
-bridged; other image formats aren't read (GTK, Qt, Firefox and Chromium all offer PNG).
+bridged; other image formats aren't read (GTK, Qt, Firefox and Chromium all offer PNG), and an X11
+client's PNG isn't either: Smithay 0.7's Xwayland selection code resolves only text targets. Our PNG is
+offered to X11 clients.
 
 The page writes received text to the browser clipboard at once when it may, otherwise on the next
 gesture; a received image is fetched from the API and written as a `ClipboardItem`. Ctrl+V and
 Shift+Insert are not forwarded immediately: the browser's `paste` event (which needs no permission)
-delivers the text, which goes to the desktop as `SetClipboard`, or an image, which goes by `PUT
-/api/clipboard`; the key press and release follow, so the application pastes the browser's content. If
-no paste event comes within 150 ms the key goes through on its own; an image upload holds it for up to
-3 s.
+delivers the text, which goes to the desktop as `SetClipboard`, and the key press and release follow, so
+the application pastes the browser's content; if no paste event comes within 150 ms the key goes
+through on its own. A pasted image goes by `PUT /api/clipboard` instead, and the user's chord is dropped
+(its modifier may be released before the upload ends): once the upload succeeded the same chord is
+pressed through `POST /api/input`, and not at all if it failed. The compositor reports its own
+clipboard back as an `Event::Clipboard` like an application's, so the server's cache and every viewer
+follow one ordered stream.
 
 ## Viewers
 

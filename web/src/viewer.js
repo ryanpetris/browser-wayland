@@ -426,16 +426,19 @@ export function createViewer() {
   // write, otherwise on the next gesture. Browser -> desktop: Ctrl+V (or Shift+Insert) is held back until
   // the browser's paste event delivers the text or image, which goes to the desktop first, so the
   // application pastes what the browser had.
-  let pendingClipboard = null, pendingPaste = null, pasteTimer;
+  let pendingClipboard = null, pendingPaste = null, pasteTimer, clipboardGen = 0, swallowKeyup = null;
   function onClipboard(text) {
+    clipboardGen++;
     pendingClipboard = text;
     store.set({ clipboardText: text });
     flushClipboard();
   }
+  // the bytes are fetched once, now, so the write can happen inside a gesture (WebKit insists on that)
   function onClipboardData(mime) {
-    pendingClipboard = { mime };
+    const gen = ++clipboardGen;
+    pendingClipboard = null;
     store.set({ clipboardText: '[image]' });
-    flushClipboard();
+    api('/api/clipboard').then(r => r.blob()).then(blob => { if (gen === clipboardGen) { pendingClipboard = { mime, blob }; flushClipboard(); } }).catch(() => {});
   }
   function flushClipboard() {
     if (pendingClipboard === null || !navigator.clipboard?.writeText) return;
@@ -444,12 +447,13 @@ export function createViewer() {
     if (typeof item === 'string') {
       navigator.clipboard.writeText(item).then(done).catch(() => {});
     } else if (window.ClipboardItem) {
-      api('/api/clipboard').then(r => r.blob()).then(blob => navigator.clipboard.write([new ClipboardItem({ [item.mime]: blob })])).then(done).catch(() => {});
+      navigator.clipboard.write([new ClipboardItem({ [item.mime]: item.blob })]).then(done).catch(() => {});
     }
   }
   const isPasteKey = e => (e.ctrlKey && e.code === 'KeyV') || (e.shiftKey && e.code === 'Insert');
   const sendKey = (code, pressed) => send(KEY, 3, dv => { dv.setUint16(1, code, true); dv.setUint8(3, pressed ? 1 : 0); });
   function flushPaste() {
+    clearTimeout(pasteTimer); // a stale timer must not fire the next chord early
     if (!pendingPaste) return;
     const code = pendingPaste; pendingPaste = null;
     sendKey(code, true); sendKey(code, false);
@@ -459,10 +463,13 @@ export function createViewer() {
     e.preventDefault();
     const image = [...(e.clipboardData?.items ?? [])].find(i => i.type === 'image/png')?.getAsFile();
     if (image) {
-      // the key waits for the upload (bounded), so the application pastes this picture and not the last clipboard
-      clearTimeout(pasteTimer);
-      pasteTimer = setTimeout(flushPaste, 3000);
-      api('/api/clipboard', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: image }).then(flushPaste, flushPaste);
+      // The user's chord is dropped (its modifier may go up before the upload is done); once the picture is
+      // on the desktop clipboard the same chord is pressed through the API, and not at all if the upload failed.
+      const chord = pendingPaste === KEYCODES.Insert ? 'shift+Insert' : 'ctrl+v';
+      swallowKeyup = pendingPaste; pendingPaste = null; clearTimeout(pasteTimer);
+      api('/api/clipboard', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: image, signal: AbortSignal.timeout(5000) })
+        .then(r => { if (r.ok) return api('/api/input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'key', keys: chord }) }); })
+        .catch(() => {});
       return;
     }
     sendText(SET_CLIPBOARD, e.clipboardData?.getData('text/plain') ?? ''); // an empty browser clipboard clears the desktop's
@@ -482,7 +489,7 @@ export function createViewer() {
       resumeAudio();
       return;
     }
-    if (e.type === 'keyup' && pendingPaste === code) return; // the deferred press+release pair covers it
+    if (e.type === 'keyup' && (pendingPaste === code || swallowKeyup === code)) { swallowKeyup = null; return; } // the deferred pair (or the API chord) covers it
     if (e.type === 'keyup') flushPaste(); // a modifier going up first would turn the deferred chord into a plain key
     e.preventDefault();
     resumeAudio();

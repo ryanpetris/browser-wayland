@@ -15,6 +15,10 @@ use bw_core::{Bytes, Command, ControlMsg, ControlOp, InputMsg, Snapshot, Snapsho
 pub const TEXT: &str = "text/plain;charset=utf-8";
 pub const PNG: &str = "image/png";
 
+pub fn clipboard_limit(mime: &str) -> usize {
+    if mime == PNG { 16 << 20 } else { 1 << 20 }
+}
+
 use crate::{App, apps, elements::Page};
 
 #[derive(Debug)]
@@ -63,7 +67,7 @@ impl std::fmt::Display for ApiError {
             ApiError::NotFound => f.write_str("no such window"),
             ApiError::NoSuchApp => f.write_str("no such application"),
             ApiError::Busy => f.write_str("another snapshot is in flight"),
-            ApiError::TooLarge => f.write_str("over 1 MiB"),
+            ApiError::TooLarge => f.write_str("over the size limit"),
             ApiError::Unavailable(why) | ApiError::Internal(why) => f.write_str(why),
         }
     }
@@ -134,17 +138,17 @@ impl App {
         long_side.map_or(1.0, |side| (px / side.max(1.0)).min(1.0))
     }
 
-    /// The last text a desktop application copied.
+    /// What was last put on the clipboard, by an application, the browser or the API: its mime and bytes.
     pub fn clipboard(&self) -> Option<(String, Bytes)> {
         self.viewers.lock().unwrap().clipboard.clone()
     }
 
-    /// Text (`TEXT`) or a PNG becomes the desktop clipboard (and what `clipboard()` reports); fire-and-forget like control.
+    /// Text (`TEXT`) or a PNG becomes the desktop clipboard; fire-and-forget like control. The compositor
+    /// reports it back like any clipboard change, which is what `clipboard()` and the viewers then see.
     pub fn set_clipboard(&self, mime: &str, data: Bytes) -> Result<(), ApiError> {
-        if data.len() > if mime == PNG { 16 << 20 } else { 1 << 20 } {
+        if data.len() > clipboard_limit(mime) {
             return Err(ApiError::TooLarge);
         }
-        self.viewers.lock().unwrap().clipboard = Some((mime.to_string(), data.clone()));
         self.send(Command::SetClipboard { mime: mime.to_string(), data: data.to_vec() })
     }
 

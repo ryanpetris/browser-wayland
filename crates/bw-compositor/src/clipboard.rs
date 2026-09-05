@@ -1,5 +1,6 @@
 //! Clipboard bridge for the browser and the API. Text or a PNG copied in a desktop application is read
-//! from its owner (a Wayland client, or an X11 client through Xwayland) into `Event::Clipboard`; data set
+//! from its owner (a Wayland client, or an X11 client through Xwayland, whose selection code in Smithay
+//! 0.7 only resolves text targets, so an X11 client's PNG isn't read) into `Event::Clipboard`; data set
 //! from outside becomes a compositor-owned selection served to whoever asks. Text up to 1 MiB, images 16.
 
 use std::{os::fd::OwnedFd, sync::Arc};
@@ -15,19 +16,13 @@ use smithay::{
 
 use crate::State;
 
-/// What a compositor-owned selection holds: relayed from an X11 client, or data we were given.
+/// What a compositor-owned selection holds: relayed from an X11 client, or the bytes we were given
+/// (the mimes offered say what they are).
 #[derive(Clone, Debug, Default)]
 pub enum Selection {
     #[default]
     X11,
-    Ours(Arc<Ours>),
-}
-
-/// Clipboard contents from the browser or the API.
-#[derive(Debug)]
-pub struct Ours {
-    pub mime: String,
-    pub data: Vec<u8>,
+    Ours(Arc<Vec<u8>>),
 }
 
 pub const TEXT_MIMES: [&str; 5] = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "TEXT", "STRING"];
@@ -134,7 +129,8 @@ impl State {
     pub fn set_clipboard(&mut self, mime: String, data: Vec<u8>) {
         self.cancel_clipboard_read(); // an application's older clipboard must not land after this one
         let mimes: Vec<String> = if mime == PNG { vec![mime.clone()] } else { TEXT_MIMES.iter().map(|m| m.to_string()).collect() };
-        set_data_device_selection(&self.dh, &self.seat, mimes.clone(), Selection::Ours(Arc::new(Ours { mime, data })));
+        let _ = self.events.send(Event::Clipboard { mime: mime.clone(), data: data.clone().into() }); // the server learns of every change in order
+        set_data_device_selection(&self.dh, &self.seat, mimes.clone(), Selection::Ours(Arc::new(data)));
         if let Some(xwm) = self.xwm.as_mut()
             && let Err(e) = xwm.new_selection(SelectionTarget::Clipboard, Some(mimes))
         {
@@ -144,15 +140,15 @@ impl State {
 
     /// Serve our clipboard to a client that asked for it, from the event loop as the pipe accepts it, so
     /// a reader that stalls costs a source, not a thread.
-    pub fn serve_clipboard(&mut self, ours: Arc<Ours>, fd: OwnedFd) {
+    pub fn serve_clipboard(&mut self, data: Arc<Vec<u8>>, fd: OwnedFd) {
         let _ = rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK);
         let mut written = 0;
         let token = self.handle.insert_source(Generic::new(fd, Interest::WRITE, Mode::Level), move |_, fd, _| {
             loop {
-                if written >= ours.data.len() {
+                if written >= data.len() {
                     return Ok(PostAction::Remove); // closes the pipe: end of data
                 }
-                match rustix::io::write(&*fd, &ours.data[written..]) {
+                match rustix::io::write(&*fd, &data[written..]) {
                     Ok(n) => written += n,
                     Err(rustix::io::Errno::AGAIN) => return Ok(PostAction::Continue),
                     Err(_) => return Ok(PostAction::Remove), // reader gone
