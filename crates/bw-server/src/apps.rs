@@ -151,7 +151,7 @@ pub fn launcher_icon(app_id: &str) -> Option<(PathBuf, &'static str)> {
 
 /// An icon name (or path) as a file and its media type: SVG or PNG from the icon themes (hicolor,
 /// where applications install their own, then the others) or the pixmaps directory.
-fn icon_file(icon: &str) -> Option<(PathBuf, &'static str)> {
+pub(crate) fn icon_file(icon: &str) -> Option<(PathBuf, &'static str)> {
     let mime = |p: &Path| match p.extension().and_then(|e| e.to_str()) {
         Some("svg") => Some("image/svg+xml"),
         Some("png") => Some("image/png"),

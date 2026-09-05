@@ -14,6 +14,9 @@ const ROUTES: &str = "\
 | `GET /api/applications` | | JSON array of **Application**: the installed launchers, for `launch` |
 | `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
 | `GET /api/windows/{id}/icon` | | the window's icon (its own, else its launcher's), SVG or PNG; `404` none |
+| `GET /api/notifications` | | JSON array of **Notification**: what applications reported and the viewers show |
+| `POST /api/notifications/{id}` | `{\"action\": \"default\" \\| \"<key>\" \\| \"dismiss\"}` | click, invoke an action of, or dismiss a notification; `202`, `404` |
+| `GET /api/notifications/{id}/icon` | | the notification's picture (the application's, else its launcher's); `404` none |
 | `GET /api/windows/{id}/elements` | | **Elements**; `501` without `--elements`, `503` tree unreadable, `404` unknown window |
 | `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
 | `GET /api/screenshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the whole output; `429`, `500`, `503` as for a window |
@@ -36,7 +39,7 @@ pub fn markdown() -> String {
     out.push_str("Generated from the code (`UPDATE_REFERENCE=1 cargo test -p bw-server reference`); do not edit.\n\n");
     out.push_str("## HTTP API\n\nEvery `/api` request carries `Authorization: Bearer <token>`; `401` (empty body) otherwise. The\nviewer token (the server prints it as \"view only\") reads: the acting routes and tools answer `403`\n`read-only token` to it. The\nstatuses in the table come with a JSON body `{\"error\": \"...\"}`. A request body the server can't read is\nrejected before that with a plain-text message: `400` invalid JSON, `415` missing\n`Content-Type: application/json`, `422` wrong shape. Coordinates are logical pixels.\n\n");
     out.push_str(ROUTES);
-    for (name, s) in [("Window", schema::<WindowInfo>()), ("Application", schema::<AppInfo>()), ("Control", schema::<ControlMsg>()), ("Input", schema::<InputMsg>()), ("Elements", schema::<Page>())] {
+    for (name, s) in [("Window", schema::<WindowInfo>()), ("Application", schema::<AppInfo>()), ("Notification", schema::<crate::notify::Notification>()), ("Control", schema::<ControlMsg>()), ("Input", schema::<InputMsg>()), ("Elements", schema::<Page>())] {
         out.push_str(&format!("\n## {name}\n\n```json\n{s}\n```\n"));
     }
     out.push_str("\n## MCP tools\n\nStreamable HTTP at `/mcp`, same bearer token. Failures come back as tool errors with the same text as the API.\n");

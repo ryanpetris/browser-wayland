@@ -256,6 +256,11 @@ impl Mcp {
         json(self.app.applications().await)
     }
 
+    #[tool(description = "The desktop notifications currently shown (id, app, summary, body, actions, timeout_ms): what applications reported. POST /api/notifications/{id} acts on one.")]
+    fn notifications(&self) -> ToolResult {
+        json(self.app.notifications())
+    }
+
     #[tool(description = "Start an installed application by its id from `applications`, as a click in the menu would. Its window appears in `windows` after a moment.")]
     fn launch(&self, Extension(parts): Extension<Parts>, Parameters(LaunchArgs { app }): Parameters<LaunchArgs>) -> ToolResult {
         self.control(&parts, 0, ControlOp::Launch { app })

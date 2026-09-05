@@ -68,13 +68,8 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 msg
             }
         };
-        // ponytail: a session that can't keep up misses a state change (it is dropped after ten seconds anyway)
-        for s in v.sessions.values() {
-            let _ = s.events.try_send(msg.clone());
-        }
-        for tx in app.window_viewers.lock().unwrap().values() {
-            let _ = tx.try_send(msg.clone());
-        }
+        drop(v);
+        app.broadcast(msg);
     }
 }
 
@@ -162,7 +157,8 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         if key == Key::Control && v.controller.is_none() {
             v.controller = Some(id);
         }
-        let replay: Vec<Bytes> = [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id)))].into_iter().flatten().collect();
+        let mut replay: Vec<Bytes> = [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id)))].into_iter().flatten().collect();
+        replay.extend(app.notifications().iter().map(protocol::notification));
         (id, replay)
     };
     for msg in replay {
@@ -213,8 +209,10 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                     if app.key_for(&token).is_none() {
                         break Some((UNAUTHORIZED, "token rotated")); // a queued command must not get through after a rotation
                     }
-                    if let Some(m) = protocol::decode(&b) {
-                        app.viewer_message(id, key, m);
+                    match protocol::decode(&b) {
+                        Some(ClientMsg::Notify(n)) if key == Key::Control => app.spawn_notification_action(n),
+                        Some(m) => app.viewer_message(id, key, m),
+                        None => {}
                     }
                 }
                 Some(Ok(Message::Pong(_))) => unanswered = 0,
@@ -344,6 +342,10 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                         Some(ClientMsg::MotionAbs { x, y }) => Some(Command::Input(InputMsg::Move { x: x as f64, y: y as f64, window: Some(id) })),
                         Some(ClientMsg::Resize { css_w, css_h, .. }) => Some(Command::Control(ControlMsg { id, op: ControlOp::Resize { w: css_w as i32, h: css_h as i32 } })),
                         Some(ClientMsg::SetClipboard(text)) => Some(Command::SetClipboard { mime: api::TEXT.into(), data: text.into() }),
+                        Some(ClientMsg::Notify(n)) => {
+                            app.spawn_notification_action(n);
+                            None
+                        }
                         Some(m) => input_command(m),
                         None => None,
                     };
@@ -391,6 +393,25 @@ impl Viewers {
 }
 
 impl App {
+    /// A viewer's click on a notification, answered on the bus in the background.
+    fn spawn_notification_action(self: &Arc<Self>, n: protocol::NotifyMsg) {
+        let app = self.clone();
+        tokio::spawn(async move {
+            let _ = app.notification_action(n.id, &n.action).await;
+        });
+    }
+
+    /// A state message to every viewer and window session.
+    /// ponytail: a session that can't keep up misses a state change (it is dropped after ten seconds anyway)
+    pub(crate) fn broadcast(&self, msg: Bytes) {
+        for s in self.viewers.lock().unwrap().sessions.values() {
+            let _ = s.events.try_send(msg.clone());
+        }
+        for tx in self.window_viewers.lock().unwrap().values() {
+            let _ = tx.try_send(msg.clone());
+        }
+    }
+
     /// Pick the codec for a browser whose `hw` mask passed the prefer-hardware probe and `sw` the plain one
     /// (bit0 H.264, bit1 HEVC, bit2 VP9).
     fn choose_codec(&self, hw: u8, sw: u8) -> Codec {

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Loader2, MonitorX, TriangleAlert } from 'lucide-react';
 import { useStore } from '../store.js';
 import { hue, windowColor } from './ui.jsx';
+import { Notifications } from './Notifications.jsx';
 
 export function Stage({ viewer, windowMode, borders, elements }) {
   const el = useRef(null);
@@ -27,6 +28,7 @@ export function Stage({ viewer, windowMode, borders, elements }) {
       {(borders || elements) && <Overlay viewer={viewer} size={size} borders={borders} elements={elements} />}
       <Banner viewer={viewer} />
       <Notice viewer={viewer} />
+      <Notifications viewer={viewer} />
     </div>
   );
 }

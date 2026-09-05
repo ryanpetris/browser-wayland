@@ -161,6 +161,24 @@ the mechanism.
   documented requirement rather than something browser-wayland tries to inject (the Docker image sets
   it in Chromium's flags file).
 
+## Notifications
+
+`notify.rs`. Applications send desktop notifications to `org.freedesktop.Notifications` on the session
+bus; with no panel nobody would answer, so the server requests that name at startup (without replacing
+an owner: on a host with a real daemon it logs and does nothing) and serves the interface with zbus:
+`Notify` stores the notification (a `replaces_id` takes that id's place), sends every viewer and window
+session a `Notification` message, and arms its expiry (`expire_timeout` −1 becomes 5 s, 0 means until
+closed); `CloseNotification` and the expiry remove it and send `{"id", "closed": true}`; `GetCapabilities`
+says `actions`, `body`, `icon-static`, `persistence`. A viewer's `Notify` message or `POST
+/api/notifications/{id}` with an action key emits `ActionInvoked` and closes the notification (reason 2);
+`dismiss` just closes it; `default` when the application registered no such action brings its newest
+window forward instead, matched by the `desktop-entry` hint or the application name against `app_id`.
+Icons: `app_icon` as a stock name or path, the `image-data` hint (converted to PNG), or `image-path`,
+served at `GET /api/notifications/{id}/icon`, falling back to the launcher's icon from `desktop-entry`.
+Open notifications are replayed to a connecting viewer. The page stacks them top-right on the stage with
+the icon, summary, body (markup stripped) and action buttons; the ✕ dismisses (a view-only session only
+hides it locally).
+
 ## Clipboard
 
 `clipboard.rs`. When a client takes the clipboard offering a text mime type or `image/png`

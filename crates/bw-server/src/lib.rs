@@ -7,6 +7,7 @@ mod api;
 mod apps;
 mod elements;
 mod mcp;
+mod notify;
 mod protocol;
 #[cfg(test)]
 mod reference;
@@ -86,6 +87,10 @@ pub struct App {
     /// Event senders of the window-stream sessions (cursor, clipboard, window list go to them too).
     window_viewers: Mutex<HashMap<u64, mpsc::Sender<Bytes>>>,
     snapshot_lock: tokio::sync::Semaphore,
+    /// Open desktop notifications by id (`notify.rs`), the next id, and the bus we serve them on.
+    notifications: Mutex<HashMap<u32, notify::Open>>,
+    next_notification: std::sync::atomic::AtomicU32,
+    notify_bus: std::sync::OnceLock<zbus::Connection>,
     elements: bool,
     version: &'static str,
     tls: bool,
@@ -143,6 +148,9 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         sinks: cfg.sinks,
         window_viewers: Mutex::default(),
         snapshot_lock: tokio::sync::Semaphore::new(1),
+        notifications: Mutex::default(),
+        next_notification: std::sync::atomic::AtomicU32::new(1),
+        notify_bus: std::sync::OnceLock::new(),
         elements: cfg.elements,
         version: cfg.version,
         tls: cfg.tls,
@@ -150,6 +158,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
     });
     tokio::spawn(ws::distribute_audio(app.clone(), audio_rx));
     tokio::spawn(ws::forward_events(app.clone(), events_rx));
+    tokio::spawn(notify::serve(app.clone()));
 
     let router = Router::new()
         .route("/", get(index))
@@ -168,6 +177,9 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
                 .route("/api/screenshot.png", get(api_screenshot))
                 .route("/api/windows/{id}/elements", get(api_window_elements))
                 .route("/api/windows/{id}/icon", get(api_window_icon))
+                .route("/api/notifications", get(api_notifications))
+                .route("/api/notifications/{id}", post(api_notification_action))
+                .route("/api/notifications/{id}/icon", get(api_notification_icon))
                 .route("/api/token/rotate", post(api_token_rotate))
                 .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard).layer(DefaultBodyLimit::disable()))
                 .nest_service("/mcp", mcp_service(app.clone()))
@@ -282,6 +294,29 @@ async fn api_application_icon(UrlPath(id): UrlPath<String>, State(app): State<Ar
 
 async fn api_window_icon(UrlPath(id): UrlPath<u64>, State(app): State<Arc<App>>) -> Response {
     match app.window_icon(id).await {
+        Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=300")], bytes).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn api_notifications(State(app): State<Arc<App>>) -> Response {
+    (NO_STORE, Json(app.notifications())).into_response()
+}
+
+/// `{"action": "default" | "<key>" | "dismiss"}`; `202`, `404` unknown id.
+async fn api_notification_action(Extension(key): Extension<Key>, UrlPath(id): UrlPath<u32>, State(app): State<Arc<App>>, Json(msg): Json<serde_json::Value>) -> Response {
+    let action = msg.get("action").and_then(|a| a.as_str()).unwrap_or("default");
+    match writable(key) {
+        Ok(()) => match app.notification_action(id, action).await {
+            Ok(()) => StatusCode::ACCEPTED.into_response(),
+            Err(e) => e.into_response(),
+        },
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn api_notification_icon(UrlPath(id): UrlPath<u32>, State(app): State<Arc<App>>) -> Response {
+    match app.notification_icon(id).await {
         Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=300")], bytes).into_response(),
         Err(e) => e.into_response(),
     }

@@ -20,6 +20,8 @@ pub const NOTICE: u8 = 0x09;
 /// A desktop application copied something that isn't text; the payload is its mime type (`image/png`)
 /// and the bytes are at `GET /api/clipboard`.
 pub const CLIPBOARD_DATA: u8 = 0x0A;
+/// A notification (JSON `Notification`), or `{"id":N,"closed":true}` when one went away. Open ones are replayed to a new viewer.
+pub const NOTIFICATION: u8 = 0x0B;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
@@ -40,6 +42,8 @@ pub const CONTROL: u8 = 0x8B;
 pub const SET_CLIPBOARD: u8 = 0x8C;
 /// A session with a control token asks to become the controller.
 pub const TAKE_CONTROL: u8 = 0x8D;
+/// JSON `{"id":N,"action":"key"}`: the viewer clicked a notification (`default`), one of its actions, or dismissed it (`dismiss`). Control token only.
+pub const NOTIFY: u8 = 0x8E;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +109,18 @@ pub fn clipboard(text: &str) -> Bytes {
     b.into()
 }
 
+pub fn notification(n: &crate::notify::Notification) -> Bytes {
+    let mut b = vec![NOTIFICATION];
+    b.extend_from_slice(serde_json::to_string(n).unwrap().as_bytes());
+    b.into()
+}
+
+pub fn notification_closed(id: u32) -> Bytes {
+    let mut b = vec![NOTIFICATION];
+    b.extend_from_slice(format!("{{\"id\":{id},\"closed\":true}}").as_bytes());
+    b.into()
+}
+
 pub fn clipboard_data(mime: &str) -> Bytes {
     let mut b = Vec::with_capacity(1 + mime.len());
     b.push(CLIPBOARD_DATA);
@@ -145,6 +161,13 @@ pub enum ClientMsg {
     Control(ControlMsg),
     SetClipboard(String),
     TakeControl,
+    Notify(NotifyMsg),
+}
+
+#[derive(Debug, PartialEq, serde::Deserialize)]
+pub struct NotifyMsg {
+    pub id: u32,
+    pub action: String,
 }
 
 /// Malformed messages decode to `None` and are ignored.
@@ -166,6 +189,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         CONTROL => ClientMsg::Control(serde_json::from_slice(&b[1..]).ok()?),
         SET_CLIPBOARD => ClientMsg::SetClipboard(String::from_utf8(b[1..].to_vec()).ok()?),
         TAKE_CONTROL => ClientMsg::TakeControl,
+        NOTIFY => ClientMsg::Notify(serde_json::from_slice(&b[1..]).ok()?),
         _ => return None,
     })
 }

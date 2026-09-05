@@ -39,6 +39,13 @@ export const windowIcon = (id, key) => {
   return windowIcons.get(key);
 };
 
+// A notification's icon as a blob URL, fetched once per notification.
+const notificationIcons = new Map();
+export const notificationIcon = id => {
+  if (!notificationIcons.has(id)) notificationIcons.set(id, api(`/api/notifications/${id}/icon`).then(r => (r.ok ? r.blob().then(URL.createObjectURL) : null)).catch(() => null));
+  return notificationIcons.get(id);
+};
+
 // The server renders one snapshot at a time (429 otherwise): thumbnails are fetched one by one, and
 // one nobody wants any more by its turn (`wanted()` false) is skipped.
 let queue = Promise.resolve();

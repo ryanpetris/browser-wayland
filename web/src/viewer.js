@@ -4,7 +4,7 @@
 import { KEYCODES } from './keycodes.js';
 import { TOKEN, WINDOW, api, elementsOf, snapshot, control } from './api.js';
 import { createStore } from './store.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, ROLES, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, BTN } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATION, ROLES, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -22,6 +22,7 @@ export function createViewer() {
     windowTitle: '', // window mode: the streamed window's title
     clipboardText: '',
     notice: '', // what the server just told us about our last action, shown for a few seconds
+    notifications: [], // open desktop notifications, oldest first
     locked: false,
     elements: null, // the focused window's elements: {id, status, page}
     elementsOn: false,
@@ -271,6 +272,12 @@ export function createViewer() {
         }
         store.set({ windows: list });
         fetchElements();
+        break;
+      }
+      case NOTIFICATION: {
+        const n = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
+        const rest = state().notifications.filter(o => o.id !== n.id);
+        store.set({ notifications: n.closed ? rest : [...rest, n] });
         break;
       }
       case CLIPBOARD_DATA:
@@ -564,6 +571,11 @@ export function createViewer() {
     setStatsOn(on) { store.set({ statsOn: on }); inflight.clear(); stage_.decode.length = stage_.paint.length = stage_.interval.length = 0; lastPaint = 0; },
     releaseInput: () => send(BLUR, 0), // a key held on the canvas must not stay held while a text field has the keyboard
     takeControl: () => send(TAKE_CONTROL, 0),
+    // a click ('default'), an action key or 'dismiss'; a session that can't act only hides it for itself
+    notify(id, action) {
+      if (state().role === 'viewer') store.set({ notifications: state().notifications.filter(n => n.id !== id) });
+      else sendText(NOTIFY, JSON.stringify({ id, action }));
+    },
     clipboard: { read: () => api('/api/clipboard').then(r => r.text()), write: text => api('/api/clipboard', { method: 'PUT', body: text }) },
     windows: () => state().windows,
     dropNext: () => { dropNext = true; },

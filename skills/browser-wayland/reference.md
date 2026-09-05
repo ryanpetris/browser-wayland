@@ -17,6 +17,9 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `GET /api/applications` | | JSON array of **Application**: the installed launchers, for `launch` |
 | `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
 | `GET /api/windows/{id}/icon` | | the window's icon (its own, else its launcher's), SVG or PNG; `404` none |
+| `GET /api/notifications` | | JSON array of **Notification**: what applications reported and the viewers show |
+| `POST /api/notifications/{id}` | `{"action": "default" \| "<key>" \| "dismiss"}` | click, invoke an action of, or dismiss a notification; `202`, `404` |
+| `GET /api/notifications/{id}/icon` | | the notification's picture (the application's, else its launcher's); `404` none |
 | `GET /api/windows/{id}/elements` | | **Elements**; `501` without `--elements`, `503` tree unreadable, `404` unknown window |
 | `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
 | `GET /api/screenshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the whole output; `429`, `500`, `503` as for a window |
@@ -216,6 +219,70 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
     "id",
     "name",
     "categories"
+  ]
+}
+```
+
+## Notification
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Notification",
+  "description": "One notification, as the viewers and `GET /api/notifications` see it.",
+  "type": "object",
+  "properties": {
+    "actions": {
+      "description": "`[key, label]` pairs the application offers; a plain click means `default` when that key is among them",
+      "type": "array",
+      "items": {
+        "type": "array",
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "app": {
+      "description": "the application's name as it gave it",
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
+    "icon": {
+      "description": "whether `GET /api/notifications/{id}/icon` has a picture",
+      "type": "boolean"
+    },
+    "id": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "summary": {
+      "type": "string"
+    },
+    "timeout_ms": {
+      "description": "how long it is shown, ms; 0 means until closed",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "id",
+    "app",
+    "summary",
+    "body",
+    "icon",
+    "actions",
+    "timeout_ms"
   ]
 }
 ```
@@ -937,6 +1004,17 @@ Move a floating window's geometry to x y (output logical px).
     "x",
     "y"
   ],
+  "type": "object"
+}
+```
+
+### `notifications`
+
+The desktop notifications currently shown (id, app, summary, body, actions, timeout_ms): what applications reported. POST /api/notifications/{id} acts on one.
+
+```json
+{
+  "properties": {},
   "type": "object"
 }
 ```

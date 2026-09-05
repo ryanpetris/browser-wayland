@@ -227,7 +227,7 @@ impl App {
         self.send(Command::Input(msg))
     }
 
-    fn send(&self, cmd: Command) -> Result<(), ApiError> {
+    pub(crate) fn send(&self, cmd: Command) -> Result<(), ApiError> {
         self.commands.send(cmd).map_err(|_| ApiError::Unavailable("the compositor is gone".into()))
     }
 }
@@ -243,7 +243,7 @@ async fn read_icon(find: impl FnOnce() -> Option<(std::path::PathBuf, &'static s
 }
 
 /// Straight-alpha RGBA rows to PNG, on the blocking pool.
-async fn encode_png(snap: Snapshot) -> Result<Vec<u8>, ApiError> {
+pub(crate) async fn encode_png(snap: Snapshot) -> Result<Vec<u8>, ApiError> {
     let png = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
         let mut out = Vec::new();
         let mut enc = png::Encoder::new(&mut out, snap.width, snap.height);
