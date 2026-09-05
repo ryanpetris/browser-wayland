@@ -4,7 +4,7 @@
 import { KEYCODES } from './keycodes.js';
 import { TOKEN, WINDOW, api, elementsOf, snapshot, control } from './api.js';
 import { createStore } from './store.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, ROLES, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, BTN } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, ROLES, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -273,6 +273,9 @@ export function createViewer() {
         fetchElements();
         break;
       }
+      case CLIPBOARD_DATA:
+        onClipboardData(new TextDecoder().decode(new Uint8Array(buf, 1)));
+        break;
       case CLIPBOARD:
         onClipboard(new TextDecoder().decode(new Uint8Array(buf, 1)));
         break;
@@ -418,20 +421,31 @@ export function createViewer() {
   }
 
   // --- clipboard ---------------------------------------------------------------------------
-  // Desktop -> browser: text copied in an application arrives as CLIPBOARD; the browser clipboard takes it
-  // right away when the page may write, otherwise on the next gesture. Browser -> desktop: Ctrl+V (or
-  // Shift+Insert) is held back until the browser's paste event delivers the text, which goes to the
-  // desktop first, so the application pastes what the browser had.
-  let pendingClipboard = null, pendingPaste = null;
+  // Desktop -> browser: text copied in an application arrives as CLIPBOARD, an image as CLIPBOARD_DATA
+  // (its bytes are fetched from the API); the browser clipboard takes it right away when the page may
+  // write, otherwise on the next gesture. Browser -> desktop: Ctrl+V (or Shift+Insert) is held back until
+  // the browser's paste event delivers the text or image, which goes to the desktop first, so the
+  // application pastes what the browser had.
+  let pendingClipboard = null, pendingPaste = null, pasteTimer;
   function onClipboard(text) {
     pendingClipboard = text;
     store.set({ clipboardText: text });
     flushClipboard();
   }
+  function onClipboardData(mime) {
+    pendingClipboard = { mime };
+    store.set({ clipboardText: '[image]' });
+    flushClipboard();
+  }
   function flushClipboard() {
     if (pendingClipboard === null || !navigator.clipboard?.writeText) return;
-    const text = pendingClipboard;
-    navigator.clipboard.writeText(text).then(() => { if (pendingClipboard === text) pendingClipboard = null; }).catch(() => {});
+    const item = pendingClipboard;
+    const done = () => { if (pendingClipboard === item) pendingClipboard = null; };
+    if (typeof item === 'string') {
+      navigator.clipboard.writeText(item).then(done).catch(() => {});
+    } else if (window.ClipboardItem) {
+      api('/api/clipboard').then(r => r.blob()).then(blob => navigator.clipboard.write([new ClipboardItem({ [item.mime]: blob })])).then(done).catch(() => {});
+    }
   }
   const isPasteKey = e => (e.ctrlKey && e.code === 'KeyV') || (e.shiftKey && e.code === 'Insert');
   const sendKey = (code, pressed) => send(KEY, 3, dv => { dv.setUint16(1, code, true); dv.setUint8(3, pressed ? 1 : 0); });
@@ -443,6 +457,14 @@ export function createViewer() {
   document.addEventListener('paste', e => {
     if (isFormField(e.target) || state().role === 'viewer') return;
     e.preventDefault();
+    const image = [...(e.clipboardData?.items ?? [])].find(i => i.type === 'image/png')?.getAsFile();
+    if (image) {
+      // the key waits for the upload (bounded), so the application pastes this picture and not the last clipboard
+      clearTimeout(pasteTimer);
+      pasteTimer = setTimeout(flushPaste, 3000);
+      api('/api/clipboard', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: image }).then(flushPaste, flushPaste);
+      return;
+    }
     sendText(SET_CLIPBOARD, e.clipboardData?.getData('text/plain') ?? ''); // an empty browser clipboard clears the desktop's
     flushPaste();
   });
@@ -456,7 +478,7 @@ export function createViewer() {
     if (e.type === 'keydown' && isPasteKey(e)) {
       // let the browser raise its paste event (no preventDefault); forward the key after it, or soon anyway
       pendingPaste = code;
-      setTimeout(flushPaste, 150);
+      pasteTimer = setTimeout(flushPaste, 150);
       resumeAudio();
       return;
     }

@@ -24,6 +24,7 @@ use std::{
 use anyhow::{Context, Result};
 use api::ApiError;
 use axum::{
+    extract::DefaultBodyLimit,
     Extension, Json, Router,
     extract::{Path as UrlPath, Query, Request, State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode, header},
@@ -105,8 +106,8 @@ pub(crate) struct Viewers {
     /// Last WINDOWS message, replayed to a new viewer, and the list it encodes (the API's view).
     windows: Option<Bytes>,
     window_list: Vec<WindowInfo>,
-    /// The last clipboard text, from an application, the browser or the API (served on the API; not replayed to a viewer).
-    clipboard: Option<String>,
+    /// The last clipboard contents (mime, bytes), from an application, the browser or the API (served on the API; not replayed to a viewer).
+    clipboard: Option<(String, Bytes)>,
     next_id: u64,
 }
 
@@ -168,7 +169,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
                 .route("/api/windows/{id}/elements", get(api_window_elements))
                 .route("/api/windows/{id}/icon", get(api_window_icon))
                 .route("/api/token/rotate", post(api_token_rotate))
-                .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard))
+                .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard).layer(DefaultBodyLimit::max(1 + (16 << 20))))
                 .nest_service("/mcp", mcp_service(app.clone()))
                 .layer(middleware::from_fn_with_state(app.clone(), bearer)),
         )
@@ -310,17 +311,18 @@ async fn api_token_rotate(headers: HeaderMap, State(app): State<Arc<App>>) -> Re
     }
 }
 
-/// The last text a desktop application copied, or 204 if none yet.
+/// What a desktop application last copied, as text or as a PNG (its Content-Type says which), or 204 if nothing yet.
 async fn api_clipboard(State(app): State<Arc<App>>) -> Response {
     match app.clipboard() {
-        Some(text) => (NO_STORE, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
+        Some((mime, data)) => (NO_STORE, [(header::CONTENT_TYPE, if mime == api::PNG { api::PNG.to_string() } else { "text/plain; charset=utf-8".into() })], data).into_response(),
         None => (StatusCode::NO_CONTENT, NO_STORE).into_response(),
     }
 }
 
-/// The body (UTF-8 text, up to 1 MiB) becomes the desktop clipboard.
-async fn api_set_clipboard(Extension(key): Extension<Key>, State(app): State<Arc<App>>, body: String) -> Response {
-    match writable(key).and_then(|()| app.set_clipboard(body)) {
+/// The body becomes the desktop clipboard: a PNG with `Content-Type: image/png` (up to 16 MiB), else UTF-8 text (up to 1 MiB).
+async fn api_set_clipboard(Extension(key): Extension<Key>, State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> Response {
+    let png = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with(api::PNG));
+    match writable(key).and_then(|()| app.set_clipboard(if png { api::PNG } else { api::TEXT }, body)) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e) => e.into_response(),
     }

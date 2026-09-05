@@ -155,8 +155,9 @@ the route answers `501`; `503` means the tree couldn't be read (no bus, or the a
 
 `/api/input` clicks, types, presses key chords and scrolls as a user would, with coordinates relative to a
 window when you pass its id, so element rectangles can be used as they are. `/api/clipboard` reads what an
-application last copied and sets what it will paste; the viewer page bridges the same clipboard to the
-browser's (copy in an application, paste locally; Ctrl+V in the page pastes the browser's clipboard).
+application last copied, text or a PNG, and sets what it will paste; the viewer page bridges the same
+clipboard to the browser's (copy text or an image in an application, paste locally; Ctrl+V in the page
+pastes the browser's clipboard, screenshots included).
 
 ## Agents: MCP and skill
 

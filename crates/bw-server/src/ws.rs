@@ -10,7 +10,7 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use bw_core::{AxisSource, Bytes, Codec, Command, ControlMsg, ControlOp, Event, InputMsg, OutputGeometry, StreamMsg};
 use tokio::sync::mpsc;
 
-use crate::{App, Key, ViewerSession, Viewers, protocol::{self, ClientMsg, Role}};
+use crate::{App, Key, ViewerSession, Viewers, api, protocol::{self, ClientMsg, Role}};
 
 /// Close codes the page understands.
 const UNAUTHORIZED: u16 = 4001;
@@ -57,9 +57,9 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 v.window_list = list;
                 msg
             }
-            Event::Clipboard(text) => {
-                let msg = protocol::clipboard(&text);
-                v.clipboard = Some(text);
+            Event::Clipboard { mime, data } => {
+                let msg = if mime == api::PNG { protocol::clipboard_data(&mime) } else { protocol::clipboard(&String::from_utf8_lossy(&data)) };
+                v.clipboard = Some((mime, data));
                 msg
             }
         };
@@ -339,8 +339,8 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                         Some(ClientMsg::MotionAbs { x, y }) => Some(Command::Input(InputMsg::Move { x: x as f64, y: y as f64, window: Some(id) })),
                         Some(ClientMsg::Resize { css_w, css_h, .. }) => Some(Command::Control(ControlMsg { id, op: ControlOp::Resize { w: css_w as i32, h: css_h as i32 } })),
                         Some(ClientMsg::SetClipboard(text)) => {
-                            app.viewers.lock().unwrap().clipboard = Some(text.clone());
-                            Some(Command::SetClipboard(text))
+                            app.viewers.lock().unwrap().clipboard = Some((api::TEXT.into(), text.clone().into()));
+                            Some(Command::SetClipboard { mime: api::TEXT.into(), data: text.into() })
                         }
                         Some(m) => input_command(m),
                         None => None,
@@ -453,8 +453,8 @@ impl App {
             }
             ClientMsg::Control(m) if key == Key::Control => self.command_for(m).ok(),
             ClientMsg::SetClipboard(text) if key == Key::Control => {
-                v.clipboard = Some(text.clone());
-                Some(Command::SetClipboard(text))
+                v.clipboard = Some((api::TEXT.into(), text.clone().into()));
+                Some(Command::SetClipboard { mime: api::TEXT.into(), data: text.into() })
             }
             m if controls => input_command(m),
             _ => None,

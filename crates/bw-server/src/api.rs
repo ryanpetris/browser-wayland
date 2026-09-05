@@ -9,7 +9,11 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use bw_core::{Command, ControlMsg, ControlOp, InputMsg, Snapshot, SnapshotError, SnapshotReply, WindowInfo};
+use bw_core::{Bytes, Command, ControlMsg, ControlOp, InputMsg, Snapshot, SnapshotError, SnapshotReply, WindowInfo};
+
+/// The clipboard mimes the bridge carries: text (offered to clients under every text mime) and PNG.
+pub const TEXT: &str = "text/plain;charset=utf-8";
+pub const PNG: &str = "image/png";
 
 use crate::{App, apps, elements::Page};
 
@@ -131,17 +135,17 @@ impl App {
     }
 
     /// The last text a desktop application copied.
-    pub fn clipboard(&self) -> Option<String> {
+    pub fn clipboard(&self) -> Option<(String, Bytes)> {
         self.viewers.lock().unwrap().clipboard.clone()
     }
 
-    /// Text becomes the desktop clipboard (and what `clipboard()` reports); fire-and-forget like control.
-    pub fn set_clipboard(&self, text: String) -> Result<(), ApiError> {
-        if text.len() > 1 << 20 {
+    /// Text (`TEXT`) or a PNG becomes the desktop clipboard (and what `clipboard()` reports); fire-and-forget like control.
+    pub fn set_clipboard(&self, mime: &str, data: Bytes) -> Result<(), ApiError> {
+        if data.len() > if mime == PNG { 16 << 20 } else { 1 << 20 } {
             return Err(ApiError::TooLarge);
         }
-        self.viewers.lock().unwrap().clipboard = Some(text.clone());
-        self.send(Command::SetClipboard(text))
+        self.viewers.lock().unwrap().clipboard = Some((mime.to_string(), data.clone()));
+        self.send(Command::SetClipboard { mime: mime.to_string(), data: data.to_vec() })
     }
 
     /// A window action, spawn, launch or quit. Fire-and-forget: the compositor ignores unknown ids and

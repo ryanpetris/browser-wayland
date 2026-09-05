@@ -17,6 +17,9 @@ pub const CLIPBOARD: u8 = 0x07;
 pub const ROLE: u8 = 0x08;
 /// `[NOTICE][utf-8 text]`: something the page should tell its user about what it just did.
 pub const NOTICE: u8 = 0x09;
+/// A desktop application copied something that isn't text; the payload is its mime type (`image/png`)
+/// and the bytes are at `GET /api/clipboard`.
+pub const CLIPBOARD_DATA: u8 = 0x0A;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
@@ -99,6 +102,13 @@ pub fn clipboard(text: &str) -> Bytes {
     let mut b = Vec::with_capacity(1 + text.len());
     b.push(CLIPBOARD);
     b.extend_from_slice(text.as_bytes());
+    b.into()
+}
+
+pub fn clipboard_data(mime: &str) -> Bytes {
+    let mut b = Vec::with_capacity(1 + mime.len());
+    b.push(CLIPBOARD_DATA);
+    b.extend_from_slice(mime.as_bytes());
     b.into()
 }
 

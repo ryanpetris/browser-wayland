@@ -17,7 +17,7 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::{App, Key, api::ApiError};
+use crate::{App, Key, api::{self, ApiError}};
 
 pub const SKILL: &str = include_str!("../../../skills/browser-wayland/SKILL.md");
 pub const REFERENCE: &str = include_str!("../../../skills/browser-wayland/reference.md");
@@ -292,14 +292,19 @@ impl Mcp {
         self.input(&parts, InputMsg::Key { keys })
     }
 
-    #[tool(description = "The last text a desktop application copied to the clipboard (empty if none yet).")]
+    #[tool(description = "The last text a desktop application copied to the clipboard (empty if none yet). An image says so; GET /api/clipboard returns its bytes.")]
     fn clipboard_read(&self) -> ToolResult {
-        Ok(CallToolResult::success(vec![ContentBlock::text(self.app.clipboard().unwrap_or_default())]))
+        let text = match self.app.clipboard() {
+            Some((mime, data)) if mime == api::PNG => format!("[{} bytes of {mime}; GET /api/clipboard returns them]", data.len()),
+            Some((_, data)) => String::from_utf8_lossy(&data).into_owned(),
+            None => String::new(),
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Put text on the desktop clipboard, for pasting into an application.")]
+    #[tool(description = "Put text on the desktop clipboard, for pasting into an application (images go through PUT /api/clipboard).")]
     fn clipboard_write(&self, Extension(parts): Extension<Parts>, Parameters(ClipboardWriteArgs { text }): Parameters<ClipboardWriteArgs>) -> ToolResult {
-        done(self.acting(&parts).and_then(|()| self.app.set_clipboard(text)))
+        done(self.acting(&parts).and_then(|()| self.app.set_clipboard(api::TEXT, text.into())))
     }
 
     #[tool(name = "type", description = "Type text into the focused field through the keyboard layout (click it first). `\\n` is Return.")]

@@ -645,16 +645,16 @@ impl SelectionHandler for State {
             tracing::warn!("xwayland selection: {e:?}");
         }
         if ty == SelectionTarget::Clipboard
-            && let Some(mime) = mimes.as_deref().and_then(crate::clipboard::text_mime)
+            && let Some(mime) = mimes.as_deref().and_then(crate::clipboard::pick_mime)
         {
             self.read_clipboard(mime, false);
         }
     }
 
-    /// A Wayland client wants data from a compositor-owned selection: relayed from an X11 client, or our own text.
+    /// A Wayland client wants data from a compositor-owned selection: relayed from an X11 client, or our own.
     fn send_selection(&mut self, ty: SelectionTarget, mime_type: String, fd: OwnedFd, _seat: Seat<Self>, data: &crate::clipboard::Selection) {
         match data {
-            crate::clipboard::Selection::Text(text) => self.serve_clipboard(text.clone(), fd),
+            crate::clipboard::Selection::Ours(ours) => self.serve_clipboard(ours.clone(), fd),
             crate::clipboard::Selection::X11 => {
                 let handle = self.handle.clone();
                 if let Some(xwm) = self.xwm.as_mut()

@@ -163,24 +163,29 @@ the mechanism.
 
 ## Clipboard
 
-`clipboard.rs`. When a client takes the clipboard with a text mime type (`new_selection`, or the
-Xwayland path in `xwayland.rs`), the compositor asks the owner for the text through a pipe on the next
-loop idle (the request is deferred out of the selection handler and any read still in progress is
-dropped), reads it on the event loop (calloop `Generic` on the non-blocking read end, 1 MiB cap) and
-sends `Event::Clipboard`; the server keeps the last text for `GET /api/clipboard` and the `Clipboard`
-message (not replayed to a connecting viewer, whose browser clipboard may be newer). `Command::SetClipboard` makes a compositor-owned selection whose
-user data carries the text; `send_selection` writes it from a calloop source on the non-blocking pipe,
-so a slow reader never blocks the compositor, and X11 clients are offered it too. The selection user
-data distinguishes relayed X11 selections from our own. Setting the clipboard drops a read still in
-flight, so an application's older text can't land after the new one. Either pipe is closed after ten
-seconds if its peer stalls. Text only; primary selection and images are not bridged; a write over 1 MiB
-gets 413.
+`clipboard.rs`. When a client takes the clipboard offering a text mime type or `image/png`
+(`new_selection`, or the Xwayland path in `xwayland.rs`), the compositor asks the owner for it (text
+first) through a pipe on the next loop idle (the request is deferred out of the selection handler and
+any read still in progress is dropped), reads it on the event loop (calloop `Generic` on the
+non-blocking read end; 1 MiB cap for text, 16 MiB for a PNG) and sends `Event::Clipboard { mime, data }`;
+the server keeps the last one for `GET /api/clipboard`, whose Content-Type says which it is, and tells
+the viewers with the `Clipboard` message (the text itself) or `ClipboardData` (the mime only; the page
+fetches the bytes). Neither is replayed to a connecting viewer, whose browser clipboard may be newer.
+`Command::SetClipboard { mime, data }` makes a compositor-owned selection whose user data carries the
+bytes (text is offered under every text mime, a PNG as `image/png`); `send_selection` writes them from a
+calloop source on the non-blocking pipe, so a slow reader never blocks the compositor, and X11 clients
+are offered it too. The selection user data distinguishes relayed X11 selections from our own. Setting
+the clipboard drops a read still in flight, so an application's older clipboard can't land after the
+new one. Either pipe is closed after ten seconds if its peer stalls. The primary selection is not
+bridged; other image formats aren't read (GTK, Qt, Firefox and Chromium all offer PNG).
 
 The page writes received text to the browser clipboard at once when it may, otherwise on the next
-gesture. Ctrl+V and Shift+Insert are not forwarded immediately: the browser's `paste` event (which
-needs no permission) delivers the text, that goes to the desktop as `SetClipboard`, and the key
-press and release follow, so the application pastes the browser's content. If no paste event comes
-within 150 ms the key goes through on its own.
+gesture; a received image is fetched from the API and written as a `ClipboardItem`. Ctrl+V and
+Shift+Insert are not forwarded immediately: the browser's `paste` event (which needs no permission)
+delivers the text, which goes to the desktop as `SetClipboard`, or an image, which goes by `PUT
+/api/clipboard`; the key press and release follow, so the application pastes the browser's content. If
+no paste event comes within 150 ms the key goes through on its own; an image upload holds it for up to
+3 s.
 
 ## Viewers
 

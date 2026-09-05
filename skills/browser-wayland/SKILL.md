@@ -49,7 +49,8 @@ curl -s -H "$H" https://host:8443/api/windows | jq
 - `text` types a string through the keyboard layout, including punctuation and capitals; `\n` is
   Return. Click into the field first so it has focus. For longer text, put it on the clipboard
   (`PUT /api/clipboard`, tool `clipboard_write`) and press `ctrl+v` in the field; `GET /api/clipboard`
-  (tool `clipboard_read`) returns what an application last copied.
+  (tool `clipboard_read`) returns what an application last copied, text or a PNG (its Content-Type says
+  which), and a PNG body with `Content-Type: image/png` on the PUT puts an image on the clipboard.
 - `key` presses a chord and releases it: `ctrl+s`, `ctrl+shift+t`, `alt+F4`, `Return`, `Escape`,
   `Tab`, `Down`, `Prior` (Page Up), `F5`. Modifier names: `ctrl`, `shift`, `alt`, `super`. Anything
   else is an X keysym name or a single character; `ctrl+T` is the same as `ctrl+t` (write `shift` when

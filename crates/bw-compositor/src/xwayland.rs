@@ -220,12 +220,12 @@ impl XwmHandler for State {
 
     /// An X11 client wants data from a selection owned by a Wayland client.
     fn send_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_type: String, fd: OwnedFd) {
-        // our own text (from the browser or the API) is served here, not by a client
+        // our own clipboard (from the browser or the API) is served here, not by a client
         let ours = (selection == SelectionTarget::Clipboard)
-            .then(|| current_data_device_selection_userdata(&self.seat).as_deref().and_then(|s| if let crate::clipboard::Selection::Text(t) = s { Some(t.clone()) } else { None }))
+            .then(|| current_data_device_selection_userdata(&self.seat).as_deref().and_then(|s| if let crate::clipboard::Selection::Ours(o) = s { Some(o.clone()) } else { None }))
             .flatten();
-        if let Some(text) = ours {
-            self.serve_clipboard(text, fd);
+        if let Some(ours) = ours {
+            self.serve_clipboard(ours, fd);
             return;
         }
         let res = match selection {
@@ -241,9 +241,9 @@ impl XwmHandler for State {
     fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
         match selection {
             SelectionTarget::Clipboard => {
-                let text = crate::clipboard::text_mime(&mime_types);
+                let readable = crate::clipboard::pick_mime(&mime_types);
                 set_data_device_selection(&self.dh, &self.seat, mime_types, crate::clipboard::Selection::X11);
-                if let Some(mime) = text {
+                if let Some(mime) = readable {
                     self.read_clipboard(mime, true);
                 }
             }
