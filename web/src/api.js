@@ -66,4 +66,7 @@ export const queuedSnapshot = (id, scale, wanted = () => true) => {
 export const pref = {
   get: (key, fallback) => { try { const v = localStorage.getItem(`bw.${key}`); return v === null ? fallback : v === '1'; } catch { return fallback; } },
   set: (key, on) => { try { localStorage.setItem(`bw.${key}`, on ? '1' : '0'); } catch {} },
+  getStr: (key, fallback) => { try { return localStorage.getItem(`bw.${key}`) ?? fallback; } catch { return fallback; } },
+  setStr: (key, v) => { try { localStorage.setItem(`bw.${key}`, v); } catch {} },
 };
+export const codecs = async () => (await api('/api/codecs')).json();

@@ -1,6 +1,35 @@
-// One line of numbers under the display.
+// One line of numbers under the display, and this viewer's codec and quality choice.
 import { Activity, ClipboardCheck, Lock, Volume2, VolumeX } from 'lucide-react';
 import { useStore } from '../store.js';
+import { PRESETS } from '../protocol.js';
+import { codecName } from './ui.jsx';
+
+const PRESET_LABEL = { low: 'Low (2 Mbit/s, 30 fps)', medium: 'Medium (5 Mbit/s)', high: 'High (12 Mbit/s)', max: 'Max (25 Mbit/s)' };
+const mbit = kbps => `${(kbps / 1000).toFixed(kbps % 1000 ? 1 : 0)} Mbit/s`;
+
+// "Auto (HEVC)" and "Auto (5 Mbit/s)" show what Auto picked; the other entries are what both sides can do.
+function Choice({ viewer }) {
+  const st = useStore(viewer.store, s => s.streamState);
+  const choice = useStore(viewer.store, s => s.choice);
+  const codecs = useStore(viewer.store, s => s.codecs);
+  const decodable = useStore(viewer.store, s => s.decodable);
+  const status = useStore(viewer.store, s => s.status);
+  if (status !== 'connected') return null;
+  const both = codecs.filter(c => decodable.includes(c.codec));
+  const cls = 'rounded border border-zinc-700 bg-zinc-800 px-1 py-0.5 text-[11px] text-zinc-300 focus:outline-none';
+  return (
+    <>
+      <select value={choice.codec} onChange={e => viewer.setChoice({ codec: e.target.value })} className={cls} title="Video codec">
+        <option value="auto">Auto{st ? ` (${codecName(st.codec)})` : ''}</option>
+        {both.map(c => <option key={c.codec} value={c.codec}>{codecName(c.codec)}{c.hardware ? '' : ' (software)'}</option>)}
+      </select>
+      <select value={choice.quality} onChange={e => viewer.setChoice({ quality: e.target.value })} className={cls} title="Quality">
+        <option value="auto">Auto{st?.auto_quality ? ` (${mbit(st.bitrate_kbps)}${st.max_fps ? `, ${st.max_fps} fps` : ''})` : ''}</option>
+        {PRESETS.filter(p => p !== 'auto').map(p => <option key={p} value={p}>{PRESET_LABEL[p]}</option>)}
+      </select>
+    </>
+  );
+}
 
 export function StatusBar({ viewer }) {
   const s = useStore(viewer.store, st => st.stats);
@@ -20,6 +49,7 @@ export function StatusBar({ viewer }) {
         <span className="flex items-center gap-1" title={s.audio ? `audio ${s.audio.state}` : 'no audio yet'}>
           {s.audio?.state === 'running' ? <Volume2 className="size-3 text-emerald-400" /> : <VolumeX className="size-3" />}
         </span>
+        <Choice viewer={viewer} />
         <span>{renderer}</span>
       </span>
     </footer>

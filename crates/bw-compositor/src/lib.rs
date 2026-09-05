@@ -153,6 +153,8 @@ pub struct State {
     pub panels_hidden: bool,
     /// Next render redraws everything (age 0), e.g. after a viewer connects.
     pub force_full_frame: bool,
+    /// When to send the one unchanged frame that lets the encoders sharpen a settled picture.
+    pub refine_due: Option<Instant>,
 
     pub space: Space<Window>,
     pub popups: PopupManager,
@@ -300,6 +302,7 @@ impl State {
             frame_seq: 0,
             frame_interval: Duration::from_nanos(1_000_000_000_000 / cfg.initial.refresh_mhz as u64),
             last_render: Instant::now(),
+            refine_due: None,
             dirty: true,
             force_full_frame: true,
             space,

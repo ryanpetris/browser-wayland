@@ -14,7 +14,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use bw_core::{Bytes, Codec, DmabufFrame, EncodedFrame, FrameSink, OutputGeometry, SinkError, StreamControl, StreamInfo, StreamMsg};
+use bw_core::{Bytes, Codec, DmabufFrame, EncodedFrame, FrameSink, OutputGeometry, Quality, SinkError, StreamControl, StreamInfo, StreamMsg, Submit};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_allocators as gst_allocators;
@@ -338,7 +338,10 @@ struct Inner {
     prefix: String,
     /// CPU encoders on linear frames instead of the GPU's.
     software: bool,
-    bitrate_kbps: u32,
+    quality: Quality,
+    /// The last frame handed over (the frame cap), and the bitrate to restore after a refine frame.
+    last_push: std::time::Instant,
+    restore_kbps: Option<u32>,
     codec: Codec,
     /// Set by `output_changed`; the pipeline is (re)built lazily on the next frame.
     geo: Option<(OutputGeometry, u32, u64)>,
@@ -370,6 +373,11 @@ impl StreamControl for GstControl {
             GstSink(inner).set_size(size);
         }
     }
+    fn set_quality(&self, quality: Quality) {
+        if let Some(inner) = self.0.upgrade() {
+            GstSink(inner).set_quality(quality);
+        }
+    }
 }
 
 impl GstSink {
@@ -383,7 +391,9 @@ impl GstSink {
             tx,
             prefix: prefix.to_string(),
             software,
-            bitrate_kbps,
+            quality: Quality { bitrate_kbps, max_fps: u32::MAX },
+            last_push: std::time::Instant::now(),
+            restore_kbps: None,
             codec: Codec::H264,
             geo: None,
             target: None,
@@ -436,6 +446,17 @@ impl StreamControl for GstSink {
         drop(i);
         discard(old);
     }
+    fn set_quality(&self, quality: Quality) {
+        let mut i = self.0.lock().unwrap();
+        if i.quality == quality {
+            return;
+        }
+        i.quality = quality;
+        i.restore_kbps = None; // a refine boost in flight ends with the new rate
+        if let Some((stream, _)) = &i.stream {
+            set_bitrate(&stream.encoder, quality.bitrate_kbps);
+        }
+    }
 }
 
 /// Tear a pipeline down off the caller's thread: stopping it waits for streaming threads,
@@ -455,7 +476,7 @@ impl FrameSink for GstSink {
         discard(old);
     }
 
-    fn submit(&mut self, frame: DmabufFrame) -> Result<(), SinkError> {
+    fn submit(&mut self, frame: DmabufFrame) -> Result<Submit, SinkError> {
         let mut i = self.0.lock().unwrap();
         if i.stream.as_ref().is_some_and(|(s, _)| s.dead.load(Ordering::Relaxed)) {
             let old = i.take_stream();
@@ -498,7 +519,7 @@ impl Inner {
                 geo.refresh_mhz / 1000
             );
             let enc = software_encoder(self.codec).with_context(|| format!("no software encoder for {:?}", self.codec))?;
-            (head, software_tail(self.codec, enc, self.bitrate_kbps))
+            (head, software_tail(self.codec, enc, self.quality.bitrate_kbps))
         } else {
             let head = format!(
                 "{src} caps=\"video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format={},width={},height={},framerate=60/1\" \
@@ -509,7 +530,7 @@ impl Inner {
                 self.prefix
             );
             let enc = va_encoder(&self.prefix, self.codec).with_context(|| format!("no VA encoder for {:?}", self.codec))?;
-            (head, hardware_tail(self.codec, &enc, self.bitrate_kbps))
+            (head, hardware_tail(self.codec, &enc, self.quality.bitrate_kbps))
         };
         let scale = geo.scale * width as f64 / geo.width_px as f64;
         let opts = EncodeOpts { width, height, scale, codec: self.codec };
@@ -519,9 +540,26 @@ impl Inner {
         Ok(())
     }
 
-    fn push(&mut self, frame: DmabufFrame) -> Result<()> {
+    fn push(&mut self, frame: DmabufFrame) -> Result<Submit> {
         if self.stream.is_none() {
             self.start()?;
+            self.restore_kbps = None;
+        }
+        // The viewer's frame cap: a frame closer to the last than its interval waits for the next one
+        // (a refine frame never waits; it only comes when the picture stopped changing).
+        if !frame.refine && self.quality.max_fps > 0 && self.last_push.elapsed() < std::time::Duration::from_micros(990_000 / self.quality.max_fps as u64) {
+            return Ok(Submit::Held);
+        }
+        self.last_push = std::time::Instant::now();
+        // A refine frame gets four times the bitrate: the picture didn't change, so the bits go into
+        // sharpening what the motion before left rough. The next frame gets the rate back.
+        let enc = self.stream.as_ref().unwrap().0.encoder.clone();
+        if let Some(kbps) = self.restore_kbps.take() {
+            set_bitrate(&enc, kbps);
+        }
+        if frame.refine {
+            set_bitrate(&enc, self.quality.bitrate_kbps.saturating_mul(4).min(60_000));
+            self.restore_kbps = Some(self.quality.bitrate_kbps);
         }
         let mem = match self.mems.get(&frame.slot_id) {
             Some(m) => m.clone(), // frame.fd (a dup) is closed on drop; GStreamer already holds one
@@ -548,7 +586,19 @@ impl Inner {
         }
         let (_, appsrc) = self.stream.as_ref().unwrap();
         appsrc.push_buffer(buffer)?; // leaky appsrc drops on its own; the lease then frees the slot
-        Ok(())
+        Ok(Submit::Encoded)
+    }
+}
+
+/// The encoder's bitrate, live where the element allows it (the VA encoders, x264, x265 and libvpx do;
+/// the others take it at their next start).
+fn set_bitrate(enc: &gst::Element, kbps: u32) {
+    let name = enc.factory().map(|f| f.name().to_string()).unwrap_or_default();
+    match name.as_str() {
+        "vp8enc" | "vp9enc" => enc.set_property("target-bitrate", (kbps * 1000) as i32),
+        "openh264enc" => enc.set_property("bitrate", kbps * 1000),
+        "svtav1enc" => enc.set_property("target-bitrate", kbps),
+        _ => enc.set_property("bitrate", kbps),
     }
 }
 

@@ -2,9 +2,9 @@
 // React only draws the chrome around it (App.jsx) and reads what it publishes on `store`.
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
-import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile } from './api.js';
+import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, pref, codecs as serverCodecs } from './api.js';
 import { createStore } from './store.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, ROLES, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, BTN } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -24,6 +24,10 @@ export function createViewer() {
     notice: '', // what the server just told us about our last action, shown for a few seconds
     notifications: [], // open desktop notifications, oldest first
     upload: null, // { name, index, count } while files dropped on the page go up
+    streamState: null, // { codec, hardware, auto_codec, bitrate_kbps, max_fps, auto_quality } from the server
+    choice: { codec: pref.getStr('codec', 'auto'), quality: pref.getStr('quality', 'auto') }, // this viewer's picks
+    codecs: [], // what the server encodes, in Auto's order: [{ codec, hardware }]
+    decodable: [], // codec families this browser decodes at all
     filesRev: 0, // bumps when an upload finished, so the Files tab refreshes
     locked: false,
     elements: null, // the focused window's elements: {id, status, page}
@@ -163,7 +167,8 @@ export function createViewer() {
   /// A window action or spawn for the compositor, as JSON.
   const sendControl = obj => sendText(CONTROL, JSON.stringify(obj));
 
-  // Which codec families this browser decodes, in hardware and at all (bit0 H.264, bit1 HEVC, bit2 VP9, bit3 AV1, bit4 VP8).
+  // Which codec families this browser decodes, in hardware and at all (bit0 H.264, bit1 HEVC, bit2 VP9,
+  // bit3 AV1, bit4 VP8), and this viewer's codec and quality choice (0 = Auto).
   async function sendHello() {
     const probes = ['avc1.640028', 'hev1.1.6.L120.90', 'vp09.00.40.08', 'av01.0.09M.08', 'vp8'];
     let hw = 0, sw = 0;
@@ -172,7 +177,18 @@ export function createViewer() {
       if (await ok('prefer-hardware')) hw |= 1 << i;
       if (await ok('no-preference')) sw |= 1 << i;
     }
-    send(HELLO, 2, dv => { dv.setUint8(1, hw); dv.setUint8(2, sw); });
+    store.set({ decodable: CODEC_FAMILIES.filter((_, i) => sw & (1 << i)) });
+    const { codec, quality } = state().choice;
+    send(HELLO, 4, dv => { dv.setUint8(1, hw); dv.setUint8(2, sw); dv.setUint8(3, CODEC_FAMILIES.indexOf(codec) + 1); dv.setUint8(4, Math.max(0, PRESETS.indexOf(quality))); });
+    if (!state().codecs.length) serverCodecs().then(list => store.set({ codecs: list })).catch(() => {});
+  }
+  // A new codec or quality for this session, remembered for the next connection.
+  function setChoice(patch) {
+    const choice = { ...state().choice, ...patch };
+    store.set({ choice });
+    if (patch.codec !== undefined) pref.setStr('codec', patch.codec);
+    if (patch.quality !== undefined) pref.setStr('quality', patch.quality);
+    if (ws?.readyState === WebSocket.OPEN) sendText(STREAM, JSON.stringify(patch));
   }
 
   // The output takes the stage's size (CSS px × devicePixelRatio); in window mode a Resize resizes the window.
@@ -278,6 +294,9 @@ export function createViewer() {
       }
       case NOTIFICATIONS:
         store.set({ notifications: JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1))) });
+        break;
+      case STREAM_STATE:
+        store.set({ streamState: JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1))) });
         break;
       case CLIPBOARD_DATA:
         onClipboardData(new TextDecoder().decode(new Uint8Array(buf, 1)));
@@ -591,6 +610,7 @@ export function createViewer() {
     setStatsOn(on) { store.set({ statsOn: on }); inflight.clear(); stage_.decode.length = stage_.paint.length = stage_.interval.length = 0; lastPaint = 0; },
     releaseInput: () => send(BLUR, 0), // a key held on the canvas must not stay held while a text field has the keyboard
     takeControl: () => send(TAKE_CONTROL, 0),
+    setChoice,
     uploadFiles,
     // a click ('default'), an action key, or nothing to dismiss; a session that can't act only hides it for itself
     notify(id, action) {

@@ -146,9 +146,10 @@ impl State {
             slot_id,
             pts: now.into(),
             seq: s.seq,
+            refine: false,
             lease: Box::new(slot),
         });
-        s.pending = submitted.is_err(); // the tracker advanced: a retry redraws everything
-        submitted.map_err(|e| anyhow::anyhow!("{e}"))
+        s.pending = !matches!(submitted, Ok(bw_core::Submit::Encoded)); // the tracker advanced: a retry redraws everything
+        submitted.map(|_| ()).map_err(|e| anyhow::anyhow!("{e}"))
     }
 }

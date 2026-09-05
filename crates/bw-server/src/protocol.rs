@@ -1,6 +1,6 @@
 //! Binary WebSocket messages, little-endian, byte 0 = type. Mirrored in web/src/viewer.js.
 
-use bw_core::{Bytes, ControlMsg, CursorImage, EncodedFrame, StreamInfo, WindowInfo};
+use bw_core::{Bytes, Codec, ControlMsg, CursorImage, EncodedFrame, Quality, StreamInfo, WindowInfo};
 
 // server -> client
 pub const CONFIG: u8 = 0x01;
@@ -22,6 +22,9 @@ pub const NOTICE: u8 = 0x09;
 pub const CLIPBOARD_DATA: u8 = 0x0A;
 /// The open desktop notifications, as a JSON array of `Notification`, whenever they change (and in the replay).
 pub const NOTIFICATIONS: u8 = 0x0B;
+/// JSON `{"codec","hardware","auto_codec","bitrate_kbps","max_fps","auto_quality"}`: what this session's
+/// encoder does right now; after every `Config` and whenever the automatic quality changes.
+pub const STREAM_STATE: u8 = 0x0C;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
@@ -44,6 +47,9 @@ pub const SET_CLIPBOARD: u8 = 0x8C;
 pub const TAKE_CONTROL: u8 = 0x8D;
 /// JSON `{"id":N,"action":"key"}`: the viewer clicked a notification (`default`) or one of its actions; without `action` it dismissed it. Control token only.
 pub const NOTIFY: u8 = 0x8E;
+/// JSON `{"codec": "auto" | name, "quality": "auto" | "low" | "medium" | "high" | "max"}`, either field
+/// optional: this session's choice, applied live. Any session.
+pub const STREAM: u8 = 0x8F;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +115,59 @@ pub fn clipboard(text: &str) -> Bytes {
     b.into()
 }
 
+/// The codec families' names on the wire and in the API, and their `Hello` ids (0 is Auto).
+pub const CODECS: [(Codec, &str); 5] = [(Codec::H264, "h264"), (Codec::Hevc, "hevc"), (Codec::Vp9, "vp9"), (Codec::Av1, "av1"), (Codec::Vp8, "vp8")];
+
+pub fn codec_name(c: Codec) -> &'static str {
+    CODECS.iter().find(|(k, _)| *k == c).map(|(_, n)| *n).unwrap()
+}
+
+pub fn codec_named(name: &str) -> Option<Codec> {
+    CODECS.iter().find(|(_, n)| *n == name).map(|(c, _)| *c)
+}
+
+/// A viewer's quality choice: a fixed bitrate and rate, or automatic (`--bitrate` as the ceiling, adapting).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Preset {
+    #[default]
+    Auto,
+    Low,
+    Medium,
+    High,
+    Max,
+}
+
+impl Preset {
+    pub const NAMES: [(Preset, &'static str); 5] = [(Preset::Auto, "auto"), (Preset::Low, "low"), (Preset::Medium, "medium"), (Preset::High, "high"), (Preset::Max, "max")];
+
+    pub fn named(name: &str) -> Option<Preset> {
+        Self::NAMES.iter().find(|(_, n)| *n == name).map(|(p, _)| *p)
+    }
+
+    fn from_id(id: u8) -> Preset {
+        Self::NAMES.get(id as usize).map_or(Preset::Auto, |(p, _)| *p)
+    }
+
+    /// The preset's target; Auto starts at the ceiling with no frame cap.
+    pub fn quality(self, ceiling_kbps: u32) -> Quality {
+        match self {
+            Preset::Auto => Quality { bitrate_kbps: ceiling_kbps, max_fps: 0 },
+            Preset::Low => Quality { bitrate_kbps: 2000, max_fps: 30 },
+            Preset::Medium => Quality { bitrate_kbps: 5000, max_fps: 0 },
+            Preset::High => Quality { bitrate_kbps: 12000, max_fps: 0 },
+            Preset::Max => Quality { bitrate_kbps: 25000, max_fps: 0 },
+        }
+    }
+}
+
+/// What a session's encoder does, for the page's "Auto (…)" labels.
+pub fn stream_state(codec: Codec, hardware: bool, auto_codec: bool, quality: Quality, auto_quality: bool) -> Bytes {
+    let json = serde_json::json!({ "codec": codec_name(codec), "hardware": hardware, "auto_codec": auto_codec, "bitrate_kbps": quality.bitrate_kbps, "max_fps": quality.max_fps, "auto_quality": auto_quality });
+    let mut b = vec![STREAM_STATE];
+    b.extend_from_slice(json.to_string().as_bytes());
+    b.into()
+}
+
 pub fn notifications(list: &[crate::notify::Notification]) -> Bytes {
     let mut b = vec![NOTIFICATIONS];
     b.extend_from_slice(serde_json::to_string(list).unwrap().as_bytes());
@@ -141,7 +200,8 @@ pub fn audio(pts_us: u64, data: &[u8], seq: u16) -> Bytes {
 
 #[derive(Debug, PartialEq)]
 pub enum ClientMsg {
-    Hello { hw: u8, sw: u8 },
+    /// The browser's decoders and, from newer pages, its codec and quality choice.
+    Hello { hw: u8, sw: u8, codec: Option<Codec>, quality: Preset },
     Resize { css_w: u16, css_h: u16, dpr: f32 },
     MotionAbs { x: f32, y: f32 },
     MotionRel { dx: f32, dy: f32 },
@@ -156,6 +216,14 @@ pub enum ClientMsg {
     SetClipboard(String),
     TakeControl,
     Notify(NotifyMsg),
+    Stream(StreamChoice),
+}
+
+/// `{"codec": "auto" | "h264" | …, "quality": "auto" | "low" | …}`, either optional (unchanged).
+#[derive(Debug, PartialEq, Default, serde::Deserialize)]
+pub struct StreamChoice {
+    pub codec: Option<String>,
+    pub quality: Option<String>,
 }
 
 #[derive(Debug, PartialEq, serde::Deserialize)]
@@ -172,7 +240,12 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
     let u16_at = |i: usize| Some(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?));
     let f32_at = |i: usize| Some(f32::from_le_bytes(b.get(i..i + 4)?.try_into().ok()?));
     Some(match u8_at(0)? {
-        HELLO => ClientMsg::Hello { hw: u8_at(1)?, sw: u8_at(2)? },
+        HELLO => ClientMsg::Hello {
+            hw: u8_at(1)?,
+            sw: u8_at(2)?,
+            codec: u8_at(3).and_then(|id| CODECS.get(id.checked_sub(1)? as usize)).map(|(c, _)| *c),
+            quality: u8_at(4).map_or(Preset::Auto, Preset::from_id),
+        },
         RESIZE => ClientMsg::Resize { css_w: u16_at(1)?, css_h: u16_at(3)?, dpr: f32_at(5)? },
         MOTION_ABS => ClientMsg::MotionAbs { x: f32_at(1)?, y: f32_at(5)? },
         MOTION_REL => ClientMsg::MotionRel { dx: f32_at(1)?, dy: f32_at(5)? },
@@ -186,6 +259,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         SET_CLIPBOARD => ClientMsg::SetClipboard(String::from_utf8(b[1..].to_vec()).ok()?),
         TAKE_CONTROL => ClientMsg::TakeControl,
         NOTIFY => ClientMsg::Notify(serde_json::from_slice(&b[1..]).ok()?),
+        STREAM => ClientMsg::Stream(serde_json::from_slice(&b[1..]).ok()?),
         _ => return None,
     })
 }

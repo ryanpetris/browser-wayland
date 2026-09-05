@@ -18,7 +18,7 @@ export function IconButton({ icon: Icon, label, active = false, onClick, classNa
   );
 }
 
-const CODEC = { avc1: 'H.264', hev1: 'HEVC', hvc1: 'HEVC', vp09: 'VP9' };
+const CODEC = { avc1: 'H.264', hev1: 'HEVC', hvc1: 'HEVC', vp09: 'VP9', av01: 'AV1', h264: 'H.264', hevc: 'HEVC', vp9: 'VP9', av1: 'AV1', vp8: 'VP8' };
 /// The family of a WebCodecs codec string.
 export const codecName = c => CODEC[c?.split('.')[0]] ?? c;
 

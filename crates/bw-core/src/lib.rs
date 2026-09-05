@@ -282,8 +282,27 @@ pub struct DmabufFrame {
     pub slot_id: u32,
     pub pts: Duration,
     pub seq: u64,
+    /// The picture didn't change since the last frame: this one is for the encoder to spend bits on
+    /// what the motion before left rough (sent once, a moment after the last change).
+    pub refine: bool,
     /// Whatever keeps the buffer alive; dropping it frees the slot.
     pub lease: Box<dyn Any + Send + Sync>,
+}
+
+/// What one viewer's encoder aims for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Quality {
+    pub bitrate_kbps: u32,
+    /// Frames per second at most; the compositor's clock is the ceiling.
+    pub max_fps: u32,
+}
+
+/// What became of a submitted frame: handed to the encoder, or held back on purpose (a rate cap), in
+/// which case the compositor offers the next frame whole, like after an error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Submit {
+    Encoded,
+    Held,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -304,13 +323,15 @@ pub trait StreamControl: Send + Sync {
     /// Encode at this size (the frames are scaled to it) or, with none, at the frames' own; the stream
     /// restarts with a new id when it changes.
     fn set_size(&self, size: Option<(u32, u32)>);
+    /// Bitrate and frame rate, applied to the running encoder where it allows, at the next restart otherwise.
+    fn set_quality(&self, quality: Quality);
 }
 
 pub type SinkError = Box<dyn std::error::Error + Send + Sync>;
 
 pub trait FrameSink: Send {
-    /// Must not block. `Err` means the frame was not handed to the encoder.
-    fn submit(&mut self, frame: DmabufFrame) -> Result<(), SinkError>;
+    /// Must not block. `Err` means the frame was not handed to the encoder and something is wrong.
+    fn submit(&mut self, frame: DmabufFrame) -> Result<Submit, SinkError>;
     fn output_changed(&mut self, geo: OutputGeometry, fourcc: u32, modifier: u64);
 }
 

@@ -1,7 +1,10 @@
 use std::{os::fd::AsFd, sync::Arc, time::{Duration, Instant}};
 
 use anyhow::{Context, Result};
-use bw_core::DmabufFrame;
+use bw_core::{DmabufFrame, Submit};
+
+/// How long after the last change the refine frame follows.
+const REFINE_AFTER: Duration = Duration::from_millis(150);
 use smithay::{
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     wayland::compositor::SurfaceData,
@@ -82,17 +85,24 @@ impl State {
     }
 
     pub fn tick(&mut self) {
+        // The picture settled: one more frame, unchanged, for the encoders to sharpen what motion left rough.
+        let refine = !self.dirty && !self.force_full_frame && !self.viewer_sinks.is_empty() && self.refine_due.is_some_and(|t| Instant::now() >= t);
+        if refine {
+            tracing::debug!("refine frame: the picture settled");
+            self.refine_due = None;
+            self.force_full_frame = true;
+        }
         if !(self.dirty || self.force_full_frame || self.window_streams.iter().any(|s| s.pending)) {
             return;
         }
         let force = self.force_full_frame; // render_frame clears it
-        if let Err(e) = self.render_frame() {
+        if let Err(e) = self.render_frame(refine) {
             tracing::warn!("render failed: {e:#}");
         }
         self.render_window_streams(force);
     }
 
-    fn render_frame(&mut self) -> Result<()> {
+    fn render_frame(&mut self, refine: bool) -> Result<()> {
         // No free slot means the encoder still holds every buffer: skip this tick, stay dirty.
         let Some(slot) = self.gpu.swapchain.acquire()? else {
             tracing::debug!("no free swapchain slot: every frame is still with an encoder");
@@ -186,12 +196,14 @@ impl State {
                     slot_id,
                     pts: now.into(),
                     seq: self.frame_seq,
+                    refine,
                     lease: Box::new(lease.clone()),
                 })
                 .map_err(|e| anyhow::anyhow!("{e}"))
             });
             match submitted {
-                Ok(()) => encoded += 1,
+                Ok(Submit::Encoded) => encoded += 1,
+                Ok(Submit::Held) => failed = true, // a rate cap: the next frame is the whole picture again
                 Err(e) => {
                     failed = true;
                     tracing::warn!(key, "frame not encoded: {e}");
@@ -200,6 +212,7 @@ impl State {
         }
         if encoded > 0 {
             self.dirty = false;
+            self.refine_due = if refine { None } else { Some(Instant::now() + REFINE_AFTER) };
             // an encoder has it: the closest thing to "presented" without a display; no MSC, so seq 0
             feedback.presented(now, Refresh::Fixed(self.frame_interval), 0, wp_presentation_feedback::Kind::empty());
         } else {

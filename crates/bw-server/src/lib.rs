@@ -56,8 +56,11 @@ pub struct Config {
     pub listen: SocketAddr,
     pub tls: bool,
     pub codec: CodecPolicy,
-    /// What the encoder side can produce (`bw_stream::codecs`), best first.
+    /// What the encoder side can produce (`bw_stream::codecs`), best first, and whether on the CPU.
     pub codecs: Vec<Codec>,
+    pub software: bool,
+    /// `--bitrate`: what a viewer on Auto starts at and never exceeds.
+    pub bitrate_kbps: u32,
     /// The compositor's frame clock, which every resize keeps.
     pub refresh_mhz: i32,
     /// Where `cert.pem`, `key.pem` and `token` live.
@@ -89,6 +92,8 @@ pub struct App {
     commands: calloop::channel::Sender<Command>,
     policy: CodecPolicy,
     codecs: Vec<Codec>,
+    software: bool,
+    bitrate_kbps: u32,
     viewers: Mutex<Viewers>,
     sinks: SinkFactory,
     /// Event senders of the window-stream sessions (cursor, clipboard, window list go to them too).
@@ -138,8 +143,15 @@ pub(crate) struct ViewerSession {
     audio_seq: u16,
     /// The viewer's stage in device pixels, from its last Resize.
     size: Option<OutputGeometry>,
-    /// Its encoder: codec, size and keyframes.
+    /// Its encoder: codec, size, quality and keyframes.
     control: Box<dyn StreamControl>,
+    /// What the browser decodes (the `Hello` masks), what it asked for, and what it got.
+    hw: u8,
+    sw: u8,
+    want_codec: Option<Codec>,
+    codec: Codec,
+    preset: protocol::Preset,
+    quality: bw_core::Quality,
 }
 
 /// `audio_rx` carries the clients' Opus packets, for every viewer.
@@ -153,6 +165,8 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         commands,
         policy: cfg.codec,
         codecs: cfg.codecs,
+        software: cfg.software,
+        bitrate_kbps: cfg.bitrate_kbps,
         viewers: Mutex::new(Viewers { output: bw_core::OutputGeometry { refresh_mhz: cfg.refresh_mhz, ..bw_core::INITIAL_OUTPUT }, ..Default::default() }),
         sinks: cfg.sinks,
         window_viewers: Mutex::default(),
@@ -179,6 +193,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         .merge(
             Router::new()
                 .route("/api/windows", get(api_windows))
+                .route("/api/codecs", get(api_codecs))
                 .route("/api/applications", get(api_applications))
                 .route("/api/applications/{id}/icon", get(api_application_icon))
                 .route("/api/control", post(api_control))
@@ -269,6 +284,12 @@ fn writable(key: Key) -> Result<(), ApiError> {
 }
 
 const NO_STORE: [(header::HeaderName, &str); 1] = [(header::CACHE_CONTROL, "no-store")];
+
+/// The codecs this server encodes, in the order Auto prefers them, and whether on the GPU.
+async fn api_codecs(State(app): State<Arc<App>>) -> Response {
+    let list: Vec<serde_json::Value> = app.codecs.iter().map(|&c| serde_json::json!({ "codec": protocol::codec_name(c), "hardware": !app.software })).collect();
+    (NO_STORE, Json(list)).into_response()
+}
 
 async fn api_windows(State(app): State<Arc<App>>) -> Response {
     (NO_STORE, Json(app.windows())).into_response()

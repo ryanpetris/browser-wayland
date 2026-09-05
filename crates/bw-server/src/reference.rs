@@ -11,6 +11,7 @@ const ROUTES: &str = "\
 | Method and path | Body or query | Result |
 |---|---|---|
 | `GET /api/windows` | | JSON array of **Window** |
+| `GET /api/codecs` | | JSON array of `{codec, hardware}`: what this server encodes, in the order Auto prefers |
 | `GET /api/applications` | | JSON array of **Application**: the installed launchers, for `launch` |
 | `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
 | `GET /api/windows/{id}/icon` | | the window's icon (its own, else its launcher's), SVG or PNG; `404` none |
