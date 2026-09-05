@@ -2,8 +2,8 @@
 
 A headless Wayland compositor whose screen is a browser tab. Clients render on the GPU, the
 composited frame is hardware-encoded with VA-API (AV1, HEVC, VP9 or H.264, whichever the browser
-decodes best and the GPU encodes) and streamed over a WebSocket, and the browser decodes it with WebCodecs. Mouse, keyboard,
-audio and the clipboard travel the same way.
+decodes best and the GPU encodes) and streamed over a WebSocket, and the browser decodes it with
+WebCodecs. Mouse, keyboard, audio and the clipboard travel the same way.
 
 Design notes: [docs/architecture.md](docs/architecture.md), [docs/protocol.md](docs/protocol.md),
 [docs/panels.md](docs/panels.md), [docs/desktop-api.md](docs/desktop-api.md), [docs/mcp.md](docs/mcp.md).

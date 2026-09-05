@@ -151,7 +151,7 @@ pipeline of the shape
 
 ```
 appsrc (memory:DMABuf, DMA_DRM caps) ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width=W,height=H
-  ! va{h264,h265,vp9}enc ! {h264,h265,vp9}parse ! appsink
+  ! va{h264,h265,vp9,av1}enc ! {h264,h265,vp9,av1}parse ! appsink
 ```
 
 with low-latency encoder settings (constant bitrate from `--bitrate`, no B-frames, one reference);
@@ -160,7 +160,10 @@ order; while a socket is busy, `appsrc` drops raw frames before the encoder, so 
 a frame the viewer missed. A decoder error on the page asks for a keyframe (`UpstreamForceKeyUnitEvent`)
 plus `Command::RequestFullFrame`, since without damage no frame would be produced. Codec choice comes
 from each browser's `VideoDecoder.isConfigSupported` probes, among the codecs the GPU encodes (the VA
-elements the driver registered): hardware AV1, then HEVC, VP9, H.264, unless `--codec` pins one. A resize, size or codec change tears the pipeline down and rebuilds it with a new
+elements the driver registered for the render node, low-power variants included): `--codec` when both
+sides can, else hardware AV1, then HEVC, VP9, H.264, else any the browser decodes; a browser with none
+in common is closed. The AV1 and VP9 codec strings carry a level chosen from the picture size, not read
+from the stream. A resize, size or codec change tears the pipeline down and rebuilds it with a new
 stream id; the page resets its decoder when it sees a new id. Pipeline errors reach the server through a bus
 sync handler (freed with the pipeline; a watching thread would outlive it).
 

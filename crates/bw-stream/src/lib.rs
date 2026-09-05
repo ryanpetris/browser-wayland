@@ -55,45 +55,61 @@ struct EncodeOpts {
     codec: Codec,
 }
 
-/// Encoder + parser for a codec, producing one WebCodecs chunk per buffer.
-fn encode_tail(codec: Codec, bitrate_kbps: u32) -> String {
-    let common = format!("name=enc rate-control=cbr bitrate={bitrate_kbps} target-usage=7 ref-frames=1");
+/// Encoder + parser for a codec, producing one WebCodecs chunk per buffer. `enc` is the VA encoder element.
+fn encode_tail(codec: Codec, enc: &str, bitrate_kbps: u32) -> String {
+    let common = format!("{enc} name=enc rate-control=cbr bitrate={bitrate_kbps} target-usage=7 ref-frames=1");
     match codec {
         Codec::H264 => format!(
-            "vah264enc {common} b-frames=0 ! video/x-h264,profile=high ! h264parse config-interval=-1 \
+            "{common} b-frames=0 ! video/x-h264,profile=high ! h264parse config-interval=-1 \
              ! video/x-h264,stream-format=byte-stream,alignment=au"
         ),
         Codec::Hevc => format!(
-            "vah265enc {common} b-frames=0 ! video/x-h265,profile=main ! h265parse config-interval=-1 \
+            "{common} b-frames=0 ! video/x-h265,profile=main ! h265parse config-interval=-1 \
              ! video/x-h265,stream-format=byte-stream,alignment=au"
         ),
-        Codec::Vp9 => format!("vavp9enc {common} ! vp9parse ! video/x-vp9"),
+        Codec::Vp9 => format!("{common} ! vp9parse ! video/x-vp9"),
         // low-overhead OBUs, one temporal unit per buffer: what WebCodecs takes; the encoder puts a
         // sequence header in every keyframe's unit
-        Codec::Av1 => format!("vaav1enc {common} ! av1parse ! video/x-av1,stream-format=obu-stream,alignment=tu"),
+        Codec::Av1 => format!("{common} ! av1parse ! video/x-av1,stream-format=obu-stream,alignment=tu"),
     }
 }
 
-/// The codecs the GPU encodes: those whose VA element the driver registered.
-pub fn hardware_codecs() -> Vec<Codec> {
+/// The name prefix of the VA elements for a render node: `va` for the driver's first device,
+/// `va<node>` (as in `varenderD129h264enc`) for another.
+pub fn va_prefix(render_node: &std::path::Path) -> String {
+    match render_node.file_name().and_then(|n| n.to_str()) {
+        Some(node) if node != "renderD128" => format!("va{node}"),
+        _ => "va".into(),
+    }
+}
+
+/// The VA encoder element for a codec on the device: the regular one, else the low-power one.
+fn va_encoder(prefix: &str, codec: Codec) -> Option<String> {
+    let base = match codec {
+        Codec::H264 => "h264",
+        Codec::Hevc => "h265",
+        Codec::Vp9 => "vp9",
+        Codec::Av1 => "av1",
+    };
+    ["enc", "lpenc"].iter().map(|kind| format!("{prefix}{base}{kind}")).find(|name| gst::ElementFactory::find(name).is_some())
+}
+
+/// The codecs the GPU encodes: those whose VA element the driver registered, best first.
+pub fn hardware_codecs(prefix: &str) -> Vec<Codec> {
     if gst::init().is_err() {
         return vec![];
     }
-    [(Codec::H264, "vah264enc"), (Codec::Hevc, "vah265enc"), (Codec::Vp9, "vavp9enc"), (Codec::Av1, "vaav1enc")]
-        .into_iter()
-        .filter(|(_, e)| gst::ElementFactory::find(e).is_some())
-        .map(|(c, _)| c)
-        .collect()
+    [Codec::Av1, Codec::Hevc, Codec::Vp9, Codec::H264].into_iter().filter(|&c| va_encoder(prefix, c).is_some()).collect()
 }
 
 static STREAM_SEQ: AtomicU32 = AtomicU32::new(1);
 
-/// Build `<head> ! vah264enc ! h264parse ! appsink` and start it. `head` must end at NV12/VAMemory.
-fn build(head: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<Stream> {
+/// Build `<head> ! <encoder> ! <parser> ! appsink` and start it. `head` must end at NV12/VAMemory.
+fn build(head: &str, enc: &str, opts: EncodeOpts, tx: mpsc::Sender<StreamMsg>) -> Result<Stream> {
     let stream_id = STREAM_SEQ.fetch_add(1, Ordering::Relaxed);
     let desc = format!(
         "{head} ! {} ! appsink name=sink sync=false max-buffers=0",
-        encode_tail(opts.codec, opts.bitrate_kbps)
+        encode_tail(opts.codec, enc, opts.bitrate_kbps)
     );
     let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
     let encoder = pipeline.by_name("enc").context("enc element")?;
@@ -272,6 +288,8 @@ pub struct GstSink(Arc<Mutex<Inner>>);
 
 struct Inner {
     tx: mpsc::Sender<StreamMsg>,
+    /// `va` or `va<node>`: which device's elements (see `va_prefix`).
+    prefix: String,
     bitrate_kbps: u32,
     codec: Codec,
     /// Set by `output_changed`; the pipeline is (re)built lazily on the next frame.
@@ -311,10 +329,11 @@ impl GstSink {
         GstControl(Arc::downgrade(&self.0))
     }
 
-    pub fn new(bitrate_kbps: u32, tx: mpsc::Sender<StreamMsg>) -> Result<GstSink> {
+    pub fn new(bitrate_kbps: u32, prefix: &str, tx: mpsc::Sender<StreamMsg>) -> Result<GstSink> {
         gst::init()?;
         Ok(GstSink(Arc::new(Mutex::new(Inner {
             tx,
+            prefix: prefix.to_string(),
             bitrate_kbps,
             codec: Codec::H264,
             geo: None,
@@ -417,14 +436,16 @@ impl Inner {
         let head = format!(
             "appsrc name=src is-live=true format=time do-timestamp=true block=false max-buffers=2 leaky-type=downstream \
              caps=\"video/x-raw(memory:DMABuf),format=DMA_DRM,drm-format={},width={},height={},framerate=60/1\" \
-             ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={width},height={height}",
+             ! {}postproc ! video/x-raw(memory:VAMemory),format=NV12,width={width},height={height}",
             drm_format_string(fourcc, modifier),
             geo.width_px,
-            geo.height_px
+            geo.height_px,
+            self.prefix
         );
         let scale = geo.scale * width as f64 / geo.width_px as f64;
         let opts = EncodeOpts { width, height, scale, bitrate_kbps: self.bitrate_kbps, codec: self.codec };
-        let stream = build(&head, opts, self.tx.clone())?;
+        let enc = va_encoder(&self.prefix, self.codec).with_context(|| format!("no VA encoder for {:?}", self.codec))?;
+        let stream = build(&head, &enc, opts, self.tx.clone())?;
         let appsrc = stream.pipeline.by_name("src").unwrap().downcast::<gst_app::AppSrc>().unwrap();
         self.stream = Some((stream, appsrc));
         Ok(())
@@ -471,12 +492,12 @@ fn drm_format_string(fourcc: u32, modifier: u64) -> String {
     if modifier == 0 { code } else { format!("{code}:0x{modifier:016x}") }
 }
 
-/// `(fourcc, modifier)` pairs vapostproc advertises for `memory:DMABuf` input: what the compositor may render into.
-pub fn accepted_formats() -> Vec<(u32, u64)> {
+/// `(fourcc, modifier)` pairs the device's vapostproc advertises for `memory:DMABuf` input: what the compositor may render into.
+pub fn accepted_formats(prefix: &str) -> Vec<(u32, u64)> {
     if gst::init().is_err() {
         return vec![];
     }
-    let Some(factory) = gst::ElementFactory::find("vapostproc") else { return vec![] };
+    let Some(factory) = gst::ElementFactory::find(&format!("{prefix}postproc")) else { return vec![] };
     let mut out = vec![];
     for tmpl in factory.static_pad_templates() {
         if tmpl.direction() != gst::PadDirection::Sink {

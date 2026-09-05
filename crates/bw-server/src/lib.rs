@@ -37,7 +37,7 @@ use bw_core::{Bytes, Codec, Command, ControlMsg, Event, FrameSink, InputMsg, Out
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager};
 use tokio::sync::mpsc;
 
-/// `None` = automatic: HEVC, then VP9, then H.264, first one the browser decodes in hardware.
+/// `None` = automatic: the first of the available codecs (best first) the browser decodes in hardware, else at all.
 pub type CodecPolicy = Option<Codec>;
 /// Makes an encoder for one viewer or window stream: the sink the compositor feeds and a control
 /// handle that must not keep the pipeline alive (the stream ends when the compositor drops the sink).

@@ -165,7 +165,7 @@ export function createViewer() {
 
   // Which codec families this browser decodes, in hardware and at all (bit0 H.264, bit1 HEVC, bit2 VP9, bit3 AV1).
   async function sendHello() {
-    const probes = ['avc1.640028', 'hev1.1.6.L120.90', 'vp09.00.40.08', 'av01.0.08M.08'];
+    const probes = ['avc1.640028', 'hev1.1.6.L120.90', 'vp09.00.40.08', 'av01.0.09M.08'];
     let hw = 0, sw = 0;
     for (const [i, codec] of probes.entries()) {
       const ok = async hardwareAcceleration => (await VideoDecoder.isConfigSupported({ codec, hardwareAcceleration }).catch(() => ({}))).supported;

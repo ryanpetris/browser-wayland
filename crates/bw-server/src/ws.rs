@@ -140,7 +140,8 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
             return close(&mut socket, GONE, "no encoder").await;
         }
     };
-    control.set_codec(app.choose_codec(hw, sw));
+    let Some(codec) = app.choose_codec(hw, sw) else { return close(&mut socket, GONE, "no codec in common").await };
+    control.set_codec(codec);
     let (etx, mut erx) = mpsc::channel::<Bytes>(32);
     let (atx, mut arx) = mpsc::channel::<Bytes>(4);
     let notifications = protocol::notifications(&app.notifications()); // its own lock: never inside the viewers'
@@ -261,7 +262,8 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
             return close(&mut socket, GONE, "no encoder").await;
         }
     };
-    control.set_codec(app.choose_codec(hw, sw));
+    let Some(codec) = app.choose_codec(hw, sw) else { return close(&mut socket, GONE, "no codec in common").await };
+    control.set_codec(codec);
     static KEY: AtomicU64 = AtomicU64::new(1);
     let stream = KEY.fetch_add(1, Ordering::Relaxed);
     let (etx, mut erx) = mpsc::channel::<Bytes>(32);
@@ -413,24 +415,23 @@ impl App {
     }
 
     /// Pick the codec for a browser whose `hw` mask passed the prefer-hardware probe and `sw` the plain one
-    /// (bit0 H.264, bit1 HEVC, bit2 VP9, bit3 AV1), among those the GPU encodes.
-    fn choose_codec(&self, hw: u8, sw: u8) -> Codec {
+    /// (bit0 H.264, bit1 HEVC, bit2 VP9, bit3 AV1), among those the encoder side produces (best first):
+    /// `--codec` if both sides can, else the first the browser decodes in hardware, else at all; none is `None`.
+    fn choose_codec(&self, hw: u8, sw: u8) -> Option<Codec> {
         let bit = |c: Codec| match c {
             Codec::H264 => 1,
             Codec::Hevc => 2,
             Codec::Vp9 => 4,
             Codec::Av1 => 8,
         };
-        let can = |c: &Codec| self.codecs.contains(c);
-        let preferred = [Codec::Av1, Codec::Hevc, Codec::Vp9, Codec::H264].into_iter().filter(can);
-        let fallback = || self.codecs.first().copied().unwrap_or(Codec::H264);
+        let usable = |mask: u8| self.codecs.iter().copied().find(|&c| mask & bit(c) != 0);
         match self.policy {
-            Some(c) if sw & bit(c) != 0 && can(&c) => c,
+            Some(c) if sw & bit(c) != 0 && self.codecs.contains(&c) => Some(c),
             Some(c) => {
-                tracing::warn!(?c, "the browser can't decode the requested codec or the GPU can't encode it; picking another");
-                fallback()
+                tracing::warn!(?c, "the browser can't decode the requested codec or the encoder can't produce it; picking another");
+                usable(hw).or_else(|| usable(sw))
             }
-            None => preferred.clone().find(|&c| hw & bit(c) != 0).or_else(|| preferred.clone().find(|&c| sw & bit(c) != 0)).unwrap_or_else(fallback),
+            None => usable(hw).or_else(|| usable(sw)),
         }
     }
 

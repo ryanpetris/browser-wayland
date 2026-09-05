@@ -91,8 +91,10 @@ fn main() -> Result<()> {
         "av1" => Some(Codec::Av1),
         _ => None,
     };
-    let codecs = bw_stream::hardware_codecs();
-    anyhow::ensure!(!codecs.is_empty(), "no VA-API video encoder found (gst-plugin-va and a driver for this GPU are needed)");
+    let va = bw_stream::va_prefix(&cli.render_node);
+    let codecs = bw_stream::hardware_codecs(&va);
+    anyhow::ensure!(!codecs.is_empty(), "no VA-API video encoder found for {} (gst-plugin-va and a driver for this GPU are needed)", cli.render_node.display());
+    anyhow::ensure!(codec.is_none_or(|c| codecs.contains(&c)), "this GPU has no {codec:?} encoder; it has {codecs:?}");
     tracing::info!(?codecs, "hardware encoders");
     let (audio_tx, audio_rx) = mpsc::channel(16);
     let (events_tx, events_rx) = mpsc::unbounded_channel();
@@ -110,8 +112,9 @@ fn main() -> Result<()> {
 
     // one encoder per viewer and per window stream, made when the session starts
     let bitrate = cli.bitrate;
+    let va_for_sinks = va.clone();
     let sinks: bw_server::SinkFactory = Box::new(move |tx| {
-        let sink = bw_stream::GstSink::new(bitrate, tx)?;
+        let sink = bw_stream::GstSink::new(bitrate, &va_for_sinks, tx)?;
         Ok((Box::new(sink.clone()) as Box<dyn FrameSink>, Box::new(sink.control()) as Box<dyn StreamControl>))
     });
     let mut exec_env: Vec<(String, String)> = audio.as_ref().map(|(sink, _)| ("PULSE_SINK".to_string(), sink.name.clone())).into_iter().collect();
@@ -119,7 +122,7 @@ fn main() -> Result<()> {
         // GTK always publishes its tree; Firefox and Qt only when asked. (Chromium needs --force-renderer-accessibility.)
         exec_env.extend([("GNOME_ACCESSIBILITY", "1"), ("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1")].map(|(k, v)| (k.to_string(), v.to_string())));
     }
-    let accepted_formats = bw_stream::accepted_formats();
+    let accepted_formats = bw_stream::accepted_formats(&va);
     tracing::info!(?accepted_formats, "vapostproc dmabuf import formats (fourcc, modifier)");
     let bw_compositor::CompositorHandle { commands, socket_name, x11_display, join } = bw_compositor::spawn(
         bw_compositor::Config {
