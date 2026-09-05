@@ -7,12 +7,12 @@ use smithay::{
     input::pointer::CursorImageSurfaceData,
     backend::{
         allocator::dmabuf::Dmabuf,
+        input::KeyState,
         renderer::ImportDma,
     },
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale, delegate_layer_shell,
     delegate_output, delegate_pointer_constraints, delegate_primary_selection, delegate_relative_pointer, delegate_seat,
     delegate_shm, delegate_drm_syncobj, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
-    backend::input::KeyState,
     desktop::{
         LayerSurface, PopupKind, Window, WindowSurface, WindowSurfaceType, find_popup_root_surface, get_popup_toplevel_coords,
         layer_map_for_output,
@@ -105,7 +105,7 @@ impl From<KeyboardFocus> for WlSurface {
     fn from(f: KeyboardFocus) -> Self {
         match f {
             KeyboardFocus::Wayland(s) => s,
-            KeyboardFocus::X11(x) => x.wl_surface().expect("a focused X11 window is mapped"),
+            KeyboardFocus::X11(_) => unreachable!("popup grab roots are xdg surfaces"),
         }
     }
 }

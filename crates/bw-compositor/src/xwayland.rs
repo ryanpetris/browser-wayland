@@ -27,7 +27,7 @@ use smithay::{
     },
 };
 
-use crate::{State, grabs};
+use crate::{State, grabs, handlers::KeyboardFocus};
 
 /// Geometry to go back to after maximize/fullscreen.
 type Restore = std::cell::RefCell<Option<Rectangle<i32, Logical>>>;
@@ -120,7 +120,7 @@ impl XwmHandler for State {
             self.forget_window(&win);
         }
         // the X11Surface outlives its unmap, so the keyboard would keep it (and a remap would bring no new enter)
-        if self.seat.get_keyboard().unwrap().current_focus() == Some(crate::handlers::KeyboardFocus::X11(window)) {
+        if self.seat.get_keyboard().unwrap().current_focus() == Some(KeyboardFocus::X11(window)) {
             let next = self.top_window();
             self.focus_window(next.as_ref(), smithay::utils::SERIAL_COUNTER.next_serial());
         }
@@ -160,6 +160,9 @@ impl XwmHandler for State {
         for w in self.full_stack().into_iter().filter(|w| w.x11_surface().is_some()) {
             self.forget_window(&w);
             self.space.unmap_elem(&w);
+        }
+        if matches!(self.seat.get_keyboard().unwrap().current_focus(), Some(KeyboardFocus::X11(_))) {
+            self.focus_window(None, smithay::utils::SERIAL_COUNTER.next_serial());
         }
         self.x11_display = None;
         self.dirty = true;
@@ -212,7 +215,7 @@ impl XwmHandler for State {
     /// X11 clients may read a Wayland-owned selection only while an X11 window has keyboard focus.
     fn allow_selection_access(&mut self, _xwm: XwmId, _selection: SelectionTarget) -> bool {
         let Some(keyboard) = self.seat.get_keyboard() else { return false };
-        matches!(keyboard.current_focus(), Some(crate::handlers::KeyboardFocus::X11(_)))
+        matches!(keyboard.current_focus(), Some(KeyboardFocus::X11(_)))
     }
 
     /// An X11 client wants data from a selection owned by a Wayland client.

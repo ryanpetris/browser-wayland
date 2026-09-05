@@ -123,8 +123,9 @@ iconify goes through the same minimize code. The keyboard focuses an X11 window 
 `WM_TAKE_FOCUS` (X input focus, the take-focus message, or both); an X11 client that only ever saw its
 surface focused gets no `FocusIn`, and Chromium, for one, then opens no menus. Clicks on
 override-redirect windows (X11 menus, tooltips) leave the focus alone, and an unmapped window hands it
-to the top-most one left. Xwayland gets no relative-pointer motion unless a lock is active: with a
-delta next to the absolute motion it moved its pointer twice when a button followed in the same frame.
+to the top-most one left. The frame that moves the pointer onto a new surface carries no
+relative-pointer delta: Xwayland warps its device to the entry point and would apply the delta on top,
+which put a synthesized click far from its target.
 
 **Panels and taskbars.** wlr-layer-shell and a hand-written wlr-foreign-toplevel-management (v2)
 make waybar and xfce4-panel work as ordinary clients. Details in [panels.md](panels.md).

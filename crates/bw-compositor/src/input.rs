@@ -12,14 +12,13 @@ use smithay::{
     },
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{self, ResizeEdge},
-        wayland_server::{Resource, protocol::wl_surface::WlSurface},
+        wayland_server::protocol::wl_surface::WlSurface,
     },
     utils::{Logical, Point, SERIAL_COUNTER, Serial},
     wayland::{
         pointer_constraints::{PointerConstraint, with_pointer_constraint},
         shell::wlr_layer::Layer,
     },
-    xwayland::XWaylandClientData,
 };
 
 use crate::{
@@ -271,11 +270,12 @@ impl State {
         ));
         self.pointer_location = location;
         let under = self.surface_under(location);
+        // relative-pointer clients get the delta too, except on the frame that enters a new surface: the
+        // pointer arrived there from nowhere they know of, and Xwayland, which warps its device to the
+        // entry point, would move it by the delta a second time
+        let entered = pointer.current_focus() != under.as_ref().map(|(s, _)| s.clone());
         pointer.motion(self, under.clone(), &MotionEvent { location, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
-        // relative-pointer clients get the delta too, except Xwayland: given both in one frame it moves its
-        // pointer by the delta a second time when a button follows (its own locks take the branch above)
-        let xwayland = under.as_ref().is_some_and(|(s, _)| s.client().is_some_and(|c| c.get_data::<XWaylandClientData>().is_some()));
-        if !xwayland {
+        if !entered {
             pointer.relative_motion(self, under.clone(), &relative);
         }
         pointer.frame(self);
@@ -400,9 +400,8 @@ impl State {
                 if !pointer.is_grabbed() {
                     // click-to-focus and raise
                     let clicked = self.space.element_under(self.pointer_location).map(|(w, _)| w.clone());
-                    if clicked.as_ref().is_some_and(|w| w.x11_surface().is_some_and(|x| x.is_override_redirect())) {
-                        // an X11 menu or tooltip: its client holds the grab, the focus stays with its window
-                    } else {
+                    // except on an X11 menu or tooltip: its client holds the grab, the focus stays with its window
+                    if !clicked.as_ref().is_some_and(|w| w.x11_surface().is_some_and(|x| x.is_override_redirect())) {
                         self.focus_window(clicked.as_ref(), serial);
                     }
                     if clicked.is_none() {
