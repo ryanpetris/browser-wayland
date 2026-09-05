@@ -523,7 +523,7 @@ export function createViewer() {
   });
 
   // Keys go to the desktop from anywhere in the page except its own controls (a focused button keeps Enter and Space).
-  const isFormField = t => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLButtonElement;
+  const isFormField = t => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLButtonElement || t instanceof HTMLSelectElement;
   function onKey(e) {
     if (isFormField(e.target) || !driving()) return;
     const code = KEYCODES[e.code];

@@ -391,7 +391,7 @@ impl GstSink {
             tx,
             prefix: prefix.to_string(),
             software,
-            quality: Quality { bitrate_kbps, max_fps: u32::MAX },
+            quality: Quality { bitrate_kbps, max_fps: 0 },
             last_push: std::time::Instant::now(),
             restore_kbps: None,
             codec: Codec::H264,
@@ -547,17 +547,19 @@ impl Inner {
         }
         // The viewer's frame cap: a frame closer to the last than its interval waits for the next one
         // (a refine frame never waits; it only comes when the picture stopped changing).
-        if !frame.refine && self.quality.max_fps > 0 && self.last_push.elapsed() < std::time::Duration::from_micros(990_000 / self.quality.max_fps as u64) {
+        if !frame.refine && self.quality.max_fps > 0 && self.last_push.elapsed() < std::time::Duration::from_micros(900_000 / self.quality.max_fps as u64) {
             return Ok(Submit::Held);
         }
         self.last_push = std::time::Instant::now();
-        // A refine frame gets four times the bitrate: the picture didn't change, so the bits go into
-        // sharpening what the motion before left rough. The next frame gets the rate back.
+        // A refine frame gets four times the bitrate with the CPU encoders, which take a new rate in
+        // stride: the picture didn't change, so the bits go into sharpening what the motion before left
+        // rough, and the next frame gets the rate back. The VA encoders open a new GOP on every rate
+        // change, so there the refine frame is a plain one and CBR spends its usual budget on the residual.
         let enc = self.stream.as_ref().unwrap().0.encoder.clone();
         if let Some(kbps) = self.restore_kbps.take() {
             set_bitrate(&enc, kbps);
         }
-        if frame.refine {
+        if frame.refine && self.software {
             set_bitrate(&enc, self.quality.bitrate_kbps.saturating_mul(4).min(60_000));
             self.restore_kbps = Some(self.quality.bitrate_kbps);
         }

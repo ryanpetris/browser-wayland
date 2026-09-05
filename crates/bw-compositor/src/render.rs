@@ -99,7 +99,7 @@ impl State {
         if let Err(e) = self.render_frame(refine) {
             tracing::warn!("render failed: {e:#}");
         }
-        self.render_window_streams(force);
+        self.render_window_streams(force && !refine); // a refine is the desktop's; the windows didn't change
     }
 
     fn render_frame(&mut self, refine: bool) -> Result<()> {

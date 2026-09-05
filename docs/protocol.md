@@ -40,7 +40,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x08` | Role | `u8`: what this session may do. 0 watch only (the viewer token); 1 act but not drive (a control token while another session controls); 2 control: its pointer, keyboard and window size are the desktop's. Sent with the replay after `Hello` and whenever it changes. |
 | `0x09` | Notice | UTF-8 text about the session's last action, for the page to show briefly. Sent to a window stream whose press aims past the desktop's edge at an X11 window: Xwayland's screen is the desktop, and the X server pins the pointer to it, so that click cannot arrive. |
 | `0x0A` | ClipboardData | A desktop application put something other than text on the clipboard; the payload is its mime type (`image/png`). The bytes are at `GET /api/clipboard`; the page fetches them and writes them to the browser clipboard. |
-| `0x0C` | StreamState | JSON `{"codec", "hardware", "auto_codec", "bitrate_kbps", "max_fps", "auto_quality"}`: what this session's encoder does right now (`max_fps` 0: the compositor's rate), after every `Config` and whenever the automatic quality changes; the page labels its Auto entries with it. |
+| `0x0C` | StreamState | JSON `{"codec", "auto_codec", "bitrate_kbps", "max_fps", "auto_quality"}`: what this session's encoder does right now (`max_fps` 0: the compositor's rate), after every `Config` and whenever the automatic quality changes; the page labels its Auto entries with it. |
 | `0x0B` | Notifications | JSON array of the open desktop notifications, oldest first, whenever they change and in the replay: each has `id`, `rev` (counts up when the application replaces it), `app`, `summary`, `body`, `icon` (whether `GET /api/notifications/{id}/icon` has a picture), `actions` as `[key, label]` pairs, and `timeout_ms` (0: until closed). |
 
 ### Client → server
@@ -60,9 +60,9 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x8A` | PointerLockLost | none. The browser lost its lock (Escape): the client's lock is released and not re-taken until the next click. |
 | `0x8B` | Control | JSON control message (below). |
 | `0x8C` | SetClipboard | UTF-8 text the browser pasted; it becomes the desktop clipboard, offered to Wayland and X11 clients. Control token only. A pasted image goes by `PUT /api/clipboard` instead. |
-| `0x8F` | Stream | JSON `{"codec": "auto" \| "h264" \| "hevc" \| "vp9" \| "av1" \| "vp8", "quality": "auto" \| "low" \| "medium" \| "high" \| "max"}`, either field optional: this session's choice, applied live (a codec change restarts the stream with a new id; a codec the browser or the server can't do means Auto). Any session, its own stream only. |
-| `0x8E` | Notify | JSON `{"id": N, "action": "default" \| "<key>"}`: the viewer clicked a notification or one of its actions; without `action` it dismissed it. Control token only. |
 | `0x8D` | TakeControl | none. A control-token session becomes the controller; the desktop takes its size. |
+| `0x8E` | Notify | JSON `{"id": N, "action": "default" \| "<key>"}`: the viewer clicked a notification or one of its actions; without `action` it dismissed it. Control token only. |
+| `0x8F` | Stream | JSON `{"codec": "auto" \| "h264" \| "hevc" \| "vp9" \| "av1" \| "vp8", "quality": "auto" \| "low" \| "medium" \| "high" \| "max"}`, either field optional: this session's choice, applied live (a codec change restarts the stream with a new id; a codec the browser or the server can't do means Auto). Any session, its own stream only. |
 
 ### Close codes
 

@@ -20,7 +20,7 @@ function Choice({ viewer }) {
   return (
     <>
       <select value={choice.codec} onChange={e => viewer.setChoice({ codec: e.target.value })} className={cls} title="Video codec">
-        <option value="auto">Auto{st ? ` (${codecName(st.codec)})` : ''}</option>
+        <option value="auto">Auto{st?.auto_codec ? ` (${codecName(st.codec)})` : ''}</option>
         {both.map(c => <option key={c.codec} value={c.codec}>{codecName(c.codec)}{c.hardware ? '' : ' (software)'}</option>)}
       </select>
       <select value={choice.quality} onChange={e => viewer.setChoice({ quality: e.target.value })} className={cls} title="Quality">

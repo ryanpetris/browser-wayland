@@ -22,7 +22,7 @@ pub const NOTICE: u8 = 0x09;
 pub const CLIPBOARD_DATA: u8 = 0x0A;
 /// The open desktop notifications, as a JSON array of `Notification`, whenever they change (and in the replay).
 pub const NOTIFICATIONS: u8 = 0x0B;
-/// JSON `{"codec","hardware","auto_codec","bitrate_kbps","max_fps","auto_quality"}`: what this session's
+/// JSON `{"codec","auto_codec","bitrate_kbps","max_fps","auto_quality"}`: what this session's
 /// encoder does right now; after every `Config` and whenever the automatic quality changes.
 pub const STREAM_STATE: u8 = 0x0C;
 // client -> server
@@ -151,7 +151,7 @@ impl Preset {
     /// The preset's target; Auto starts at the ceiling with no frame cap.
     pub fn quality(self, ceiling_kbps: u32) -> Quality {
         match self {
-            Preset::Auto => Quality { bitrate_kbps: ceiling_kbps, max_fps: 0 },
+            Preset::Auto => Quality { bitrate_kbps: ceiling_kbps, max_fps: if ceiling_kbps < 3000 { 30 } else { 0 } },
             Preset::Low => Quality { bitrate_kbps: 2000, max_fps: 30 },
             Preset::Medium => Quality { bitrate_kbps: 5000, max_fps: 0 },
             Preset::High => Quality { bitrate_kbps: 12000, max_fps: 0 },
@@ -161,8 +161,8 @@ impl Preset {
 }
 
 /// What a session's encoder does, for the page's "Auto (…)" labels.
-pub fn stream_state(codec: Codec, hardware: bool, auto_codec: bool, quality: Quality, auto_quality: bool) -> Bytes {
-    let json = serde_json::json!({ "codec": codec_name(codec), "hardware": hardware, "auto_codec": auto_codec, "bitrate_kbps": quality.bitrate_kbps, "max_fps": quality.max_fps, "auto_quality": auto_quality });
+pub fn stream_state(codec: Codec, auto_codec: bool, quality: Quality, auto_quality: bool) -> Bytes {
+    let json = serde_json::json!({ "codec": codec_name(codec), "auto_codec": auto_codec, "bitrate_kbps": quality.bitrate_kbps, "max_fps": quality.max_fps, "auto_quality": auto_quality });
     let mut b = vec![STREAM_STATE];
     b.extend_from_slice(json.to_string().as_bytes());
     b.into()

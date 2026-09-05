@@ -48,7 +48,7 @@ Each viewer picks its own codec and quality in the status bar: the codec list is
 and that browser can do ("Auto (HEVC)" shows the pick), and the quality is Low (2 Mbit/s, 30 fps), Medium,
 High, Max, or Auto, which starts at `--bitrate` and backs off while the connection can't keep up, then
 climbs back; `GET /api/codecs` lists the server's side. After the picture stops changing one more frame
-goes out at four times the bitrate, so text left rough by motion sharpens.
+goes out, at four times the bitrate with the software encoders, so text left rough by motion sharpens.
 Frames are painted on a 2D canvas. `?renderer=webgpu` in the URL uses a WebGPU external-texture path
 instead; it is opt-in because Chromium on Linux occasionally presents a blank frame that way, which looks like flicker.
 
@@ -206,8 +206,9 @@ viewer, and a `cargo build` without `web/dist` stops with that hint. `npm run de
 page with hot reload, proxying `/ws` and `/api` to a server started with `--no-tls --listen 127.0.0.1:8080`.
 
 Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
-`--codec auto|h264|hevc|vp9|av1|vp8` (what Auto resolves to; auto prefers whatever the browser decodes in
-hardware, among what this machine encodes: AV1, then HEVC, VP9, H.264 on the GPU; VP8 first on the CPU),
+`--codec auto|h264|hevc|vp9|av1|vp8` (what Auto resolves to when the browser decodes it; a codec this
+machine can't encode stops startup; auto prefers whatever the browser decodes in hardware, among what
+this machine encodes: AV1, then HEVC, VP9, H.264 on the GPU; VP8 first on the CPU),
 `--software-encoding`, `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--socket-name`, `--render-node`. `--help`
 lists them all.
 
