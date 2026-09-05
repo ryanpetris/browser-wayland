@@ -370,7 +370,6 @@ dependencies = [
  "bw-core",
  "bw-server",
  "bw-stream",
- "calloop",
  "clap",
  "tokio",
  "tracing",
