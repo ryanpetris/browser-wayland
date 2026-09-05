@@ -451,12 +451,15 @@ export function createViewer() {
   // A finger is a pointer with one button: a tap clicks, a hold of half a second right-clicks, movement
   // drags (the left button goes down on the first movement, so a hold never clicks). Two fingers scroll
   // (finger source, pixel deltas), or pinch to zoom the picture on this screen (the desktop keeps its
-  // size) and, while zoomed, pan it; pinched back near 1, the zoom snaps off.
+  // size; any session may, it acts on nothing) and, while zoomed, pan it; pinched back near 1, the zoom
+  // snaps off.
   const touches = new Map(); // pointerId -> { x, y } in client px, every finger down
   let touch = null; // the one-finger gesture: where it started, whether the button went down, the hold timer
-  let pinch = null; // the two-finger gesture: the fingers' centre and distance, and whether it turned into a pinch
+  let pinch = null; // the two-finger gesture: the fingers' centre and distance, the distance it began with, whether it turned into a pinch
   let zoom = { k: 1, tx: 0, ty: 0 };
   const centroid = () => { const [a, b] = [...touches.values()]; return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, dist: Math.hypot(a.x - b.x, a.y - b.y) }; };
+  // exactly two fingers begin the two-finger gesture afresh (a third one down, or one of three up, too)
+  const rebase = () => { const c = touches.size === 2 ? centroid() : null; pinch = c && { ...c, start: c.dist, zooming: false }; };
   function applyZoom() {
     canvas.style.transformOrigin = '0 0';
     canvas.style.transform = zoom.k === 1 ? '' : `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.k})`;
@@ -472,13 +475,13 @@ export function createViewer() {
     if (e.type === 'pointerdown') {
       gesture(e);
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (!driving()) return;
       if (touches.size === 1) {
+        if (!driving()) return;
         onPointerMove(e);
         touch = { x: e.clientX, y: e.clientY, pressed: false, timer: setTimeout(() => { touch = null; sendButton(BTN[2], true); sendButton(BTN[2], false); }, 500) };
-      } else if (touches.size === 2) {
+      } else {
         if (touch) endTouch(false);
-        pinch = { ...centroid(), zooming: false };
+        rebase();
       }
       return;
     }
@@ -493,21 +496,21 @@ export function createViewer() {
           sendButton(BTN[0], true);
         }
         onPointerMove(e);
-      } else if (pinch && touches.size === 2) {
+      } else if (pinch) {
         const c = centroid();
-        pinch.zooming ||= Math.abs(c.dist / pinch.dist - 1) > 0.15;
+        pinch.zooming ||= Math.abs(c.dist / pinch.start - 1) > 0.15;
         if (pinch.zooming || zoom.k > 1) {
           // scale about the fingers' centre so the picture under it stays put, then pan by the centre's movement,
-          // and keep the picture covering the stage
+          // and keep the picture covering its box (the canvas's own, untransformed: a window tab centres a smaller one)
           const r = canvas.parentElement.getBoundingClientRect();
           const k = Math.max(1, Math.min(5, zoom.k * c.dist / pinch.dist));
-          const fx = pinch.cx - r.left, fy = pinch.cy - r.top;
+          const fx = pinch.cx - r.left - canvas.offsetLeft, fy = pinch.cy - r.top - canvas.offsetTop;
           zoom = { k, tx: fx - (fx - zoom.tx) * (k / zoom.k) + c.cx - pinch.cx, ty: fy - (fy - zoom.ty) * (k / zoom.k) + c.cy - pinch.cy };
           if (k < 1.05) zoom = { k: 1, tx: 0, ty: 0 };
-          zoom.tx = Math.min(0, Math.max(r.width * (1 - zoom.k), zoom.tx));
-          zoom.ty = Math.min(0, Math.max(r.height * (1 - zoom.k), zoom.ty));
+          zoom.tx = Math.min(0, Math.max(canvas.offsetWidth * (1 - zoom.k), zoom.tx));
+          zoom.ty = Math.min(0, Math.max(canvas.offsetHeight * (1 - zoom.k), zoom.ty));
           applyZoom();
-        } else {
+        } else if (driving()) {
           send(AXIS, 9, dv => { dv.setUint8(1, 0); dv.setFloat32(2, pinch.cx - c.cx, true); dv.setFloat32(6, pinch.cy - c.cy, true); });
         }
         Object.assign(pinch, c);
@@ -516,7 +519,7 @@ export function createViewer() {
     }
     touches.delete(e.pointerId); // pointerup or pointercancel
     if (touch) endTouch(e.type === 'pointerup');
-    if (touches.size < 2) pinch = null;
+    rebase();
   }
   function onWheel(e) {
     e.preventDefault();

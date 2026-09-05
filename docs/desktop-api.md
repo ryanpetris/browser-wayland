@@ -325,18 +325,21 @@ read it with `useSyncExternalStore` and send actions back through the engine.
   a tap (up within 500 ms, under 10 px of movement) is a left press and release, a hold of 500 ms a
   right one, and movement presses the left button first and drags (so a hold never clicks and a drag
   starts after GTK's own threshold). Two fingers cancel the one-finger gesture: the centre's movement
-  goes out as pixel `AXIS` (finger scroll), unless the distance changed by 15 % (or the view is already
-  zoomed), which pinches: a CSS `translate(…) scale(k)` on the canvas, 1 to 5, about the fingers' centre,
-  panned by the centre and kept covering the stage, snapping back under 1.05. The desktop's size is the
-  phone's; the zoom is only on the phone. Pointer positions go through the canvas's on-screen rectangle
+  goes out as pixel `AXIS` (finger scroll), unless the distance changed by 15 % since the two fingers
+  came down (or the view is already zoomed), which pinches: a CSS `translate(…) scale(k)` on the canvas,
+  1 to 5, about the fingers' centre, panned by the centre and kept covering the canvas's own box, snapping
+  back under 1.05; a third finger, or one of three lifting, starts the two-finger gesture over. The
+  desktop's size is the phone's; the zoom is only on the phone, and any session may zoom (it acts on
+  nothing), while only the controller's fingers drive. Pointer positions go through the canvas's on-screen rectangle
   (`toDesktop`), which follows the transform, so a zoomed tap lands where it points; the overlays don't
   follow it. Layout: under 48 rem the side panel is a drawer over the stage (off by default there), the
   top bar and status bar keep icons and the few numbers that fit, `#root` is `100dvh` and the viewport
   meta says `interactive-widget=resizes-content`, so the phone's keyboard shrinks the stage (a desktop
-  resize) instead of covering it. The keyboard button (touch devices, sessions that act) opens a row: a
-  field that keeps the phone's keyboard up, whose native `beforeinput` turns `insertText` into
-  `{"type": "text"}` (composition waits for `compositionend`), `insertLineBreak` into Return and the
-  deletions into BackSpace and Delete; physical keys that aren't text (`KEYSYM`) and modifier chords go
+  resize) instead of covering it. The keyboard button (touch devices, the controller) opens a row: a
+  field that keeps the phone's keyboard up (taking the focus releases any key held on the stage), whose
+  native `beforeinput` turns `insertText` and `insertFromPaste` into `{"type": "text"}` (composition
+  waits for `compositionend`), `insertLineBreak` into Return and the deletions into BackSpace, Delete
+  and their Ctrl word forms; physical keys that aren't text (`KEYSYM`) and modifier chords go
   as `{"type": "key"}`; and buttons for Esc, Tab, sticky Ctrl/Alt/Super (the next key or character is a
   chord), the arrows and Del. Both go on the WebSocket as `Input` (`0x91`), the `InputMsg` of
   `POST /api/input`, so they type through the compositor's keymap in order with the pointer.

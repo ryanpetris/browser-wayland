@@ -18,6 +18,7 @@ function usePref(key, fallback) {
 
 export function App({ viewer }) {
   const status = useStore(viewer.store, s => s.status);
+  const role = useStore(viewer.store, s => s.role);
   const [sidebar, setSidebar] = usePref('sidebar', matchMedia('(min-width: 48rem)').matches); // a phone starts with the stage alone
   const [keyboard, setKeyboard] = useState(false);
   const [borders, setBorders] = usePref('borders', false);
@@ -32,6 +33,7 @@ export function App({ viewer }) {
     return () => document.removeEventListener('fullscreenchange', on);
   }, []);
   useEffect(() => viewer.setElementsOn(elements && !windowMode), [viewer, elements, windowMode]);
+  useEffect(() => { if (role !== 'controller') setKeyboard(false); }, [role]); // only the controller's typing counts
   useEffect(() => viewer.setStatsOn(sidebar && tab === 'stats' && !fullscreen), [viewer, sidebar, tab, fullscreen]);
 
   return (

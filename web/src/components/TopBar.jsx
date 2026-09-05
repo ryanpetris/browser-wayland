@@ -46,7 +46,7 @@ export function TopBar({ viewer, windowMode, borders, onBorders, elements, onEle
           <span className="mr-1 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400" title="The viewer token watches; it can't act"><Eye className="size-3.5" /> <span className="hidden sm:inline">view only</span></span>
         )}
         {!windowMode && role === 'controller' && <span className="mr-1 hidden text-xs text-emerald-400/80 sm:inline" title="Your pointer, keyboard and window size are the desktop's">controlling</span>}
-        {!windowMode && viewer.touch && role !== 'viewer' && <IconButton icon={Keyboard} label="On-screen keyboard" active={keyboard} onClick={onKeyboard} />}
+        {!windowMode && viewer.touch && role === 'controller' && <IconButton icon={Keyboard} label="On-screen keyboard" active={keyboard} onClick={onKeyboard} />}
         {!windowMode && (
           <>
             <IconButton icon={Maximize} label="Window borders" active={borders} onClick={onBorders} />

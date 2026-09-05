@@ -27,9 +27,12 @@ export function Keyboard({ viewer, onClose }) {
       if (e.inputType === 'insertCompositionText') return; // delivered at compositionend
       e.preventDefault();
       if (e.inputType === 'insertText' && e.data) typed(e.data);
+      else if (e.inputType === 'insertFromPaste') { const t = e.dataTransfer?.getData('text/plain'); if (t) typed(t); }
       else if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') chord('Return');
       else if (e.inputType === 'deleteContentBackward') chord('BackSpace');
       else if (e.inputType === 'deleteContentForward') chord('Delete');
+      else if (e.inputType === 'deleteWordBackward') chord('ctrl+BackSpace');
+      else if (e.inputType === 'deleteWordForward') chord('ctrl+Delete');
     };
     const compositionEnd = e => { if (e.data) typed(e.data); el.value = ''; };
     el.addEventListener('beforeinput', beforeInput);
@@ -53,7 +56,7 @@ export function Keyboard({ viewer, onClose }) {
           {label}
         </button>
       ))}
-      <input ref={field} onKeyDown={onKeyDown}
+      <input ref={field} onKeyDown={onKeyDown} onFocus={viewer.releaseInput}
         aria-label="Type into the desktop" autoCapitalize="off" autoCorrect="off" autoComplete="off" spellCheck={false}
         className="h-7 w-0 min-w-0 flex-1 rounded-md border border-dashed border-zinc-700 bg-transparent px-1 text-transparent caret-transparent outline-none focus:border-indigo-400" />
       <button type="button" onClick={onClose} aria-label="Hide the keyboard row" className="shrink-0 rounded-md p-1 text-zinc-400 hover:bg-zinc-800"><X className="size-4" /></button>
