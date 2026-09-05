@@ -67,7 +67,8 @@ microphone button in the viewer's status bar sends the browser's microphone (Opu
 cancellation and noise suppression) into a virtual source `browser-wayland-microphone-<pid>` that
 applications record from (`PULSE_SOURCE` for `--exec` children; a video call sees it as a microphone);
 only the controlling session's is taken, and stopping it ends the capture, so the browser's recording
-indicator goes off. `--no-audio` turns both off.
+indicator goes off. `--no-audio` turns both off; both devices are unloaded when the server exits (Ctrl+C
+or SIGTERM).
 
 `--exec` runs at startup with the environment of a Wayland session (`XDG_SESSION_TYPE`, the toolkits'
 backend switches, `DISPLAY` for X11 programs), and `--kiosk` fullscreens every window. Together they run a whole nested desktop; with the

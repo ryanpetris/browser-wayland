@@ -200,11 +200,14 @@ fn main() -> Result<()> {
     });
 
     let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, software, bitrate_kbps: cli.bitrate, refresh_mhz: if software { 30_000 } else { 60_000 }, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: std::path::absolute(cli.files_dir.unwrap_or_else(bw_server::files::default_dir))?, version: env!("BW_VERSION"), sinks, mic: mic.as_ref().map(|(_, _, tx)| tx.clone()) };
-    // Ctrl+C returns here so the audio sink gets unloaded and the pipelines stopped.
+    // Ctrl+C and SIGTERM (`docker stop`, a service manager) return here so the audio devices get unloaded
+    // and the pipelines stopped.
     let result = tokio::runtime::Runtime::new()?.block_on(async {
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         tokio::select! {
             r = bw_server::run(server, commands, audio_rx, events_rx) => r,
             _ = tokio::signal::ctrl_c() => Ok(()),
+            _ = terminate.recv() => Ok(()),
             ok = exited_rx => if ok.unwrap_or(false) { Ok(()) } else { Err(anyhow::anyhow!("the compositor thread died")) },
         }
     });
