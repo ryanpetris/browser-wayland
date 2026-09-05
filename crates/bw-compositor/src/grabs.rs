@@ -4,16 +4,19 @@ use std::cell::RefCell;
 
 use smithay::{
     desktop::{Space, Window, WindowSurface},
-    input::pointer::{
-        AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
-        GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData,
-        MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
+    input::{
+        pointer::{
+            AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
+            GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData,
+            MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
+        },
+        touch::{DownEvent, GrabStartData as TouchGrabStartData, MotionEvent as TouchMotionEvent, OrientationEvent, ShapeEvent, TouchGrab, TouchInnerHandle, UpEvent},
     },
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{self, ResizeEdge},
         wayland_server::protocol::wl_surface::WlSurface,
     },
-    utils::{Logical, Point, Rectangle, Size},
+    utils::{Logical, Point, Rectangle, Serial, Size},
     wayland::{compositor::with_states, seat::WaylandFocus, shell::xdg::SurfaceCachedState},
 };
 
@@ -68,10 +71,10 @@ pub struct MoveGrab {
     pub initial_location: Point<i32, Logical>,
 }
 
-impl PointerGrab<State> for MoveGrab {
-    fn motion(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, event: &MotionEvent) {
-        handle.motion(data, None, event); // no focus while dragging
-        let delta = event.location - self.start_data.location;
+impl MoveGrab {
+    /// The window follows the pointer (or finger) from where the grab began.
+    fn drag(&self, data: &mut State, to: Point<f64, Logical>) {
+        let delta = to - self.start_data.location;
         // the pointer may be anywhere, the window keeps a corner on the desktop
         let location = data.clamp_to_output(&self.window, (self.initial_location.to_f64() + delta).to_i32_round());
         data.space.map_element(self.window.clone(), location, true);
@@ -79,6 +82,13 @@ impl PointerGrab<State> for MoveGrab {
             let _ = x11.configure(Rectangle::new(location, self.window.geometry().size));
         }
         data.dirty = true;
+    }
+}
+
+impl PointerGrab<State> for MoveGrab {
+    fn motion(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, event: &MotionEvent) {
+        handle.motion(data, None, event); // no focus while dragging
+        self.drag(data, event.location);
     }
     fn button(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &ButtonEvent) {
         handle.button(data, event);
@@ -110,10 +120,10 @@ fn has_bottom(e: ResizeEdge) -> bool {
     matches!(e, ResizeEdge::Bottom | ResizeEdge::BottomLeft | ResizeEdge::BottomRight)
 }
 
-impl PointerGrab<State> for ResizeGrab {
-    fn motion(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, event: &MotionEvent) {
-        handle.motion(data, None, event);
-        let delta = event.location - self.start_data.location;
+impl ResizeGrab {
+    /// The window's size follows the pointer (or finger) from where the grab began.
+    fn drag(&mut self, data: &mut State, to: Point<f64, Logical>) {
+        let delta = to - self.start_data.location;
         let (mut w, mut h) = (self.initial_rect.size.w as f64, self.initial_rect.size.h as f64);
         if has_left(self.edges) {
             w -= delta.x;
@@ -158,24 +168,73 @@ impl PointerGrab<State> for ResizeGrab {
             }
         }
     }
+    /// The resize is over: the client keeps the last size, and its next commit anchors a top/left resize.
+    fn finish(&self) {
+        if let Some(toplevel) = self.window.toplevel() {
+            toplevel.with_pending_state(|s| {
+                s.states.unset(xdg_toplevel::State::Resizing);
+                s.size = Some(self.last_size);
+            });
+            toplevel.send_pending_configure();
+            ResizeState::with(toplevel.wl_surface(), |st| *st = ResizeState::WaitingForLastCommit { edges: self.edges, initial_rect: self.initial_rect });
+        }
+    }
+}
+
+impl PointerGrab<State> for ResizeGrab {
+    fn motion(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, event: &MotionEvent) {
+        handle.motion(data, None, event);
+        self.drag(data, event.location);
+    }
     fn button(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &ButtonEvent) {
         handle.button(data, event);
         if !handle.current_pressed().contains(&self.start_data.button) {
             handle.unset_grab(self, data, event.serial, event.time, true);
-            if let Some(toplevel) = self.window.toplevel() {
-                toplevel.with_pending_state(|s| {
-                    s.states.unset(xdg_toplevel::State::Resizing);
-                    s.size = Some(self.last_size);
-                });
-                toplevel.send_pending_configure();
-                ResizeState::with(toplevel.wl_surface(), |st| {
-                    *st = ResizeState::WaitingForLastCommit { edges: self.edges, initial_rect: self.initial_rect }
-                });
-            }
+            self.finish();
         }
     }
     forward!();
 }
+
+/// The same grabs from a finger on the drawn decorations: the finger that began one moves it and ends it
+/// (other fingers, shapes and orientations mean nothing to it); nothing reaches a client meanwhile.
+macro_rules! touch_grab {
+    ($name:ident, $grab:ty, |$g:ident| $finish:expr) => {
+        pub struct $name {
+            pub start_data: TouchGrabStartData<State>,
+            pub grab: $grab,
+        }
+        impl TouchGrab<State> for $name {
+            fn down(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, _event: &DownEvent, _seq: Serial) {}
+            fn motion(&mut self, data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, event: &TouchMotionEvent, _seq: Serial) {
+                if event.slot == self.start_data.slot {
+                    self.grab.drag(data, event.location);
+                }
+            }
+            fn up(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &UpEvent, _seq: Serial) {
+                if event.slot == self.start_data.slot {
+                    handle.unset_grab(self, data);
+                    let $g = &self.grab;
+                    $finish;
+                }
+            }
+            fn cancel(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, _seq: Serial) {
+                handle.unset_grab(self, data);
+                let $g = &self.grab;
+                $finish;
+            }
+            fn frame(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _seq: Serial) {}
+            fn shape(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _event: &ShapeEvent, _seq: Serial) {}
+            fn orientation(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _event: &OrientationEvent, _seq: Serial) {}
+            fn start_data(&self) -> &TouchGrabStartData<State> {
+                &self.start_data
+            }
+            fn unset(&mut self, _data: &mut State) {}
+        }
+    };
+}
+touch_grab!(TouchMoveGrab, MoveGrab, |_g| ());
+touch_grab!(TouchResizeGrab, ResizeGrab, |g| g.finish());
 
 /// Tracks a resize so top/left resizes can re-anchor the window when the client commits its new size.
 #[derive(Default, Clone, Copy)]

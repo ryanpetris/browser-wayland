@@ -2,13 +2,14 @@
 
 use std::time::{Duration, Instant};
 
-use bw_core::{AxisSource as Src, Command, ControlMsg, ControlOp, Event, InputMsg, OutputGeometry, decoration::Button as DecorButton};
+use bw_core::{AxisSource as Src, Command, ControlMsg, ControlOp, Event, InputMsg, OutputGeometry, TouchKind, decoration::Button as DecorButton};
 use smithay::{
-    backend::input::{Axis, AxisSource, ButtonState, KeyState, Keycode},
+    backend::input::{Axis, AxisSource, ButtonState, KeyState, Keycode, TouchSlot},
     desktop::{LayerSurface, Window, WindowSurface, WindowSurfaceType, layer_map_for_output},
     input::{
         keyboard::{FilterResult, Keysym, xkb},
         pointer::{AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus, GrabStartData, MotionEvent, PointerHandle, RelativeMotionEvent},
+        touch::{DownEvent, GrabStartData as TouchStart, MotionEvent as TouchMotion, UpEvent},
     },
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{self, ResizeEdge},
@@ -113,6 +114,7 @@ impl State {
             Command::Input(msg) => self.input(msg),
             Command::SetClipboard { mime, data } => self.set_clipboard(mime, data),
             Command::Drag(drag) => self.drag(drag),
+            Command::Touch { kind, slot, x, y } => self.touch(kind, slot, (x, y).into()),
             Command::ReleaseAllInput => self.release_all(),
             Command::PointerMotionAbsolute { x, y } => self.pointer_motion((x, y).into()),
             Command::PointerMotionRelative { dx, dy } => self.pointer_motion(self.pointer_location + Point::<f64, Logical>::from((dx, dy))),
@@ -255,6 +257,67 @@ impl State {
             pointer.button(self, &ButtonEvent { button, state: ButtonState::Released, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
         }
         pointer.frame(self);
+        let touch = self.seat.get_touch().unwrap();
+        touch.cancel(self); // fingers the browser won't lift any more
+        touch.frame(self);
+    }
+
+    /// A finger from the browser as a `wl_touch` point; the pointer stays where it is. A down focuses and
+    /// raises like a click; on a drawn title bar or resize band it moves or resizes the window through a
+    /// touch grab (the same as the pointer's, ended by the finger that began it), and a bar button acts at
+    /// once. Every event is its own frame: a browser delivers one touch point per event.
+    fn touch(&mut self, kind: TouchKind, slot: u32, location: Point<f64, Logical>) {
+        let touch = self.seat.get_touch().unwrap();
+        let (serial, time) = (SERIAL_COUNTER.next_serial(), self.now());
+        let slot = TouchSlot::from(Some(slot));
+        match kind {
+            TouchKind::Down => {
+                if !touch.is_grabbed() {
+                    match self.window_under(location) {
+                        Some(Under::Decoration(window, hit)) => {
+                            self.focus_window(Some(&window), serial);
+                            let start_data = TouchStart { focus: None, slot, location };
+                            let pointer_start = GrabStartData { focus: None, button: BTN_LEFT, location };
+                            match hit {
+                                Hit::Button(b) => self.control(ControlMsg { id: window_id(&window), op: decor_op(b, &window) }),
+                                Hit::Bar if !maximized(&window) => {
+                                    let initial_location = self.space.element_location(&window).unwrap();
+                                    let grab = crate::grabs::MoveGrab { start_data: pointer_start, window, initial_location };
+                                    touch.set_grab(self, crate::grabs::TouchMoveGrab { start_data, grab }, serial);
+                                }
+                                Hit::Edge(edges) => {
+                                    let grab = self.resize_grab(&window, edges, pointer_start);
+                                    touch.set_grab(self, crate::grabs::TouchResizeGrab { start_data, grab }, serial);
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => self.focus_at(location, serial),
+                    }
+                }
+                touch.down(self, self.surface_under(location), &DownEvent { slot, location, serial, time });
+            }
+            TouchKind::Motion => touch.motion(self, self.surface_under(location), &TouchMotion { slot, location, time }),
+            TouchKind::Up => touch.up(self, &UpEvent { slot, serial, time }),
+            TouchKind::Cancel => touch.cancel(self),
+        }
+        touch.frame(self);
+    }
+
+    /// Click-to-focus and raise at `location`: the window there gets the keyboard (not an X11 menu or
+    /// tooltip: its client holds the grab, the focus stays with its window); the empty desktop lets a
+    /// bottom or background layer have it if it asked (on-demand panels).
+    fn focus_at(&mut self, location: Point<f64, Logical>, serial: Serial) {
+        let clicked = self.space.element_under(location).map(|(w, _)| w.clone());
+        if !clicked.as_ref().is_some_and(|w| w.x11_surface().is_some_and(|x| x.is_override_redirect())) {
+            self.focus_window(clicked.as_ref(), serial);
+        }
+        if clicked.is_none()
+            && let Some((layer, _, _)) = self.layer_under(location, false).filter(|(l, _, _)| l.can_receive_keyboard_focus())
+        {
+            let keyboard = self.seat.get_keyboard().unwrap();
+            keyboard.set_focus(self, Some(layer.wl_surface().clone().into()), serial);
+        }
     }
 
     pub(crate) fn pointer_motion(&mut self, location: Point<f64, Logical>) {
@@ -340,13 +403,7 @@ impl State {
         if !pressed && button == BTN_LEFT && let Some((window, b)) = self.decor_press.take() {
             // a decoration button acts on release, if the pointer is still on it
             if self.decoration_under(self.pointer_location).is_some_and(|(w, h)| w == window && h == Hit::Button(b)) {
-                let op = match b {
-                    DecorButton::Close => ControlOp::Close,
-                    DecorButton::Minimize => ControlOp::Minimize,
-                    DecorButton::Maximize if maximized(&window) => ControlOp::Unmaximize,
-                    DecorButton::Maximize => ControlOp::Maximize,
-                };
-                self.control(ControlMsg { id: window_id(&window), op });
+                self.control(ControlMsg { id: window_id(&window), op: decor_op(b, &window) });
             }
         }
         if pressed && !pointer.is_grabbed() {
@@ -400,18 +457,7 @@ impl State {
                     }
                 }
                 if !pointer.is_grabbed() {
-                    // click-to-focus and raise
-                    let clicked = self.space.element_under(self.pointer_location).map(|(w, _)| w.clone());
-                    // except on an X11 menu or tooltip: its client holds the grab, the focus stays with its window
-                    if !clicked.as_ref().is_some_and(|w| w.x11_surface().is_some_and(|x| x.is_override_redirect())) {
-                        self.focus_window(clicked.as_ref(), serial);
-                    }
-                    if clicked.is_none() {
-                        // empty desktop: a bottom/background layer may want the keyboard (on-demand panels)
-                        if let Some((layer, _, _)) = self.layer_under(self.pointer_location, false).filter(|(l, _, _)| l.can_receive_keyboard_focus()) {
-                            keyboard.set_focus(self, Some(layer.wl_surface().clone().into()), serial);
-                        }
-                    }
+                    self.focus_at(self.pointer_location, serial);
                 }
             }
         }
@@ -443,6 +489,12 @@ impl State {
     /// A resize from our decoration band, like an xdg resize request but started by us.
     fn start_resize(&mut self, window: &Window, edges: ResizeEdge, button: u32, serial: Serial) {
         let pointer = self.seat.get_pointer().unwrap();
+        let grab = self.resize_grab(window, edges, GrabStartData { focus: None, button, location: self.pointer_location });
+        pointer.set_grab(self, grab, serial, Focus::Clear);
+    }
+
+    /// A resize from `edges` beginning now: the client is told it is being resized.
+    fn resize_grab(&mut self, window: &Window, edges: ResizeEdge, start_data: GrabStartData<State>) -> crate::grabs::ResizeGrab {
         let mut initial_rect = window.geometry();
         initial_rect.loc = self.space.element_location(window).unwrap();
         if let Some(toplevel) = window.toplevel() {
@@ -450,9 +502,7 @@ impl State {
             toplevel.with_pending_state(|s| s.states.set(xdg_toplevel::State::Resizing));
             toplevel.send_pending_configure();
         }
-        let start_data = GrabStartData { focus: None, button, location: self.pointer_location };
-        let grab = crate::grabs::ResizeGrab { start_data, window: window.clone(), edges, initial_rect, last_size: initial_rect.size };
-        pointer.set_grab(self, grab, serial, Focus::Clear);
+        crate::grabs::ResizeGrab { start_data, window: window.clone(), edges, initial_rect, last_size: initial_rect.size }
     }
 
     /// Raise and activate `window` (none: just deactivate everything) and give it the keyboard.
@@ -526,4 +576,14 @@ pub fn activate_lock(surface: &WlSurface, pointer: &PointerHandle<State>, local:
             }
         }
     });
+}
+
+/// What a drawn title-bar button does to its window.
+fn decor_op(b: DecorButton, window: &Window) -> ControlOp {
+    match b {
+        DecorButton::Close => ControlOp::Close,
+        DecorButton::Minimize => ControlOp::Minimize,
+        DecorButton::Maximize if maximized(window) => ControlOp::Unmaximize,
+        DecorButton::Maximize => ControlOp::Maximize,
+    }
 }

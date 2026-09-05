@@ -321,7 +321,16 @@ read it with `useSyncExternalStore` and send actions back through the engine.
   `localStorage`. A popup (`?window=ID`) shows the window's title in the top bar, no side panel, and the
   canvas centred at the window's size, scaled down if the popup is smaller.
 - **Touch and phones** (`viewer.js` `onTouch`, `Keyboard.jsx`): pointer events with `pointerType`
-  `touch` take their own path. One finger is a pointer with one button: `MOTION_ABS` at the contact,
+  `touch` take their own path. By default (a desktop page, "touch as mouse" off) every event goes out as
+  a `Touch` message and the compositor's seat has a `wl_touch`: `State::touch` in `input.rs` turns it
+  into `down`/`motion`/`up`/`cancel` on Smithay's touch handle with the surface under the finger (the
+  same hit-test as the pointer), one frame per event, so applications get real touch points and
+  Xwayland gives X11 clients XI2 touch (with its own pointer emulation). A down focuses and raises like
+  a click (`focus_at`); on a drawn title bar or resize band it starts `TouchMoveGrab`/`TouchResizeGrab`
+  (`grabs.rs`: the pointer grabs' `drag`/`finish` bodies under Smithay's `TouchGrab`, ended by the finger
+  that began them), and a bar button acts at the down. `release_all` cancels the touch points too. With
+  the switch on (or in a window tab, whose session resolves pointer positions itself), one finger is a
+  pointer with one button: `MOTION_ABS` at the contact,
   a tap (up within 500 ms, under 10 px of movement) is a left press and release, a hold of 500 ms a
   right one, and movement presses the left button first and drags (so a hold never clicks and a drag
   starts after GTK's own threshold). Two fingers cancel the one-finger gesture: the centre's movement

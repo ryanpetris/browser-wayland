@@ -7,7 +7,7 @@ use std::{
 };
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
-use bw_core::{AxisSource, Bytes, Codec, Command, ControlMsg, ControlOp, Event, InputMsg, OutputGeometry, StreamMsg};
+use bw_core::{AxisSource, Bytes, Codec, Command, ControlMsg, ControlOp, Event, InputMsg, OutputGeometry, StreamMsg, TouchKind};
 use tokio::sync::mpsc;
 
 use crate::{App, Key, ViewerSession, Viewers, api, protocol::{self, ClientMsg, Preset, Role}};
@@ -655,6 +655,15 @@ fn input_command(m: ClientMsg) -> Option<Command> {
         // add a stop timer if clients need kinetic scrolling.
         ClientMsg::Axis { dx, dy, .. } => Command::PointerAxis { source: AxisSource::Finger, dx: dx as f64, dy: dy as f64, v120: None },
         ClientMsg::Key { evdev, pressed } => Command::Key { evdev: evdev as u32, pressed },
+        ClientMsg::Touch { kind, id, x, y } => {
+            let kind = match kind {
+                0 => TouchKind::Down,
+                1 => TouchKind::Motion,
+                2 => TouchKind::Up,
+                _ => TouchKind::Cancel,
+            };
+            Command::Touch { kind, slot: id as u32, x: x as f64, y: y as f64 }
+        }
         ClientMsg::Blur => Command::ReleaseAllInput,
         ClientMsg::PointerLockLost => Command::ReleasePointerLock,
         _ => return None,

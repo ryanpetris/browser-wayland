@@ -271,6 +271,7 @@ impl State {
         let mut seat = seat_state.new_wl_seat(&dh, "browser");
         seat.add_keyboard(Default::default(), 200, 25)?;
         seat.add_pointer();
+        seat.add_touch();
 
         let mut dmabuf_state = DmabufState::new();
         let dmabuf_feedback = DmabufFeedbackBuilder::new(gpu.node.dev_id(), gpu.renderer.dmabuf_formats()).build()?;

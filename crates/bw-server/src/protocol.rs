@@ -58,6 +58,10 @@ pub const DRAG: u8 = 0x90;
 /// `{"type": "key", "keys": …}`, …), resolved on the compositor thread; the on-screen keyboard types with
 /// it, in order with the rest of the session's input. Controlling session only.
 pub const INPUT: u8 = 0x91;
+/// `[TOUCH][u8 kind: 0 down, 1 motion, 2 up, 3 cancel][u8 id][f32 x][f32 y]`: a finger on the browser's
+/// touchscreen, passed on as a `wl_touch` point (`id` tells fingers apart; x, y in logical px). Controlling
+/// session only.
+pub const TOUCH: u8 = 0x92;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,6 +231,7 @@ pub enum ClientMsg {
     Stream(StreamChoice),
     Drag(DragMsg),
     Input(InputMsg),
+    Touch { kind: u8, id: u8, x: f32, y: f32 },
 }
 
 #[derive(Debug, PartialEq, serde::Deserialize)]
@@ -280,6 +285,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         STREAM => ClientMsg::Stream(serde_json::from_slice(&b[1..]).ok()?),
         DRAG => ClientMsg::Drag(serde_json::from_slice(&b[1..]).ok()?),
         INPUT => ClientMsg::Input(serde_json::from_slice(&b[1..]).ok()?),
+        TOUCH => ClientMsg::Touch { kind: u8_at(1)?, id: u8_at(2)?, x: f32_at(3)?, y: f32_at(7)? },
         _ => return None,
     })
 }

@@ -4,7 +4,7 @@
 import { KEYCODES } from './keycodes.js';
 import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, clipboardFiles, pref, codecs as serverCodecs } from './api.js';
 import { createStore } from './store.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, BTN } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -27,6 +27,7 @@ export function createViewer() {
     upload: null, // { name, index, count } while files dropped on the page go up
     streamState: null, // { codec, hardware, auto_codec, bitrate_kbps, max_fps, auto_quality } from the server
     choice: { codec: pref.getStr('codec', 'auto'), quality: pref.getStr('quality', 'auto') }, // this viewer's picks
+    touchMouse: pref.get('touchmouse', false), // fingers as a mouse with gestures, instead of real touch points
     codecs: [], // what the server encodes, in Auto's order: [{ codec, hardware }]
     decodable: [], // codec families this browser decodes at all
     filesRev: 0, // bumps when an upload finished, so the Files tab refreshes
@@ -458,11 +459,18 @@ export function createViewer() {
   }
 
   // --- touch ----------------------------------------------------------------------------------
-  // A finger is a pointer with one button: a tap clicks, a hold of half a second right-clicks, movement
-  // drags (the left button goes down on the first movement, so a hold never clicks). Two fingers scroll
-  // (finger source, pixel deltas), or pinch to zoom the picture on this screen (the desktop keeps its
-  // size; any session may, it acts on nothing) and, while zoomed, pan it; pinched back near 1, the zoom
-  // snaps off.
+  // Fingers reach the desktop as touch points (wl_touch): the application under them handles taps,
+  // drags and its own gestures. A window tab, or the "touch as mouse" switch, makes a finger a pointer
+  // with one button instead: a tap clicks, a hold of half a second right-clicks, movement drags (the
+  // left button goes down on the first movement, so a hold never clicks); two fingers scroll (finger
+  // source, pixel deltas), or pinch to zoom the picture on this screen (the desktop keeps its size; any
+  // session may, it acts on nothing) and, while zoomed, pan it; pinched back near 1, the zoom snaps off.
+  const TOUCH_KIND = { pointerdown: 0, pointermove: 1, pointerup: 2, pointercancel: 3 };
+  function sendTouch(e) {
+    const p = toDesktop(e);
+    // pointer ids count up per contact; the low byte tells the fingers down at once apart
+    send(TOUCH, 10, dv => { dv.setUint8(1, TOUCH_KIND[e.type]); dv.setUint8(2, e.pointerId & 0xff); dv.setFloat32(3, p.x, true); dv.setFloat32(7, p.y, true); });
+  }
   const touches = new Map(); // pointerId -> { x, y } in client px, every finger down
   let touch = null; // the one-finger gesture: where it started, whether the button went down, the hold timer
   let pinch = null; // the two-finger gesture: the fingers' centre and distance, the distance it began with, whether it turned into a pinch
@@ -482,6 +490,11 @@ export function createViewer() {
     touch = null;
   }
   function onTouch(e) {
+    if (!WINDOW && !state().touchMouse) {
+      if (e.type === 'pointerdown') gesture(e);
+      if (driving()) sendTouch(e);
+      return;
+    }
     if (e.type === 'pointerdown') {
       gesture(e);
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -754,6 +767,7 @@ export function createViewer() {
     type: text => sendText(INPUT, JSON.stringify({ type: 'text', text })),
     key: keys => sendText(INPUT, JSON.stringify({ type: 'key', keys })),
     touch: navigator.maxTouchPoints > 0,
+    setTouchMouse(on) { pref.set('touchmouse', on); store.set({ touchMouse: on }); },
     takeControl: () => send(TAKE_CONTROL, 0),
     setChoice,
     uploadFiles,

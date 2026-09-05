@@ -65,6 +65,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x8F` | Stream | JSON `{"codec": "auto" \| "h264" \| "hevc" \| "vp9" \| "av1" \| "vp8", "quality": "auto" \| "low" \| "medium" \| "high" \| "max"}`, either field optional: this session's choice, applied live (a codec change restarts the stream with a new id; a codec the browser or the server can't do means Auto). Any session, its own stream only. |
 | `0x90` | Drag | JSON `{"op": "start"}`, `{"op": "drop", "names": ["a.txt", …]}` or `{"op": "cancel"}`: the browser drags local files over the desktop. `start` begins a drag on the desktop where the pointer is (offering `text/uri-list`, `copy`); the pointer messages move it; `drop` names the files, uploaded to the transfer folder first, and drops their `file://` URIs on the application under the pointer; `cancel` lets go over nothing. Controlling session only. |
 | `0x91` | Input | JSON: one input action as `POST /api/input` takes it (`{"type": "text", "text": "…"}`, `{"type": "key", "keys": "ctrl+c"}`, `move`, `click`, …), resolved on the compositor thread, in order with the session's other input; the on-screen keyboard types with it. Controlling session only. |
+| `0x92` | Touch | `u8 kind` (0 down, 1 motion, 2 up, 3 cancel) `u8 id` `f32 x` `f32 y`: a finger on the browser's touchscreen, passed on as a `wl_touch` point (`id` tells the fingers down at once apart; logical px); each message is its own frame. Controlling session only. |
 
 ### Close codes
 

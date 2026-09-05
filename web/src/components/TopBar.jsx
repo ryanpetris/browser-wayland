@@ -1,4 +1,4 @@
-import { Expand, Eye, Keyboard, LayoutGrid, LayoutList, Maximize, MousePointer2, PanelRight, Power, ScanSearch } from 'lucide-react';
+import { Expand, Eye, Hand, Keyboard, LayoutGrid, LayoutList, Maximize, MousePointer2, PanelRight, Power, ScanSearch } from 'lucide-react';
 import { useStore } from '../store.js';
 import { WINDOW } from '../api.js';
 import { IconButton, codecName } from './ui.jsx';
@@ -18,6 +18,7 @@ export function TopBar({ viewer, windowMode, borders, onBorders, elements, onEle
   const stream = useStore(viewer.store, s => s.stream);
   const windowTitle = useStore(viewer.store, s => s.windowTitle);
   const role = useStore(viewer.store, s => s.role);
+  const touchMouse = useStore(viewer.store, s => s.touchMouse);
   const [dot, text] = STATUS[status];
   const acts = !windowMode && role && role !== 'viewer' && status === 'connected'; // the menus act on the desktop
   return (
@@ -47,6 +48,7 @@ export function TopBar({ viewer, windowMode, borders, onBorders, elements, onEle
         )}
         {!windowMode && role === 'controller' && <span className="mr-1 hidden text-xs text-emerald-400/80 sm:inline" title="Your pointer, keyboard and window size are the desktop's">controlling</span>}
         {!windowMode && viewer.touch && role === 'controller' && <IconButton icon={Keyboard} label="On-screen keyboard" active={keyboard} onClick={onKeyboard} />}
+        {!windowMode && viewer.touch && <IconButton icon={Hand} label="Touch as mouse: tap, hold for the right button, two fingers scroll, pinch to zoom (off: applications get the touch points)" active={touchMouse} onClick={() => viewer.setTouchMouse(!touchMouse)} />}
         {!windowMode && (
           <>
             <IconButton icon={Maximize} label="Window borders" active={borders} onClick={onBorders} />

@@ -49,6 +49,9 @@ pub enum Command {
     SetClipboard { mime: String, data: Vec<u8> },
     /// The browser is dragging local files over the desktop (the pointer is already where the drag is).
     Drag(Drag),
+    /// A finger on the browser's touchscreen, as a `wl_touch` point (`slot` tells fingers apart); the
+    /// pointer stays where it is.
+    Touch { kind: TouchKind, slot: u32, x: f64, y: f64 },
     /// Pointer or keyboard input from the API or MCP, resolved on the compositor thread (window-relative
     /// coordinates against the live geometry, keys through the keymap) so a whole click lands as one unit.
     Input(InputMsg),
@@ -255,6 +258,15 @@ pub enum Event {
     Clipboard { mime: String, data: Bytes },
     /// A drag from the browser was dropped: the application under the pointer took it, or nobody did.
     DragEnded { taken: bool },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TouchKind {
+    Down,
+    Motion,
+    Up,
+    /// The browser took the touch for itself (a gesture of its own); the application forgets the points.
+    Cancel,
 }
 
 /// A drag from the browser, carried by the compositor as its own drag-and-drop offering `text/uri-list`.

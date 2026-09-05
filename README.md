@@ -122,14 +122,17 @@ files copied on your machine paste into the desktop's file manager (they land in
 
 ## Phones and tablets
 
-The page works on a phone. A tap clicks, a finger drags, a hold of half a second right-clicks, two
-fingers scroll, and a pinch zooms the picture on the phone (the desktop keeps the phone's size; two
-fingers pan while zoomed, pinching back undoes it). The side panel slides over the stage, the top bar
+The page works on a phone. Fingers reach applications as real touch points (`wl_touch`; X11
+applications get XI2 touch through Xwayland), so a map pans with one finger and zooms with two, and a
+drawn title bar drags with a finger. The hand button switches to "touch as mouse" for applications that
+handle touch badly: a tap clicks, a finger drags, a hold of half a second right-clicks, two fingers
+scroll, and a pinch zooms the picture on the phone (the desktop keeps the phone's size; two fingers pan
+while zoomed, pinching back undoes it). The side panel slides over the stage, the top bar
 keeps its icons, and on touch devices a keyboard button opens a row with a field that brings up the
 phone's keyboard, whose text goes through the desktop's keyboard layout, and the keys such keyboards
 lack: Esc, Tab, Ctrl, Alt and Super (sticky, for the next key), the arrows, Del. Fullscreen works where
 the browser allows it (Android; iOS Safari has no fullscreen for pages, and needs Safari 26 for
-WebCodecs). Applications see a mouse; native touch is separate work.
+WebCodecs).
 
 ## Window streams
 
