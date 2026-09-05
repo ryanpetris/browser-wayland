@@ -198,7 +198,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                     if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
                         // sent in order, waiting for the socket: the pipeline drops raw frames upstream of the encoder
                         // while we do, so nothing goes missing between encoder and page (no keyframe dance)
-                        let backlog = rx.len();
+                        let backlog = rx.len() + app.rtc.as_ref().map_or(0, |hub| hub.take_dropped(id) as usize); // channel drops are congestion too
                         let t = Instant::now();
                         match &app.rtc {
                             // the data channel, while the page has one open: a lost packet costs one frame, not a stall
@@ -250,8 +250,8 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                             if !send(&mut socket, state).await { break None }
                         }
                         Some(ClientMsg::Rtc(v)) => match (&app.rtc, v.get("offer").and_then(|o| o.as_str())) {
-                            (Some(hub), Some(sdp)) => hub.offer(id, sdp.to_string(), etx.clone()),
-                            (Some(hub), None) => hub.close(id),
+                            (Some(hub), Some(sdp)) => hub.offer(id, sdp.to_string(), v.get("g").cloned().unwrap_or_default(), etx.clone()).await,
+                            (Some(hub), None) => hub.close(id).await,
                             (None, _) => {}
                         },
                         Some(m) => app.viewer_message(id, key, m),
@@ -289,7 +289,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     }
     let _ = app.commands.send(Command::ViewerStream { key: id, sink: None });
     if let Some(hub) = &app.rtc {
-        hub.close(id);
+        hub.close(id).await;
     }
     if let Some((code, reason)) = ended {
         close(&mut socket, code, reason).await;

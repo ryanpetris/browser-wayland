@@ -76,8 +76,9 @@ pub const MIC: u8 = 0x93;
 /// `[CAM][VP8 frame]`: one encoded frame of the browser's webcam, played into the loopback camera.
 /// Controlling session only.
 pub const CAM: u8 = 0x94;
-/// `[RTC][JSON]`: WebRTC signalling, browser side: `{"offer": "<sdp>"}` to connect the video data channel,
-/// `{"close": true}` to go back to the socket. Any session, its own connection only.
+/// `[RTC][JSON]`: WebRTC signalling, browser side: `{"offer": "<sdp>", "g": n}` to connect the video data
+/// channel (`g` numbers the attempt and comes back with the answer, so a late one is known for what it is),
+/// `{"close": true}` to go back to the socket. Desktop viewer sessions, each its own connection only.
 pub const RTC_CLIENT: u8 = 0x95;
 
 /// What a session may do, as sent in `ROLE`.

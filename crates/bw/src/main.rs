@@ -48,6 +48,10 @@ struct Cli {
     /// UDP port for the WebRTC data channels (default: the listen port's number), on every local address.
     #[arg(long)]
     rtc_port: Option<u16>,
+    /// The address browsers reach this machine at for WebRTC when it isn't one of its own: a Docker bridge
+    /// (the host's address; the container's port must be mapped), a NAT with the port forwarded.
+    #[arg(long)]
+    rtc_addr: Option<std::net::IpAddr>,
     /// A STUN server for the browsers (`stun:host:3478`); none means host candidates only, enough on a LAN.
     #[arg(long)]
     stun: Vec<String>,
@@ -250,7 +254,7 @@ fn main() -> Result<()> {
         if let Some(turn) = &cli.turn {
             ice_servers.push(serde_json::json!({ "urls": turn, "username": cli.turn_user, "credential": cli.turn_pass }));
         }
-        bw_server::rtc::Config { port: cli.rtc_port.unwrap_or(cli.listen.port()), ice_servers }
+        bw_server::rtc::Config { port: cli.rtc_port.unwrap_or(cli.listen.port()), addr: cli.rtc_addr, ice_servers }
     });
     let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, software, bitrate_kbps: cli.bitrate, refresh_mhz: if software { 30_000 } else { 60_000 }, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: std::path::absolute(cli.files_dir.unwrap_or_else(bw_server::files::default_dir))?, version: env!("BW_VERSION"), sinks, mic: mic.as_ref().map(|(_, _, tx)| tx.clone()), cam: cam.as_ref().map(|(_, tx)| tx.clone()), rtc };
     // Ctrl+C and SIGTERM (`docker stop`, a service manager) return here so the audio devices get unloaded

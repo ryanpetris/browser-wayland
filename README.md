@@ -134,9 +134,11 @@ frames move to the channel once it opens; input, audio and events stay on the We
 Transport select shows what carries the video (`Auto (WebRTC)`) and lets a viewer pick one; Auto falls
 back to the socket when the channel doesn't open in three seconds (UDP blocked, say). The server listens
 on UDP on the listen port's number (`--rtc-port` for another; Docker needs `-p 8443:8443/udp`) on every
-local address. For browsers behind a strict NAT give them a STUN server (`--stun stun:host:3478`) or a
-TURN server (`--turn turn:host:3478 --turn-user … --turn-pass …`; coturn is easy to self-host); the
-server itself must be reachable at one of its addresses. `--no-rtc` keeps everything on the WebSocket.
+local address. In Docker's bridge network the container's own address is not the one browsers reach, so
+add `--rtc-addr <the host's address>` after the image name (or run with `--network host`); the same for a
+NAT with the port forwarded. For browsers behind a strict NAT give them a STUN server (`--stun
+stun:host:3478`) or a TURN server (`--turn turn:host:3478 --turn-user … --turn-pass …`; coturn is easy to
+self-host). `--no-rtc` keeps everything on the WebSocket.
 
 ## Without a GPU
 
@@ -268,7 +270,7 @@ Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`
 `--codec auto|h264|hevc|vp9|av1|vp8` (what Auto resolves to when the browser decodes it; a codec this
 machine can't encode stops startup; auto prefers whatever the browser decodes in hardware, among what
 this machine encodes: AV1, then HEVC, VP9, H.264 on the GPU; VP8 first on the CPU),
-`--software-encoding`, `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--webcam`, `--no-rtc`, `--rtc-port`, `--stun`,
+`--software-encoding`, `--exec`, `--kiosk`, `--elements`, `--no-audio`, `--webcam`, `--no-rtc`, `--rtc-port`, `--rtc-addr`, `--stun`,
 `--turn`, `--turn-user`, `--turn-pass`, `--socket-name`, `--render-node` (`none` for no GPU). `--help`
 lists them all.
 

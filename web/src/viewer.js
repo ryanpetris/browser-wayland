@@ -315,7 +315,7 @@ export function createViewer() {
       case RTC: {
         const v = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
         if (v.ice_servers) { iceServers = v.ice_servers; store.set({ rtcAvailable: true }); maybeRtc(); }
-        if (v.answer) rtc?.answer(v.answer);
+        if (v.answer && v.g === rtcGen) rtc?.answer(v.answer); // an answer to an attempt since given up is no use
         break;
       }
       case STREAM_STATE:
@@ -348,6 +348,8 @@ export function createViewer() {
         if (!decoder) return;
         const key = (dv.getUint8(1) & 1) !== 0, seq = dv.getUint16(2, true);
         if (key) { keyframes++; sinceKey = 0; } else sinceKey++;
+        // A frame from behind (the other pipe delivering late at a transport switch) is nothing new.
+        if (videoSeq >= 0 && seq !== videoSeq && ((videoSeq - seq) & 0xffff) < 0x8000) return;
         // A gap in seq means the server dropped frames for us; a delta after a gap can't be decoded.
         const gap = videoSeq >= 0 ? (seq - videoSeq - 1) & 0xffff : 0;
         videoSeq = seq;
@@ -450,32 +452,34 @@ export function createViewer() {
   // Unless the viewer picked the socket, a data channel is offered as soon as the server says it does
   // WebRTC; the video moves there when it opens (the server sends where the channel is open) and comes
   // back to the socket when it closes. Auto gives up after 3 s (UDP blocked, say) and stays on the socket.
-  let rtc = null, iceServers = [], rtcTimer;
+  let rtc = null, iceServers = [], rtcTimer, rtcGen = 0;
   function maybeRtc() {
     if (rtc || state().transport === 'websocket' || !state().rtcAvailable || ws?.readyState !== WebSocket.OPEN) return;
     const mine = (rtc = openRtc({
       iceServers,
+      g: ++rtcGen,
       signal: o => sendText(RTC_CLIENT, JSON.stringify(o)),
       onMessage,
-      onOpen: () => { if (rtc === mine) { clearTimeout(rtcTimer); store.set({ videoVia: 'webrtc' }); send(REQUEST_KEYFRAME, 0); } },
+      onOpen: () => { if (rtc === mine) { clearTimeout(rtcTimer); store.set({ videoVia: 'webrtc' }); } },
       onClose: () => { if (rtc === mine) { closeRtc(); } },
     }));
     if (state().transport === 'auto') rtcTimer = setTimeout(() => { if (rtc === mine && state().videoVia !== 'webrtc') closeRtc(); }, 3000);
   }
-  // back to the socket: the server is told (the channel may still look open to it), and asked for a keyframe
+  // back to the socket: the server is told (the channel may still look open to it); a frame lost on the
+  // way shows as a seq gap, which asks for a keyframe
   function closeRtc() {
     clearTimeout(rtcTimer);
     if (!rtc) return;
     rtc.close();
     rtc = null;
-    if (ws?.readyState === WebSocket.OPEN) { sendText(RTC_CLIENT, '{"close":true}'); send(REQUEST_KEYFRAME, 0); }
+    if (ws?.readyState === WebSocket.OPEN) sendText(RTC_CLIENT, '{"close":true}');
     store.set({ videoVia: 'websocket' });
   }
   function setTransport(transport) {
     pref.setStr('transport', transport);
     store.set({ transport });
-    closeRtc();
-    maybeRtc();
+    if (transport === 'websocket') closeRtc();
+    else maybeRtc(); // a channel already open stays
   }
 
   // --- microphone -----------------------------------------------------------------------------

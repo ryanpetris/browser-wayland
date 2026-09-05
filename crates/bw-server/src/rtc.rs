@@ -5,11 +5,13 @@
 //! connection over one UDP socket per local address (a received packet's destination must be one of the
 //! candidates, so a socket per address knows it). Signalling goes over the session's WebSocket (`RTC`
 //! messages: the browser's offer, our answer); the frame path in `ws.rs` hands frames to the hub while
-//! the session's channel is open and to the socket otherwise. A message above the fragment size goes as
-//! numbered fragments the page reassembles (a keyframe is a few hundred kB; SCTP takes 64 kB at most).
+//! the session's channel is open and to the socket otherwise. A frame goes as numbered fragments the page
+//! reassembles, written as the SCTP send buffer (128 kB, freed by the browser's acknowledgements) has
+//! room: a keyframe of a few hundred kB takes a few rounds, and frames that arrive meanwhile are dropped
+//! (a keyframe replaces whatever waits), which the session's rate controller hears of.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -25,16 +27,20 @@ use crate::protocol;
 /// Fragments of this size go down the channel: every browser takes them, and a lost one costs one frame.
 const FRAGMENT: usize = 16 * 1024;
 
-/// What the CLI decided: the UDP port and the ICE servers the browser should use.
+/// What the CLI decided: the UDP port, the address to advertise, and the ICE servers the browser should use.
 pub struct Config {
     pub port: u16,
+    /// The one address browsers reach us at, when it isn't ours (a Docker bridge maps the host's port to
+    /// the container); without it every local address is a candidate.
+    pub addr: Option<IpAddr>,
     /// STUN and TURN servers as the page's `RTCPeerConnection` wants them (`urls`, `username`, `credential`).
     pub ice_servers: Vec<serde_json::Value>,
 }
 
 enum Msg {
-    /// A session's browser offered; the answer goes back through `reply` (the session's own event queue).
-    Offer { session: u64, sdp: String, reply: mpsc::Sender<Bytes> },
+    /// A session's browser offered (`g` numbers its attempt; the answer carries it back through `reply`,
+    /// the session's own event queue).
+    Offer { session: u64, sdp: String, g: serde_json::Value, reply: mpsc::Sender<Bytes> },
     /// A frame for a session's channel.
     Frame { session: u64, data: Bytes },
     /// The session ended, or went back to its socket.
@@ -45,22 +51,30 @@ enum Msg {
 #[derive(Clone)]
 pub struct Hub {
     tx: mpsc::Sender<Msg>,
-    /// Sessions whose `video` channel is open right now.
-    open: Arc<Mutex<HashSet<u64>>>,
+    /// Sessions whose `video` channel is open right now, with the frames dropped for each since it last asked.
+    open: Arc<Mutex<HashMap<u64, u32>>>,
     pub ice_servers: Arc<Vec<serde_json::Value>>,
 }
 
 impl Hub {
-    /// Binds the port on every local address and starts the hub task.
+    /// Binds the port on every local address (or on any, advertised as `cfg.addr`) and starts the hub task.
     pub async fn start(cfg: Config) -> Result<Hub> {
         let mut sockets = HashMap::new();
-        for ip in local_ips() {
-            let addr = SocketAddr::new(ip, cfg.port);
-            match UdpSocket::bind(addr).await {
-                Ok(s) => {
-                    sockets.insert(addr, Arc::new(s));
+        match cfg.addr {
+            Some(ip) => {
+                let any = if ip.is_ipv4() { IpAddr::from([0, 0, 0, 0]) } else { IpAddr::from([0u16; 8]) };
+                sockets.insert(SocketAddr::new(ip, cfg.port), Arc::new(UdpSocket::bind(SocketAddr::new(any, cfg.port)).await?));
+            }
+            None => {
+                for ip in local_ips() {
+                    let addr = SocketAddr::new(ip, cfg.port);
+                    match UdpSocket::bind(addr).await {
+                        Ok(s) => {
+                            sockets.insert(addr, Arc::new(s));
+                        }
+                        Err(e) => tracing::warn!("WebRTC: can't listen on {addr}: {e}"),
+                    }
                 }
-                Err(e) => tracing::warn!("WebRTC: can't listen on {addr}: {e}"),
             }
         }
         anyhow::ensure!(!sockets.is_empty(), "no local address to listen on");
@@ -72,27 +86,44 @@ impl Hub {
     }
 
     pub fn is_open(&self, session: u64) -> bool {
-        self.open.lock().unwrap().contains(&session)
+        self.open.lock().unwrap().contains_key(&session)
     }
 
-    pub fn offer(&self, session: u64, sdp: String, reply: mpsc::Sender<Bytes>) {
-        let _ = self.tx.try_send(Msg::Offer { session, sdp, reply });
+    /// Frames of the session dropped since the last call: congestion, to its rate controller.
+    pub fn take_dropped(&self, session: u64) -> u32 {
+        self.open.lock().unwrap().get_mut(&session).map(std::mem::take).unwrap_or(0)
+    }
+
+    /// Signalling waits for room in the queue: an offer without an answer, or a close that never arrives,
+    /// would be a stuck viewer or a lingering peer.
+    pub async fn offer(&self, session: u64, sdp: String, g: serde_json::Value, reply: mpsc::Sender<Bytes>) {
+        let _ = self.tx.send(Msg::Offer { session, sdp, g, reply }).await;
     }
 
     /// A frame for the session's channel; one that doesn't fit the hub's queue is dropped (the page asks
     /// for a keyframe when it sees the gap).
     pub fn frame(&self, session: u64, data: Bytes) {
-        let _ = self.tx.try_send(Msg::Frame { session, data });
+        if self.tx.try_send(Msg::Frame { session, data }).is_err()
+            && let Some(dropped) = self.open.lock().unwrap().get_mut(&session)
+        {
+            *dropped += 1;
+        }
     }
 
-    pub fn close(&self, session: u64) {
-        let _ = self.tx.try_send(Msg::Close { session });
+    pub async fn close(&self, session: u64) {
+        let _ = self.tx.send(Msg::Close { session }).await;
     }
 }
 
-/// Every address a browser could reach us at (the certificate's too): the non-loopback ones.
+/// Every address a browser could reach us at (the certificate's too): the non-loopback ones (a link-local
+/// IPv6 address can't be bound without its scope).
 fn local_ips() -> Vec<IpAddr> {
-    if_addrs::get_if_addrs().unwrap_or_default().into_iter().map(|i| i.ip()).filter(|ip| !ip.is_loopback()).collect()
+    if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|i| i.ip())
+        .filter(|ip| !ip.is_loopback() && !matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local()))
+        .collect()
 }
 
 struct Peer {
@@ -100,12 +131,14 @@ struct Peer {
     channel: Option<ChannelId>,
     /// Numbers the fragmented messages, so the page can tell one frame's fragments from the next's.
     frame_id: u32,
+    /// The frame being written, and how many of its fragments are down the channel.
+    pending: Option<(Bytes, usize)>,
 }
 
-/// One datagram in: which socket (its local address is the candidate hit), from where, the bytes.
+/// One datagram in: the candidate address it came to, from where, the bytes.
 type Datagram = (SocketAddr, SocketAddr, Vec<u8>);
 
-async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receiver<Msg>, open: Arc<Mutex<HashSet<u64>>>) {
+async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receiver<Msg>, open: Arc<Mutex<HashMap<u64, u32>>>) {
     let (dtx, mut drx) = mpsc::channel::<Datagram>(1024);
     for (addr, socket) in &sockets {
         let (addr, socket, dtx) = (*addr, socket.clone(), dtx.clone());
@@ -121,9 +154,11 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
     let addrs: Vec<SocketAddr> = sockets.keys().copied().collect();
     let mut peers: HashMap<u64, Peer> = HashMap::new();
     loop {
-        // every change to an Rtc is followed by draining its output, down to when it next wants a timeout
+        // every change to an Rtc is followed by draining its output, down to when it next wants a timeout;
+        // a frame waiting for room in the send buffer goes on first (acknowledgements came in as datagrams)
         let mut deadline = Instant::now() + Duration::from_secs(1);
         for (id, peer) in peers.iter_mut() {
+            flush(peer);
             loop {
                 match peer.rtc.poll_output() {
                     Ok(Output::Timeout(t)) => {
@@ -168,9 +203,9 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
                 }
             }
             msg = rx.recv() => match msg {
-                Some(Msg::Offer { session, sdp, reply }) => {
+                Some(Msg::Offer { session, sdp, g, reply }) => {
                     open.lock().unwrap().remove(&session);
-                    match answer(&sdp, &addrs, reply) {
+                    match answer(&sdp, g, &addrs, reply) {
                         Ok(peer) => {
                             peers.insert(session, peer); // a second offer replaces the first connection
                         }
@@ -178,8 +213,19 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
                     }
                 }
                 Some(Msg::Frame { session, data }) => {
-                    if let Some(peer) = peers.get_mut(&session) && let Some(cid) = peer.channel {
-                        send(peer, cid, &data);
+                    if let Some(peer) = peers.get_mut(&session) && peer.channel.is_some() {
+                        // a frame still on its way keeps its place unless a keyframe comes (the page needs that one)
+                        let key = data.get(1).is_some_and(|f| f & 1 != 0);
+                        if peer.pending.is_none() || key {
+                            if peer.pending.take().is_some() {
+                                dropped(&open, session);
+                            }
+                            peer.frame_id = peer.frame_id.wrapping_add(1);
+                            peer.pending = Some((data, 0));
+                            flush(peer);
+                        } else {
+                            dropped(&open, session);
+                        }
                     }
                 }
                 Some(Msg::Close { session }) => {
@@ -194,7 +240,7 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
 
 /// A peer connection for a browser's offer: ICE lite with our addresses as host candidates; the answer
 /// goes out through `reply`.
-fn answer(sdp: &str, addrs: &[SocketAddr], reply: mpsc::Sender<Bytes>) -> Result<Peer> {
+fn answer(sdp: &str, g: serde_json::Value, addrs: &[SocketAddr], reply: mpsc::Sender<Bytes>) -> Result<Peer> {
     let offer = SdpOffer::from_sdp_string(sdp).context("offer")?;
     let mut rtc = Rtc::builder().set_ice_lite(true).set_stats_interval(None).build(Instant::now());
     for addr in addrs {
@@ -203,44 +249,60 @@ fn answer(sdp: &str, addrs: &[SocketAddr], reply: mpsc::Sender<Bytes>) -> Result
         }
     }
     let answer = rtc.sdp_api().accept_offer(offer).context("accept offer")?;
-    let _ = reply.try_send(protocol::rtc(&serde_json::json!({ "answer": answer.to_sdp_string() })));
-    Ok(Peer { rtc, channel: None, frame_id: 0 })
+    let _ = reply.try_send(protocol::rtc(&serde_json::json!({ "answer": answer.to_sdp_string(), "g": g })));
+    Ok(Peer { rtc, channel: None, frame_id: 0, pending: None })
 }
 
-fn event(session: u64, peer: &mut Peer, e: Event, open: &Mutex<HashSet<u64>>) {
+fn event(session: u64, peer: &mut Peer, e: Event, open: &Mutex<HashMap<u64, u32>>) {
     match e {
         Event::ChannelOpen(cid, label) => {
             tracing::info!(session, label, "WebRTC: data channel open");
             peer.channel = Some(cid);
-            open.lock().unwrap().insert(session);
+            open.lock().unwrap().insert(session, 0);
         }
         Event::ChannelClose(cid) => {
             if peer.channel == Some(cid) {
                 peer.channel = None;
+                peer.pending = None;
                 open.lock().unwrap().remove(&session);
             }
         }
-        Event::IceConnectionStateChange(state) => tracing::debug!(session, ?state, "WebRTC: ICE"),
+        Event::IceConnectionStateChange(state) => {
+            tracing::debug!(session, ?state, "WebRTC: ICE");
+            if state == str0m::IceConnectionState::Disconnected {
+                peer.rtc.disconnect(); // the UDP path died: frames go back to the socket at once, not when the browser gives up
+            }
+        }
         _ => {}
     }
 }
 
-/// One message down the channel, as fragments: `[FRAGMENT][u32 id][u16 index][u16 count]` then the bytes.
-/// A write the channel has no room for drops the rest of the frame (the page asks for a keyframe).
-fn send(peer: &mut Peer, cid: ChannelId, data: &[u8]) {
-    peer.frame_id = peer.frame_id.wrapping_add(1);
-    let count = data.chunks(FRAGMENT).count() as u16;
+fn dropped(open: &Mutex<HashMap<u64, u32>>, session: u64) {
+    if let Some(n) = open.lock().unwrap().get_mut(&session) {
+        *n += 1;
+    }
+}
+
+/// The pending frame's remaining fragments, `[FRAGMENT][u32 id][u16 index][u16 count]` then the bytes, as
+/// far as the send buffer takes them; the rest waits for the next round.
+fn flush(peer: &mut Peer) {
+    let (Some(cid), Some((data, next))) = (peer.channel, peer.pending.as_mut()) else { return };
+    let count = data.chunks(FRAGMENT).count();
     let mut msg = Vec::with_capacity(FRAGMENT + 9);
-    for (index, chunk) in data.chunks(FRAGMENT).enumerate() {
+    while *next < count {
+        let chunk = &data[*next * FRAGMENT..data.len().min((*next + 1) * FRAGMENT)];
         msg.clear();
         msg.push(protocol::FRAGMENT);
         msg.extend_from_slice(&peer.frame_id.to_le_bytes());
-        msg.extend_from_slice(&(index as u16).to_le_bytes());
-        msg.extend_from_slice(&count.to_le_bytes());
+        msg.extend_from_slice(&(*next as u16).to_le_bytes());
+        msg.extend_from_slice(&(count as u16).to_le_bytes());
         msg.extend_from_slice(chunk);
-        let Some(mut channel) = peer.rtc.channel(cid) else { return };
-        if !matches!(channel.write(true, &msg), Ok(true)) {
-            return;
+        let Some(mut channel) = peer.rtc.channel(cid) else { break };
+        match channel.write(true, &msg) {
+            Ok(true) => *next += 1,
+            Ok(false) => return, // no room: the browser's acknowledgements make some
+            Err(_) => break,
         }
     }
+    peer.pending = None;
 }
