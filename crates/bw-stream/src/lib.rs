@@ -328,6 +328,29 @@ pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<AudioSt
     Ok(AudioStream(pipeline))
 }
 
+/// Plays Opus packets from the browser's microphone into `device` (the sink whose monitor is the
+/// virtual source applications record from), as they come: `sync=false`, the sink paces at 48 kHz and
+/// swallows the network's jitter in its buffer. A thread feeds the appsrc from `rx`; the pipeline stops
+/// when the handle is dropped (the thread ends with the channel).
+pub fn audio_sink(device: &str, mut rx: mpsc::Receiver<Bytes>) -> Result<AudioStream> {
+    gst::init()?;
+    let desc = format!(
+        "appsrc name=src is-live=true format=time do-timestamp=true caps=audio/x-opus,channel-mapping-family=0,channels=2,rate=48000 \
+         ! opusdec ! audioconvert ! audioresample ! pulsesink device={device} sync=false"
+    );
+    let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
+    let src = pipeline.by_name("src").context("src element")?.downcast::<gst_app::AppSrc>().unwrap();
+    pipeline.set_state(gst::State::Playing)?;
+    std::thread::Builder::new().name("microphone".into()).spawn(move || {
+        while let Some(packet) = rx.blocking_recv() {
+            if src.push_buffer(gst::Buffer::from_slice(packet)).is_err() {
+                break; // the pipeline is gone
+            }
+        }
+    })?;
+    Ok(AudioStream(pipeline))
+}
+
 /// The real sink: compositor dmabufs → `appsrc`. Clone it for a keyframe handle before moving it into the compositor.
 #[derive(Clone)]
 pub struct GstSink(Arc<Mutex<Inner>>);

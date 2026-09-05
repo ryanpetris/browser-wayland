@@ -4,7 +4,8 @@
 import { KEYCODES } from './keycodes.js';
 import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, clipboardFiles, pref, codecs as serverCodecs } from './api.js';
 import { createStore } from './store.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, BTN } from './protocol.js';
+import { startMic, stopMic } from './mic.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -28,6 +29,8 @@ export function createViewer() {
     streamState: null, // { codec, hardware, auto_codec, bitrate_kbps, max_fps, auto_quality } from the server
     choice: { codec: pref.getStr('codec', 'auto'), quality: pref.getStr('quality', 'auto') }, // this viewer's picks
     touchMouse: pref.get('touchmouse', false), // fingers as a mouse with gestures, instead of real touch points
+    mic: false, // the local microphone is going to the desktop
+    micAvailable: false, // the desktop takes one (audio is on there)
     codecs: [], // what the server encodes, in Auto's order: [{ codec, hardware }]
     decodable: [], // codec families this browser decodes at all
     filesRev: 0, // bumps when an upload finished, so the Files tab refreshes
@@ -315,8 +318,11 @@ export function createViewer() {
         break;
       case ROLE: {
         const role = ROLES[dv.getUint8(1)] ?? 'viewer';
-        store.set({ role });
-        if (role !== 'controller' && document.pointerLockElement) document.exitPointerLock(); // only the controller's pointer is the desktop's
+        store.set({ role, micAvailable: dv.byteLength > 2 && dv.getUint8(2) === 1 });
+        if (role !== 'controller') {
+          if (document.pointerLockElement) document.exitPointerLock(); // only the controller's pointer is the desktop's
+          micStop(); // and only its microphone
+        }
         break;
       }
       case VIDEO: {
@@ -421,6 +427,21 @@ export function createViewer() {
     let peak = 0;
     for (let i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
     return { packets: audioPackets, decoded: audioDecoded, state: audioCtx.state, level: bins[peak], lead: (nextPlay - audioCtx.currentTime) * 1000 };
+  }
+
+  // --- microphone -----------------------------------------------------------------------------
+  // The local microphone into the desktop (mic.js), one Opus packet per message. Only the controller's
+  // counts, so losing control stops it, which also turns the browser's recording indicator off.
+  const micStop = () => { stopMic(); if (state().mic) store.set({ mic: false }); };
+  async function micStart() {
+    try {
+      await startMic(buf => send(MIC, buf.byteLength, dv => new Uint8Array(dv.buffer, 1).set(new Uint8Array(buf))));
+      store.set({ mic: true });
+    } catch (e) {
+      store.set({ notice: `microphone: ${e.message}` });
+      clearTimeout(noticeTimer);
+      noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
+    }
   }
 
   // --- input -----------------------------------------------------------------------------
@@ -771,6 +792,7 @@ export function createViewer() {
     type: text => sendText(INPUT, JSON.stringify({ type: 'text', text })),
     key: keys => sendText(INPUT, JSON.stringify({ type: 'key', keys })),
     touch: navigator.maxTouchPoints > 0,
+    mic: { start: micStart, stop: micStop },
     setTouchMouse(on) {
       // fingers down now end here, on both sides: the desktop lets go of everything, the page forgets them
       send(BLUR, 0);

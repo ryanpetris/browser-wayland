@@ -1,5 +1,5 @@
 // One line of numbers under the display, and this viewer's codec and quality choice.
-import { Activity, ClipboardCheck, Download, Lock, Volume2, VolumeX } from 'lucide-react';
+import { Activity, ClipboardCheck, Download, Lock, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
 import { useStore } from '../store.js';
 import { PRESETS } from '../protocol.js';
 import { codecName } from './ui.jsx';
@@ -38,6 +38,9 @@ export function StatusBar({ viewer }) {
   const clipboardText = useStore(viewer.store, st => st.clipboardText);
   const clipboardFiles = useStore(viewer.store, st => st.clipboardFiles);
   const renderer = useStore(viewer.store, st => st.renderer);
+  const mic = useStore(viewer.store, st => st.mic);
+  const micAvailable = useStore(viewer.store, st => st.micAvailable);
+  const role = useStore(viewer.store, st => st.role);
   const bad = s.lost + s.dropped + s.decodeErrors;
   return (
     <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-zinc-800 bg-zinc-900 px-3 font-mono text-[11px] text-zinc-500">
@@ -55,6 +58,11 @@ export function StatusBar({ viewer }) {
         <span className="flex items-center gap-1" title={s.audio ? `audio ${s.audio.state}` : 'no audio yet'}>
           {s.audio?.state === 'running' ? <Volume2 className="size-3 text-emerald-400" /> : <VolumeX className="size-3" />}
         </span>
+        {role === 'controller' && micAvailable && navigator.mediaDevices && (
+          <button type="button" aria-label="Microphone" aria-pressed={mic} onClick={e => { (mic ? viewer.mic.stop : viewer.mic.start)(); e.currentTarget.blur(); }} title={mic ? 'Microphone on: the desktop hears you' : 'Microphone: let the desktop hear you'} className="flex items-center hover:text-zinc-300">
+            {mic ? <Mic className="size-3 text-emerald-400" /> : <MicOff className="size-3" />}
+          </button>
+        )}
         <span className="hidden items-center gap-4 sm:flex"><Choice viewer={viewer} /></span>
         <span className="hidden sm:inline">{renderer}</span>
       </span>

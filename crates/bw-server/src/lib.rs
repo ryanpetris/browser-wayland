@@ -73,6 +73,9 @@ pub struct Config {
     pub version: &'static str,
     /// One encoder per viewer and per window stream.
     pub sinks: SinkFactory,
+    /// Where the browser's microphone packets (Opus) go to be played into the desktop's virtual source;
+    /// `None` without audio.
+    pub mic: Option<mpsc::Sender<Bytes>>,
 }
 
 impl Config {
@@ -96,6 +99,7 @@ pub struct App {
     bitrate_kbps: u32,
     viewers: Mutex<Viewers>,
     sinks: SinkFactory,
+    mic: Option<mpsc::Sender<Bytes>>,
     /// Event senders of the window-stream sessions (cursor, clipboard, window list go to them too).
     window_viewers: Mutex<HashMap<u64, mpsc::Sender<Bytes>>>,
     snapshot_lock: tokio::sync::Semaphore,
@@ -169,6 +173,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         bitrate_kbps: cfg.bitrate_kbps,
         viewers: Mutex::new(Viewers { output: bw_core::OutputGeometry { refresh_mhz: cfg.refresh_mhz, ..bw_core::INITIAL_OUTPUT }, ..Default::default() }),
         sinks: cfg.sinks,
+        mic: cfg.mic,
         window_viewers: Mutex::default(),
         snapshot_lock: tokio::sync::Semaphore::new(1),
         notifications: Mutex::default(),

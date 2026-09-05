@@ -50,7 +50,8 @@ One process, three thread domains joined by channels:
 Zero-copy video path: client dmabuf → GLES composite into a GBM-allocated dmabuf → the VA-API
 post-processor and encoder import that same dmabuf → bitstream → browser GPU decode. No CPU pixel
 copies. Audio: clients play into a private PulseAudio/PipeWire null sink; its monitor is captured and
-encoded as Opus.
+encoded as Opus. The browser's microphone comes back as Opus packets played into a second null sink,
+whose monitor is remapped as a real source (`module-remap-source`) for applications to record from.
 
 ## Crates
 

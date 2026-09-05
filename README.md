@@ -62,7 +62,12 @@ any window from anywhere in it.
 
 Audio from clients goes to the browser instead of the host speakers: the server creates a private
 `browser-wayland-<pid>` sink (printed in the log) and captures it as Opus. Clients started with
-`--exec` get `PULSE_SINK` set; for others use `PULSE_SINK=<that name> some-app`. `--no-audio` turns this off.
+`--exec` get `PULSE_SINK` set; for others use `PULSE_SINK=<that name> some-app`. The other way, the
+microphone button in the viewer's status bar sends the browser's microphone (Opus, with echo
+cancellation and noise suppression) into a virtual source `browser-wayland-microphone-<pid>` that
+applications record from (`PULSE_SOURCE` for `--exec` children; a video call sees it as a microphone);
+only the controlling session's is taken, and stopping it ends the capture, so the browser's recording
+indicator goes off. `--no-audio` turns both off.
 
 `--exec` runs at startup with the environment of a Wayland session (`XDG_SESSION_TYPE`, the toolkits'
 backend switches, `DISPLAY` for X11 programs), and `--kiosk` fullscreens every window. Together they run a whole nested desktop; with the

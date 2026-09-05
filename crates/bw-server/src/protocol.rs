@@ -62,6 +62,9 @@ pub const INPUT: u8 = 0x91;
 /// passed on as a `wl_touch` point (`id` tells the fingers down at once apart; x, y in logical px).
 /// Controlling session only.
 pub const TOUCH: u8 = 0x92;
+/// `[MIC][Opus packet]`: 20 ms of the browser's microphone, played into the desktop's virtual source.
+/// Controlling session only.
+pub const MIC: u8 = 0x93;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,8 +74,9 @@ pub enum Role {
     Controller = 2,
 }
 
-pub fn role(role: Role) -> Bytes {
-    Bytes::from(vec![ROLE, role as u8])
+/// `[ROLE][role][microphone]`: what the session may do, and whether the desktop takes a microphone (`Mic`).
+pub fn role(role: Role, microphone: bool) -> Bytes {
+    Bytes::from(vec![ROLE, role as u8, microphone as u8])
 }
 
 pub fn config(info: &StreamInfo) -> Bytes {
@@ -232,6 +236,7 @@ pub enum ClientMsg {
     Drag(DragMsg),
     Input(InputMsg),
     Touch { kind: u8, id: u8, x: f32, y: f32 },
+    Mic(Bytes),
 }
 
 #[derive(Debug, PartialEq, serde::Deserialize)]
@@ -286,6 +291,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         DRAG => ClientMsg::Drag(serde_json::from_slice(&b[1..]).ok()?),
         INPUT => ClientMsg::Input(serde_json::from_slice(&b[1..]).ok()?),
         TOUCH => ClientMsg::Touch { kind: u8_at(1)?, id: u8_at(2)?, x: f32_at(3)?, y: f32_at(7)? },
+        MIC => ClientMsg::Mic(Bytes::copy_from_slice(b.get(1..)?)),
         _ => return None,
     })
 }
@@ -307,7 +313,7 @@ mod tests {
         assert_eq!(decode(&[0x89]), Some(ClientMsg::Blur));
         assert_eq!(decode(&[0x92, 0, 3, 0, 0, 0x80, 0x3f, 0, 0, 0, 0x40]), Some(ClientMsg::Touch { kind: 0, id: 3, x: 1.0, y: 2.0 }));
         assert_eq!(decode(&[0x8D]), Some(ClientMsg::TakeControl));
-        assert_eq!(role(Role::Controller).as_ref(), &[0x08, 2]);
+        assert_eq!(role(Role::Controller, false).as_ref(), &[0x08, 2, 0]);
         let control = |json: &str| decode(&[&[CONTROL][..], json.as_bytes()].concat());
         assert_eq!(
             control(r#"{"id":3,"op":"move","x":10,"y":-2}"#),

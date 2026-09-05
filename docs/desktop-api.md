@@ -268,7 +268,10 @@ and hands the sink to the compositor with `Command::ViewerStream`; the composito
 output frame to every viewer sink (each with its own dup of the dmabuf fd and a share of the swapchain
 lease, so the slot is free when the last encoder is done) and encodes nothing while there is none.
 Frames go from each session's own channel to its socket in order, with a ten-second send deadline, the
-way window streams do; audio and events are broadcast with `try_send`.
+way window streams do; audio and events are broadcast with `try_send`. The controller's `Mic` packets
+go to `Config::mic`, the channel `bw-stream`'s `audio_sink` plays into the microphone sink (`bw`
+creates the sink and the remapped source next to the audio sink; the `Role` message tells sessions
+whether there is one).
 
 The controller's `Resize` becomes `Command::Resize` and re-fits everyone else (`retarget`); another
 session's `Resize` only sets its own encoder's size (`fit`: the output's aspect within its window, never

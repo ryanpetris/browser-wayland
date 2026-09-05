@@ -169,7 +169,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         if key == Key::Control && v.controller.is_none() {
             v.controller = Some(id);
         }
-        let replay: Vec<Bytes> = [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id))), Some(notifications.clone())].into_iter().flatten().collect();
+        let replay: Vec<Bytes> = [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id), app.mic.is_some())), Some(notifications.clone())].into_iter().flatten().collect();
         (id, replay)
     };
     for msg in replay {
@@ -320,7 +320,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     let replay: Vec<Bytes> = {
         let v = app.viewers.lock().unwrap();
         let role = if key == Key::Control { Role::Controller } else { Role::Viewer };
-        [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(role))].into_iter().flatten().collect()
+        [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(role, false))].into_iter().flatten().collect()
     };
     for msg in replay {
         let _ = socket.send(Message::Binary(msg)).await;
@@ -595,6 +595,12 @@ impl App {
             ClientMsg::SetClipboard(text) if key == Key::Control => Some(Command::SetClipboard { mime: api::TEXT.into(), data: text.into() }),
             ClientMsg::Drag(d) if controls => Some(self.drag_command(d)),
             ClientMsg::Input(m) if controls => Some(Command::Input(m)),
+            ClientMsg::Mic(packet) if controls => {
+                if let Some(mic) = &self.mic {
+                    let _ = mic.try_send(packet); // a full queue drops the packet: the sink is behind anyway
+                }
+                None
+            }
             m if controls => input_command(m),
             _ => None,
         };
@@ -626,7 +632,7 @@ impl App {
         }
         for id in [old, next].into_iter().flatten() {
             if let Some(s) = v.sessions.get(&id) {
-                let _ = s.events.try_send(protocol::role(v.role_of(id)));
+                let _ = s.events.try_send(protocol::role(v.role_of(id), self.mic.is_some()));
             }
         }
     }
