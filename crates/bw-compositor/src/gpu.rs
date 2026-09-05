@@ -64,6 +64,8 @@ impl Gpu {
 }
 
 fn swapchain(gbm: &GbmDevice<DrmDeviceFd>, fourcc: Fourcc, modifier: Modifier, width: u32, height: u32) -> DmabufSwapchain {
-    let allocator = DmabufAllocator(GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING));
+    // asked for as linear too, so GBM can't fall back to a tiled layout the CPU would misread
+    let flags = if modifier == Modifier::Linear { GbmBufferFlags::RENDERING | GbmBufferFlags::LINEAR } else { GbmBufferFlags::RENDERING };
+    let allocator = DmabufAllocator(GbmAllocator::new(gbm.clone(), flags));
     Swapchain::new(allocator, width, height, fourcc, vec![modifier])
 }

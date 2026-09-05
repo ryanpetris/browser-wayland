@@ -22,7 +22,7 @@ struct Cli {
     #[arg(long, default_value = "auto", value_parser = ["auto", "h264", "hevc", "vp9", "av1", "vp8"])]
     codec: String,
     /// Encode on the CPU (libvpx, x264, x265, SVT-AV1: whichever is installed) instead of with VA-API,
-    /// for machines without a usable GPU encoder. Slower, and capped at 30 fps.
+    /// for machines without a usable GPU encoder. Slower; the desktop runs at 30 Hz.
     #[arg(long)]
     software_encoding: bool,
     /// Command to run (via `sh -c`) at startup, with WAYLAND_DISPLAY, DISPLAY, PULSE_SINK and a
@@ -133,12 +133,13 @@ fn main() -> Result<()> {
         exec_env.extend([("GNOME_ACCESSIBILITY", "1"), ("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1")].map(|(k, v)| (k.to_string(), v.to_string())));
     }
     let accepted_formats = bw_stream::accepted_formats(&va, software);
-    tracing::info!(?accepted_formats, "vapostproc dmabuf import formats (fourcc, modifier)");
+    tracing::info!(?accepted_formats, "render target formats the encoders take (fourcc, modifier)");
     let bw_compositor::CompositorHandle { commands, socket_name, x11_display, join } = bw_compositor::spawn(
         bw_compositor::Config {
             render_node: cli.render_node,
             socket_name: cli.socket_name,
-            initial: bw_core::INITIAL_OUTPUT,
+            // the CPU encoders get every frame at half the rate instead of every other frame
+            initial: bw_core::OutputGeometry { refresh_mhz: if software { 30_000 } else { 60_000 }, ..bw_core::INITIAL_OUTPUT },
             exec: cli.exec.clone(),
             exec_env,
             kiosk: cli.kiosk,
@@ -153,7 +154,7 @@ fn main() -> Result<()> {
         let _ = exited_tx.send(join.join().is_ok());
     });
 
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: cli.files_dir.unwrap_or_else(bw_server::files::default_dir), version: env!("BW_VERSION"), sinks };
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, refresh_mhz: if software { 30_000 } else { 60_000 }, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: cli.files_dir.unwrap_or_else(bw_server::files::default_dir), version: env!("BW_VERSION"), sinks };
     // Ctrl+C returns here so the audio sink gets unloaded and the pipelines stopped.
     let result = tokio::runtime::Runtime::new()?.block_on(async {
         tokio::select! {

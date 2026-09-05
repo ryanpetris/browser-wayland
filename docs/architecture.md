@@ -159,14 +159,16 @@ with low-latency encoder settings (constant bitrate from `--bitrate`, no B-frame
 `vapostproc` scales the shared frame to the viewer's size on the GPU. With `--software-encoding` the
 compositor renders into linear dmabufs instead, the pipeline maps them as plain raw video
 (`videoconvertscale` on the CPU) and encodes with vp8enc, x264enc (or openh264enc), vp9enc, x265enc or
-svtav1enc, whichever are installed, at most 30 frames a second; the two modes never mix. Frames are sent to each viewer in
+svtav1enc, whichever are installed; the compositor's clock runs at 30 Hz in that mode, so every rendered
+frame reaches the encoders at a rate they can take. The two modes never mix. Frames are sent to each viewer in
 order; while a socket is busy, `appsrc` drops raw frames before the encoder, so no delta ever refers to
 a frame the viewer missed. A decoder error on the page asks for a keyframe (`UpstreamForceKeyUnitEvent`)
 plus `Command::RequestFullFrame`, since without damage no frame would be produced. Codec choice comes
-from each browser's `VideoDecoder.isConfigSupported` probes, among the codecs the GPU encodes (the VA
-elements the driver registered for the render node, low-power variants included): `--codec` when both
-sides can, else hardware AV1, then HEVC, VP9, H.264, else any the browser decodes; a browser with none
-in common is closed. The AV1 and VP9 codec strings carry a level chosen from the picture size, not read
+from each browser's `VideoDecoder.isConfigSupported` probes, among the codecs this machine encodes: on
+the GPU the VA elements the driver registered for the render node (low-power variants included), best
+first (AV1, HEVC, VP9, H.264); with `--software-encoding` the CPU encoders installed, cheapest first (VP8,
+H.264, VP9, HEVC, AV1). `--codec` wins when both sides can, else the first the browser decodes in
+hardware, else any it decodes; a browser with none in common is closed. The AV1 and VP9 codec strings carry a level chosen from the picture size, not read
 from the stream. A resize, size or codec change tears the pipeline down and rebuilds it with a new
 stream id; the page resets its decoder when it sees a new id. Pipeline errors reach the server through a bus
 sync handler (freed with the pipeline; a watching thread would outlive it).

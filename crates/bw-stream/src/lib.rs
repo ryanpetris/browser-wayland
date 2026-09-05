@@ -88,8 +88,9 @@ fn software_tail(codec: Codec, enc: &str, bitrate_kbps: u32) -> String {
         (Codec::H264, "x264enc") => format!("x264enc name=enc tune=zerolatency speed-preset=superfast bitrate={bitrate_kbps} bframes=0 ! video/x-h264,profile=main"),
         (Codec::H264, _) => format!("openh264enc name=enc rate-control=bitrate bitrate={bps}"),
         (Codec::Hevc, _) => format!("x265enc name=enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate_kbps} ! video/x-h265,profile=main"),
-        // no lookahead and a flat GOP: about ten frames of delay instead of sixty
-        (Codec::Av1, _) => format!("svtav1enc name=enc preset=12 target-bitrate={bitrate_kbps} parameters-string=lookahead=0:hierarchical-levels=1"),
+        // a two-frame mini-GOP: about six frames of delay instead of thirty-odd (the library insists on
+        // some lookahead); keyframes on request
+        (Codec::Av1, _) => format!("svtav1enc name=enc preset=12 target-bitrate={bitrate_kbps} parameters-string=hierarchical-levels=1:force-key-frames=1"),
     };
     format!("{encoder} {}", parse_tail(codec))
 }
@@ -141,7 +142,7 @@ fn va_encoder(prefix: &str, codec: Codec) -> Option<String> {
 }
 
 /// The codecs the GPU encodes: those whose VA element the driver registered, best first.
-pub fn hardware_codecs(prefix: &str) -> Vec<Codec> {
+fn hardware_codecs(prefix: &str) -> Vec<Codec> {
     if gst::init().is_err() {
         return vec![];
     }
@@ -335,9 +336,8 @@ struct Inner {
     tx: mpsc::Sender<StreamMsg>,
     /// `va` or `va<node>`: which device's elements (see `va_prefix`).
     prefix: String,
-    /// CPU encoders on linear frames instead of the GPU's, at 30 fps at most.
+    /// CPU encoders on linear frames instead of the GPU's.
     software: bool,
-    last_push: std::time::Instant,
     bitrate_kbps: u32,
     codec: Codec,
     /// Set by `output_changed`; the pipeline is (re)built lazily on the next frame.
@@ -383,7 +383,6 @@ impl GstSink {
             tx,
             prefix: prefix.to_string(),
             software,
-            last_push: std::time::Instant::now() - std::time::Duration::from_secs(1), // the first frame always goes
             bitrate_kbps,
             codec: Codec::H264,
             geo: None,
@@ -485,14 +484,18 @@ impl Inner {
         let (width, height) = self.target.unwrap_or((geo.width_px, geo.height_px));
         let src = "appsrc name=src is-live=true format=time do-timestamp=true block=false max-buffers=2 leaky-type=downstream";
         let (head, tail) = if self.software {
-            // linear frames the CPU can map: plain raw caps on the dmabuf memory, converted and scaled on the CPU
+            // linear frames the CPU can map: plain raw caps on the dmabuf memory, converted and scaled on the
+            // CPU; the rate is the compositor's clock in this mode, which the CPU encoders budget bits by
+            // GBM reports a buffer made with its linear usage flag as "no modifier" (DRM_FORMAT_MOD_INVALID)
+            anyhow::ensure!(modifier == 0 || modifier == 0x00ff_ffff_ffff_ffff, "software encoding needs linear frames, got modifier {modifier:#x}");
             let format = gst_video::dma_drm_fourcc_to_format(fourcc).context("unmappable fourcc")?;
             let head = format!(
-                "{src} caps=\"video/x-raw,format={},width={},height={},framerate=60/1\" \
+                "{src} caps=\"video/x-raw,format={},width={},height={},framerate={}/1\" \
                  ! videoconvertscale n-threads=4 ! video/x-raw,format=I420,width={width},height={height}",
                 format.to_str(),
                 geo.width_px,
-                geo.height_px
+                geo.height_px,
+                geo.refresh_mhz / 1000
             );
             let enc = software_encoder(self.codec).with_context(|| format!("no software encoder for {:?}", self.codec))?;
             (head, software_tail(self.codec, enc, self.bitrate_kbps))
@@ -520,17 +523,14 @@ impl Inner {
         if self.stream.is_none() {
             self.start()?;
         }
-        // ponytail: a fixed 30 fps cap for the CPU encoders; per-viewer rates come with the quality controls
-        if self.software && self.last_push.elapsed() < std::time::Duration::from_millis(32) {
-            return Ok(()); // the lease goes back with the frame; the next one is whole anyway
-        }
-        self.last_push = std::time::Instant::now();
         let mem = match self.mems.get(&frame.slot_id) {
             Some(m) => m.clone(), // frame.fd (a dup) is closed on drop; GStreamer already holds one
             None => {
                 let size = dmabuf_size(&frame.fd)?;
                 // Safety: the fd is a dmabuf and GStreamer takes ownership of it.
-                let m = unsafe { self.alloc.alloc_dmabuf(frame.fd, size) }?;
+                // the CPU maps a software frame every time: keep the mapping instead of faulting it in again
+                let flags = if self.software { gst_allocators::FdMemoryFlags::KEEP_MAPPED } else { gst_allocators::FdMemoryFlags::NONE };
+                let m = unsafe { self.alloc.alloc_dmabuf_with_flags(std::os::fd::IntoRawFd::into_raw_fd(frame.fd), size, flags) }?;
                 if self.mems.len() >= 8 {
                     self.mems.clear(); // slots get replaced now and then; in-flight buffers hold their own refs
                 }

@@ -56,8 +56,10 @@ pub struct Config {
     pub listen: SocketAddr,
     pub tls: bool,
     pub codec: CodecPolicy,
-    /// What the encoder side can produce (`bw_stream::hardware_codecs`).
+    /// What the encoder side can produce (`bw_stream::codecs`), best first.
     pub codecs: Vec<Codec>,
+    /// The compositor's frame clock, which every resize keeps.
+    pub refresh_mhz: i32,
     /// Where `cert.pem`, `key.pem` and `token` live.
     pub data_dir: PathBuf,
     /// Serve /api/windows/{id}/elements (see `elements.rs`).
@@ -151,7 +153,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         commands,
         policy: cfg.codec,
         codecs: cfg.codecs,
-        viewers: Mutex::default(),
+        viewers: Mutex::new(Viewers { output: bw_core::OutputGeometry { refresh_mhz: cfg.refresh_mhz, ..bw_core::INITIAL_OUTPUT }, ..Default::default() }),
         sinks: cfg.sinks,
         window_viewers: Mutex::default(),
         snapshot_lock: tokio::sync::Semaphore::new(1),

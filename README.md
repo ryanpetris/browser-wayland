@@ -22,7 +22,7 @@ GStreamer (core and base), libgbm, libEGL and libxkbcommon; `make` builds the vi
 - Linux with a GPU render node (`/dev/dri/renderD128`) and Mesa.
 - GStreamer 1.24+ with the VA plugin: `gst-plugin-va` on Arch (`vapostproc`, `vah264enc`), for
   hardware encoding; or `--software-encoding` with the vpx (good), x264 (ugly), x265 or svtav1 (bad)
-  plugins, which encodes on the CPU at up to 30 fps for machines without a usable GPU encoder.
+  plugins, which encodes on the CPU (the desktop then runs at 30 Hz) for machines without a usable GPU encoder.
 - `xorg-xwayland` for X11 clients, and PipeWire or PulseAudio with `pactl` for audio (both optional).
 - Rust stable and Node 24 to build. The browser needs WebCodecs (Chromium, Firefox 130+, Safari 26+).
 

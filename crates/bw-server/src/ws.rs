@@ -448,7 +448,7 @@ impl App {
         let cmd = match m {
             // dpr bounds keep a bogus value from turning into a giant dmabuf allocation
             ClientMsg::Resize { css_w, css_h, dpr } if (0.5..=8.0).contains(&dpr) => {
-                let geo = geometry(css_w, css_h, dpr as f64);
+                let geo = geometry(css_w, css_h, dpr as f64, v.output.refresh_mhz);
                 if let Some(s) = v.sessions.get_mut(&id) {
                     s.size = Some(geo);
                 }
@@ -544,9 +544,9 @@ fn input_command(m: ClientMsg) -> Option<Command> {
 }
 
 /// CSS size × devicePixelRatio, rounded down to even (4:2:0 encoders), capped at 8K.
-fn geometry(css_w: u16, css_h: u16, dpr: f64) -> OutputGeometry {
+fn geometry(css_w: u16, css_h: u16, dpr: f64, refresh_mhz: i32) -> OutputGeometry {
     let px = |css: u16| (((css as f64 * dpr).round() as u32).min(8192) & !1).max(2);
-    OutputGeometry { width_px: px(css_w), height_px: px(css_h), scale: dpr, refresh_mhz: 60_000 }
+    OutputGeometry { width_px: px(css_w), height_px: px(css_h), scale: dpr, refresh_mhz }
 }
 
 /// The output scaled to fit a viewer's window (never up), even-sized for the encoders.
