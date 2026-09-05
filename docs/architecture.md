@@ -123,7 +123,10 @@ iconify goes through the same minimize code. The keyboard focuses an X11 window 
 `WM_TAKE_FOCUS` (X input focus, the take-focus message, or both); an X11 client that only ever saw its
 surface focused gets no `FocusIn`, and Chromium, for one, then opens no menus. Clicks on
 override-redirect windows (X11 menus, tooltips) leave the focus alone, and an unmapped window hands it
-to the top-most one left. The frame that moves the pointer onto a new surface carries no
+to the top-most one left. The pointer is not clamped to the output: a window that hangs past its edge
+(a popped-out one sized by its own tab) takes clicks there, except an X11 one, whose Xwayland screen is
+the output; the server tells the popup and the API caller when a click aims at such a spot. The frame
+that moves the pointer onto a new surface carries no
 relative-pointer delta: Xwayland warps its device to the entry point and would apply the delta on top,
 which put a synthesized click far from its target.
 

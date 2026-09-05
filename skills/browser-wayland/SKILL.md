@@ -65,6 +65,9 @@ curl -s -H "$H" https://host:8443/api/windows | jq
   `unminimize`, `maximize`, `unmaximize`, `fullscreen`, `unfullscreen` do what they say; `move` and
   `resize` work on floating windows. These requests are fire-and-forget: check the window list
   afterwards.
+- A `click` that aims past the desktop's edge at an X11 window (a window larger than the output) answers
+  "ok" with a warning: Xwayland pins such a click to the edge. Move or resize the window first, or make
+  the desktop larger. Wayland windows take clicks anywhere.
 - `applications` lists what is installed (the desktop's `.desktop` launchers) and `launch` starts one by
   its `id`; `spawn` runs any shell command as a client of this desktop (`sh -c`), with the display
   variables set. Programs take a moment to map their window; poll the window list. A program that is

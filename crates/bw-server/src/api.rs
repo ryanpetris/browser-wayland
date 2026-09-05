@@ -71,6 +71,8 @@ impl IntoResponse for ApiError {
     }
 }
 
+pub const X11_EDGE: &str = "That part of the window is past the desktop's edge, where X11 programs can't take clicks: move or shrink the window, or enlarge the desktop.";
+
 impl App {
     /// The window list the viewers were last sent.
     pub fn windows(&self) -> Vec<WindowInfo> {
@@ -170,6 +172,16 @@ impl App {
             ControlOp::Quit => Command::Quit,
             _ => Command::Control(msg),
         })
+    }
+
+    /// Xwayland's screen is the output, and the X server pins its pointer to it: a click on the part of an
+    /// X11 window that hangs past the output's edge lands on the edge instead. Says so for such a click.
+    pub fn x11_edge_warning(&self, window: u64, x: f64, y: f64) -> Option<&'static str> {
+        let v = self.viewers.lock().unwrap();
+        let w = v.window_list.iter().find(|w| w.id == window).filter(|w| w.x11)?;
+        let (ax, ay) = (w.x as f64 + x, w.y as f64 + y);
+        let (ow, oh) = (v.output.width_px as f64 / v.output.scale, v.output.height_px as f64 / v.output.scale);
+        (ax < 0.0 || ay < 0.0 || ax >= ow || ay >= oh).then_some(X11_EDGE)
     }
 
     /// The installed applications, by name. A few hundred small files: read off the async workers.

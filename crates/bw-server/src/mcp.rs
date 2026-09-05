@@ -263,7 +263,14 @@ impl Mcp {
 
     #[tool(description = "Move the pointer there and click. With `window`, x y are relative to that window, e.g. the centre of an element's rectangle.")]
     fn click(&self, Extension(parts): Extension<Parts>, Parameters(ClickArgs { x, y, window, button, count }): Parameters<ClickArgs>) -> ToolResult {
-        self.input(&parts, InputMsg::Click { x, y, window, button, count })
+        let warning = window.and_then(|w| self.app.x11_edge_warning(w, x, y));
+        match self.acting(&parts).and_then(|()| self.app.input(InputMsg::Click { x, y, window, button, count })) {
+            Ok(()) => Ok(CallToolResult::success(vec![ContentBlock::text(match warning {
+                Some(w) => format!("ok; {w}"),
+                None => "ok".into(),
+            })])),
+            Err(e) => done(Err(e)),
+        }
     }
 
     #[tool(description = "Move the pointer without clicking (hover, or the middle of a drag).")]

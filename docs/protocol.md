@@ -38,6 +38,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x06` | Windows | JSON array of window objects (see below), the whole list, whenever anything in it changed. Replayed to a new viewer. |
 | `0x07` | Clipboard | UTF-8 text a desktop application put on the clipboard (text mime types only, at most 1 MiB). Not replayed: a viewer that reconnects keeps its browser clipboard. |
 | `0x08` | Role | `u8`: what this session may do. 0 watch only (the viewer token); 1 act but not drive (a control token while another session controls); 2 control: its pointer, keyboard and window size are the desktop's. Sent with the replay after `Hello` and whenever it changes. |
+| `0x09` | Notice | UTF-8 text about the session's last action, for the page to show briefly. Sent to a window stream whose press aims past the desktop's edge at an X11 window: Xwayland's screen is the desktop, and the X server pins the pointer to it, so that click cannot arrive. |
 
 ### Client → server
 
@@ -120,7 +121,7 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `POST /api/control` | Body: a control message. `202 Accepted`; fire-and-forget. |
 | `GET /api/windows/{id}/snapshot.png?scale=` | PNG of that window. `scale` 0.05–2, relative to the output scale, default 1. `404` unknown id, `429` another snapshot is in flight, `500` the render failed (logged), `503` the compositor didn't answer within 2 s. |
 | `GET /api/screenshot.png?scale=` | PNG of the whole output (layers included, cursor excluded); `scale` as for a window; `429`, `500`, `503` as for a window. |
-| `POST /api/input` | Body: an input message (below). `202`; `404` unknown window; `503` compositor gone. |
+| `POST /api/input` | Body: an input message (below). `202`, with `{"warning": …}` when a click aims past the desktop's edge at an X11 window; `404` unknown window; `503` compositor gone. |
 | `GET /api/clipboard` | The last text a desktop application copied, as `text/plain`; `204` before any. |
 | `PUT /api/clipboard` | Body: UTF-8 text that becomes the desktop clipboard. `202`; `413` over 1 MiB. |
 | `POST /api/token/rotate` | Replaces both tokens: written to the data directory, printed as new URLs, returned as `{"token": …, "viewer_token": …}`; every session is closed with `4001 token rotated` and the old tokens stop working. Control token only; not an MCP tool. |

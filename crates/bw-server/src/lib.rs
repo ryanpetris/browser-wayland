@@ -319,8 +319,15 @@ async fn api_set_clipboard(Extension(key): Extension<Key>, State(app): State<Arc
 }
 
 async fn api_input(Extension(key): Extension<Key>, State(app): State<Arc<App>>, Json(msg): Json<InputMsg>) -> Response {
+    let warning = match &msg {
+        InputMsg::Click { window: Some(id), x, y, .. } => app.x11_edge_warning(*id, *x, *y),
+        _ => None,
+    };
     match writable(key).and_then(|()| app.input(msg)) {
-        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Ok(()) => match warning {
+            Some(w) => (StatusCode::ACCEPTED, NO_STORE, Json(serde_json::json!({ "warning": w }))).into_response(),
+            None => StatusCode::ACCEPTED.into_response(),
+        },
         Err(e) => e.into_response(),
     }
 }

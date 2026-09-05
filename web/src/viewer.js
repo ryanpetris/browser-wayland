@@ -4,7 +4,7 @@
 import { KEYCODES } from './keycodes.js';
 import { TOKEN, WINDOW, api, elementsOf, snapshot, control } from './api.js';
 import { createStore } from './store.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, ROLES, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, BTN } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, ROLES, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -21,6 +21,7 @@ export function createViewer() {
     windows: [],
     windowTitle: '', // window mode: the streamed window's title
     clipboardText: '',
+    notice: '', // what the server just told us about our last action, shown for a few seconds
     locked: false,
     elements: null, // the focused window's elements: {id, status, page}
     elementsOn: false,
@@ -32,6 +33,7 @@ export function createViewer() {
   let canvas = null, ctx = null, draw = null; // draw(frame) takes ownership of the frame and closes it
   let stage = { w: 0, h: 0 }; // CSS size of the area the canvas lives in
   let quitting = false; // this page asked the desktop to shut down: the socket's end is not a failure
+  let noticeTimer;
   let ws, decoder, stream = null, awaitingKey = true;
   let frames = 0, received = 0, windowFrames = 0, windowBytes = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [], keyframes = 0, decodeErrors = 0, dropped = 0;
   let videoSeq = -1, audioSeq = -1, lost = 0, dropNext = false; // seq: last message seen per stream; lost: gaps in either
@@ -273,6 +275,11 @@ export function createViewer() {
       }
       case CLIPBOARD:
         onClipboard(new TextDecoder().decode(new Uint8Array(buf, 1)));
+        break;
+      case NOTICE:
+        store.set({ notice: new TextDecoder().decode(new Uint8Array(buf, 1)) });
+        clearTimeout(noticeTimer);
+        noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
         break;
       case ROLE: {
         const role = ROLES[dv.getUint8(1)] ?? 'viewer';

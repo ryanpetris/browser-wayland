@@ -281,6 +281,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     let _ = app.commands.send(Command::WindowStream { key: stream, window: id, sink: Some(sink) });
 
     let (mut info, mut seq, mut failed) = (None::<bw_core::StreamInfo>, 0u16, false);
+    let mut pointer = (0.0, 0.0); // the last window-relative position, for the edge notice
     let mut ping = tokio::time::interval(Duration::from_secs(5));
     let mut unanswered = 0;
     let ended = loop {
@@ -315,7 +316,19 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                     if app.key_for(&token).is_none() {
                         break Some((UNAUTHORIZED, "token rotated"));
                     }
-                    let cmd = match protocol::decode(&b) {
+                    let decoded = protocol::decode(&b);
+                    if let Some(ClientMsg::MotionAbs { x, y }) = &decoded {
+                        pointer = (*x as f64, *y as f64);
+                    }
+                    // a press on the part of an X11 window past the output's edge goes nowhere: say so
+                    if let Some(ClientMsg::Button { pressed: true, .. }) = &decoded
+                        && key == Key::Control
+                        && let Some(w) = app.x11_edge_warning(id, pointer.0, pointer.1)
+                        && !send(&mut socket, protocol::notice(w)).await
+                    {
+                        break None;
+                    }
+                    let cmd = match decoded {
                         Some(ClientMsg::RequestKeyframe) => {
                             control.request_keyframe();
                             Some(Command::RequestFullFrame)

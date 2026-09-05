@@ -1,7 +1,7 @@
 // The display: the video canvas, sized by its container (the desktop's output takes that size), with
 // the overlays and status banners on top. Fullscreen is requested on this element, so the chrome goes away.
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, MonitorX } from 'lucide-react';
+import { Loader2, MonitorX, TriangleAlert } from 'lucide-react';
 import { useStore } from '../store.js';
 import { hue, windowColor } from './ui.jsx';
 
@@ -26,6 +26,7 @@ export function Stage({ viewer, windowMode, borders, elements }) {
       <canvas ref={viewer.attach} tabIndex={-1} className={`stage block outline-none ${windowMode ? '' : 'h-full w-full'}`} />
       {(borders || elements) && <Overlay viewer={viewer} size={size} borders={borders} elements={elements} />}
       <Banner viewer={viewer} />
+      <Notice viewer={viewer} />
     </div>
   );
 }
@@ -63,6 +64,17 @@ function Overlay({ viewer, size, borders, elements }) {
           {why}
         </div>
       )}
+    </div>
+  );
+}
+
+// A few seconds of what the server said about the last action (a click an X11 window can't take).
+function Notice({ viewer }) {
+  const notice = useStore(viewer.store, s => s.notice);
+  if (!notice) return null;
+  return (
+    <div className="absolute bottom-3 left-1/2 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-500/40 bg-zinc-900/95 px-3 py-2 text-xs text-amber-100 shadow-lg">
+      <TriangleAlert className="size-4 shrink-0 text-amber-400" /> {notice}
     </div>
   );
 }

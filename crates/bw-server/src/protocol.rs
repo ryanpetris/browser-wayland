@@ -15,6 +15,8 @@ pub const CLIPBOARD: u8 = 0x07;
 /// `[ROLE][u8]`: what this session may do: 0 watch only (the viewer token), 1 act but not drive (a control
 /// token while someone else controls), 2 control (its pointer, keyboard and size are the desktop's).
 pub const ROLE: u8 = 0x08;
+/// `[NOTICE][utf-8 text]`: something the page should tell its user about what it just did.
+pub const NOTICE: u8 = 0x09;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
@@ -83,6 +85,13 @@ pub fn cursor(img: Option<&CursorImage>) -> Bytes {
     b.extend_from_slice(&(img.logical_w as u16).to_le_bytes());
     b.extend_from_slice(&(img.logical_h as u16).to_le_bytes());
     b.extend_from_slice(&img.rgba);
+    b.into()
+}
+
+pub fn notice(text: &str) -> Bytes {
+    let mut b = Vec::with_capacity(1 + text.len());
+    b.push(NOTICE);
+    b.extend_from_slice(text.as_bytes());
     b.into()
 }
 

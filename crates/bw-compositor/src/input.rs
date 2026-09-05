@@ -263,11 +263,8 @@ impl State {
             pointer.frame(self);
             return;
         }
-        let geo = self.space.output_geometry(&self.output).unwrap();
-        let location = Point::from((
-            location.x.clamp(0.0, (geo.size.w - 1) as f64),
-            location.y.clamp(0.0, (geo.size.h - 1) as f64),
-        ));
+        // the pointer goes where it is sent, past the output's edge too: a window that hangs over it
+        // (a popped-out one sized by its own tab) is still a window
         self.pointer_location = location;
         let under = self.surface_under(location);
         // relative-pointer clients get the delta too, except on the frame that enters a new surface: the
