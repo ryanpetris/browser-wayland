@@ -51,6 +51,15 @@ export const downloadFile = async name => {
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 };
 
+// Files on the clipboard: put files of the transfer folder there; fetch the i-th file copied in the desktop.
+export const clipboardFiles = names => api('/api/clipboard/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names }) });
+export const downloadClipboardFile = async (index, name) => {
+  const blob = await ok(await api(`/api/clipboard/files/${index}`)).blob();
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+};
+
 // A notification's icon as a blob URL (the caller revokes it), or null.
 export const notificationIcon = id => api(`/api/notifications/${id}/icon`).then(r => (r.ok ? r.blob().then(URL.createObjectURL) : null)).catch(() => null);
 

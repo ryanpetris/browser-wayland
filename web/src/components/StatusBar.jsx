@@ -1,8 +1,9 @@
 // One line of numbers under the display, and this viewer's codec and quality choice.
-import { Activity, ClipboardCheck, Lock, Volume2, VolumeX } from 'lucide-react';
+import { Activity, ClipboardCheck, Download, Lock, Volume2, VolumeX } from 'lucide-react';
 import { useStore } from '../store.js';
 import { PRESETS } from '../protocol.js';
 import { codecName } from './ui.jsx';
+import { downloadClipboardFile } from '../api.js';
 
 const PRESET_LABEL = { low: 'Low (2 Mbit/s, 30 fps)', medium: 'Medium (5 Mbit/s)', high: 'High (12 Mbit/s)', max: 'Max (25 Mbit/s)' };
 const mbit = kbps => `${(kbps / 1000).toFixed(kbps % 1000 ? 1 : 0)} Mbit/s`;
@@ -35,6 +36,7 @@ export function StatusBar({ viewer }) {
   const s = useStore(viewer.store, st => st.stats);
   const locked = useStore(viewer.store, st => st.locked);
   const clipboardText = useStore(viewer.store, st => st.clipboardText);
+  const clipboardFiles = useStore(viewer.store, st => st.clipboardFiles);
   const renderer = useStore(viewer.store, st => st.renderer);
   const bad = s.lost + s.dropped + s.decodeErrors;
   return (
@@ -44,7 +46,11 @@ export function StatusBar({ viewer }) {
       <span title="Input to the next painted frame">{s.latencyMs.toFixed(0)} ms</span>
       <span className={bad ? 'text-amber-400' : ''} title="lost · dropped · decode errors">{s.lost} · {s.dropped} · {s.decodeErrors}</span>
       <span className="ml-auto flex items-center gap-4">
-        {clipboardText && <span className="flex max-w-48 items-center gap-1 truncate" title={`Clipboard: ${clipboardText}`}><ClipboardCheck className="size-3 shrink-0" /><span className="truncate">{clipboardText}</span></span>}
+        {clipboardFiles.length > 0 ? (
+          <button type="button" onClick={() => clipboardFiles.forEach((n, i) => downloadClipboardFile(i, n))} title={`Download the copied files: ${clipboardFiles.join(', ')}`} className="flex max-w-48 items-center gap-1 truncate text-indigo-300 hover:text-indigo-200">
+            <Download className="size-3 shrink-0" /><span className="truncate">{clipboardText} copied</span>
+          </button>
+        ) : clipboardText && <span className="flex max-w-48 items-center gap-1 truncate" title={`Clipboard: ${clipboardText}`}><ClipboardCheck className="size-3 shrink-0" /><span className="truncate">{clipboardText}</span></span>}
         {locked && <span className="flex items-center gap-1 text-indigo-300"><Lock className="size-3" /> pointer locked</span>}
         <span className="flex items-center gap-1" title={s.audio ? `audio ${s.audio.state}` : 'no audio yet'}>
           {s.audio?.state === 'running' ? <Volume2 className="size-3 text-emerald-400" /> : <VolumeX className="size-3" />}

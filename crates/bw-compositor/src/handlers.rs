@@ -654,7 +654,7 @@ impl SelectionHandler for State {
     /// A Wayland client wants data from a compositor-owned selection: relayed from an X11 client, or our own.
     fn send_selection(&mut self, ty: SelectionTarget, mime_type: String, fd: OwnedFd, _seat: Seat<Self>, data: &crate::clipboard::Selection) {
         match data {
-            crate::clipboard::Selection::Ours(ours) => self.serve_clipboard(ours.clone(), fd),
+            crate::clipboard::Selection::Ours(ours) => self.serve_clipboard(ours.clone(), &mime_type, fd),
             crate::clipboard::Selection::X11 => {
                 let handle = self.handle.clone();
                 if let Some(xwm) = self.xwm.as_mut()

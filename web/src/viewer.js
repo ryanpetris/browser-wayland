@@ -2,7 +2,7 @@
 // React only draws the chrome around it (App.jsx) and reads what it publishes on `store`.
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
-import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, pref, codecs as serverCodecs } from './api.js';
+import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, clipboardFiles, pref, codecs as serverCodecs } from './api.js';
 import { createStore } from './store.js';
 import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, BTN } from './protocol.js';
 
@@ -21,6 +21,7 @@ export function createViewer() {
     windows: [],
     windowTitle: '', // window mode: the streamed window's title
     clipboardText: '',
+    clipboardFiles: [], // names of the files a desktop application copied (downloadable by index)
     notice: '', // what the server just told us about our last action, shown for a few seconds
     notifications: [], // open desktop notifications, oldest first
     upload: null, // { name, index, count } while files dropped on the page go up
@@ -475,15 +476,25 @@ export function createViewer() {
   let pendingClipboard = null, pendingPaste = null, pasteTimer, clipboardGen = 0, swallowKeyup = null;
   function onClipboard(text) {
     clipboardGen++;
-    pendingClipboard = text;
-    store.set({ clipboardText: text });
-    flushClipboard();
+    pendingClipboard = null;
+    store.set({ clipboardText: text, clipboardFiles: [] });
+    if (text) { pendingClipboard = text; flushClipboard(); }
   }
-  // the bytes are fetched once, now, so the write can happen inside a gesture (WebKit insists on that)
+  // the bytes are fetched once, now, so the write can happen inside a gesture (WebKit insists on that);
+  // a file list can't go on the browser's clipboard: the page offers the files for download instead
   function onClipboardData(mime) {
     const gen = ++clipboardGen;
     pendingClipboard = null;
-    store.set({ clipboardText: '[image]' });
+    if (mime === 'text/uri-list') {
+      api('/api/clipboard').then(r => r.text()).then(list => {
+        if (gen !== clipboardGen) return;
+        const names = list.split(/\r?\n/).filter(l => l.startsWith('file://')).map(l => decodeURIComponent(l.replace(/^file:\/\//, '').split('/').pop()));
+        if (names.length) store.set({ clipboardFiles: names, clipboardText: `${names.length} file${names.length === 1 ? '' : 's'}` });
+        else onClipboard(list.trim()); // links, not files: plain text to the browser
+      }).catch(() => {});
+      return;
+    }
+    store.set({ clipboardText: '[image]', clipboardFiles: [] });
     api('/api/clipboard').then(r => r.blob()).then(blob => { if (gen === clipboardGen) { pendingClipboard = { mime, blob }; flushClipboard(); } }).catch(() => {});
   }
   function flushClipboard() {
@@ -507,15 +518,18 @@ export function createViewer() {
   document.addEventListener('paste', e => {
     if (isFormField(e.target) || state().role === 'viewer') return;
     e.preventDefault();
-    const image = [...(e.clipboardData?.items ?? [])].find(i => i.type === 'image/png')?.getAsFile();
-    if (image) {
-      // The user's chord is dropped (its modifier may go up before the upload is done); once the picture is
-      // on the desktop clipboard the same chord is pressed through the API, and not at all if the upload failed.
+    const files = [...(e.clipboardData?.files ?? [])];
+    const image = files.length === 1 && files[0].type === 'image/png' ? files[0] : null; // a screenshot, not a copied file
+    if (image || files.length) {
+      // The user's chord is dropped (its modifier may go up before the upload is done); once the picture, or
+      // the files, are on the desktop clipboard the same chord is pressed through the API, and not at all
+      // if the upload failed. Files go to the transfer folder first and the clipboard then names them there.
       const chord = pendingPaste === KEYCODES.Insert ? 'shift+Insert' : 'ctrl+v';
       swallowKeyup = pendingPaste; pendingPaste = null; clearTimeout(pasteTimer);
-      api('/api/clipboard', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: image, signal: AbortSignal.timeout(5000) })
-        .then(r => { if (r.ok) return api('/api/input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'key', keys: chord }) }); })
-        .catch(() => {});
+      const put = image
+        ? api('/api/clipboard', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: image, signal: AbortSignal.timeout(5000) })
+        : Promise.all(files.map(f => uploadFile(f).then(r => r.name))).then(names => { store.set({ filesRev: state().filesRev + 1 }); return clipboardFiles(names); });
+      put.then(r => { if (r.ok) return api('/api/input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'key', keys: chord }) }); }).catch(() => {});
       return;
     }
     sendText(SET_CLIPBOARD, e.clipboardData?.getData('text/plain') ?? ''); // an empty browser clipboard clears the desktop's

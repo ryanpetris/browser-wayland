@@ -114,6 +114,8 @@ rotated"; the tokens change with the data directory, e.g. a fresh container with
 Drop a file on the page and it lands in the desktop's Downloads folder (`--files-dir` for another);
 the Files tab of the side panel lists that folder, with download and delete, and an Upload button for
 browsers without drag and drop. The same folder is `GET`, `PUT` and `DELETE /api/files/{name}` on the API.
+Files copied in a file manager inside the desktop show up in the status bar with a download button, and
+files copied on your machine paste into the desktop's file manager (they land in the folder first).
 
 ## Window streams
 

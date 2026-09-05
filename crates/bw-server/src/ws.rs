@@ -58,7 +58,7 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 msg
             }
             Event::Clipboard { mime, data } => {
-                let (msg, data) = if mime == api::PNG {
+                let (msg, data) = if mime == api::PNG || mime == api::URI_LIST {
                     (protocol::clipboard_data(&mime), data)
                 } else {
                     let text = String::from_utf8_lossy(&data).into_owned(); // a legacy STRING owner may hand us Latin-1

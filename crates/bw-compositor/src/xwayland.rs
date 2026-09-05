@@ -225,7 +225,7 @@ impl XwmHandler for State {
             .then(|| current_data_device_selection_userdata(&self.seat).as_deref().and_then(|s| if let crate::clipboard::Selection::Ours(o) = s { Some(o.clone()) } else { None }))
             .flatten();
         if let Some(ours) = ours {
-            self.serve_clipboard(ours, fd);
+            self.serve_clipboard(ours, &mime_type, fd);
             return;
         }
         let res = match selection {

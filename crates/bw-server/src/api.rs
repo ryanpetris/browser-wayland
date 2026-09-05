@@ -14,6 +14,8 @@ use bw_core::{Bytes, Command, ControlMsg, ControlOp, InputMsg, Snapshot, Snapsho
 /// The clipboard mimes the bridge carries: text (offered to clients under every text mime) and PNG.
 pub const TEXT: &str = "text/plain;charset=utf-8";
 pub const PNG: &str = "image/png";
+/// A list of `file://` URIs, one per line: files copied in a file manager, or files the browser pasted.
+pub const URI_LIST: &str = "text/uri-list";
 
 pub fn clipboard_limit(mime: &str) -> usize {
     if mime == PNG { 16 << 20 } else { 1 << 20 }

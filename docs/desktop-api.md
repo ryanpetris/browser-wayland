@@ -219,6 +219,15 @@ bridged; other image formats aren't read (GTK, Qt, Firefox and Chromium all offe
 client's PNG isn't either: Smithay 0.7's Xwayland selection code resolves only text targets. Our PNG is
 offered to X11 clients.
 
+Files: a file manager's copy offers `text/uri-list` and `x-special/gnome-copied-files` (the same list
+with a `copy` first line) besides the paths as text; the compositor reads the URI list then, the page
+shows "N files copied" with a download button, and `GET /api/clipboard/files/{index}` streams the
+`index`th file of the list currently on the clipboard (only that list: the route can't read anything
+else). The other way, files pasted into the page go to the transfer folder first, then `POST
+/api/clipboard/files` makes them the desktop clipboard as a URI list offered under both mimes (the
+gnome one with its `copy` line), and the paste chord follows through the API; Thunar and Nautilus paste
+them as copies.
+
 The page writes received text to the browser clipboard at once when it may, otherwise on the next
 gesture; a received image is fetched from the API and written as a `ClipboardItem`. Ctrl+V and
 Shift+Insert are not forwarded immediately: the browser's `paste` event (which needs no permission)

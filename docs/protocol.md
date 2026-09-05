@@ -39,7 +39,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x07` | Clipboard | UTF-8 text a desktop application put on the clipboard (at most 1 MiB). Not replayed: a viewer that reconnects keeps its browser clipboard. |
 | `0x08` | Role | `u8`: what this session may do. 0 watch only (the viewer token); 1 act but not drive (a control token while another session controls); 2 control: its pointer, keyboard and window size are the desktop's. Sent with the replay after `Hello` and whenever it changes. |
 | `0x09` | Notice | UTF-8 text about the session's last action, for the page to show briefly. Sent to a window stream whose press aims past the desktop's edge at an X11 window: Xwayland's screen is the desktop, and the X server pins the pointer to it, so that click cannot arrive. |
-| `0x0A` | ClipboardData | A desktop application put something other than text on the clipboard; the payload is its mime type (`image/png`). The bytes are at `GET /api/clipboard`; the page fetches them and writes them to the browser clipboard. |
+| `0x0A` | ClipboardData | A desktop application put something other than text on the clipboard; the payload is its mime type: `image/png` (the page fetches the bytes from `GET /api/clipboard` and writes them to the browser clipboard) or `text/uri-list` (files copied in a file manager: the page offers them for download). |
 | `0x0C` | StreamState | JSON `{"codec", "auto_codec", "bitrate_kbps", "max_fps", "auto_quality"}`: what this session's encoder does right now (`max_fps` 0: the compositor's rate), after every `Config` and whenever the automatic quality changes; the page labels its Auto entries with it. |
 | `0x0B` | Notifications | JSON array of the open desktop notifications, oldest first, whenever they change and in the replay: each has `id`, `rev` (counts up when the application replaces it), `app`, `summary`, `body`, `icon` (whether `GET /api/notifications/{id}/icon` has a picture), `actions` as `[key, label]` pairs, and `timeout_ms` (0: until closed). |
 
@@ -136,8 +136,10 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `GET /api/notifications` | The open notifications, oldest first, as the `Notifications` message carries them. |
 | `POST /api/notifications/{id}` | Body `{"action": "default" \| "<key>"}`, or `{}` to dismiss. `202`; `404` unknown id. |
 | `GET /api/notifications/{id}/icon` | The notification's picture: what the application named or sent, else its launcher's icon. `404` none. |
-| `GET /api/clipboard` | What a desktop application last copied: `text/plain`, or `image/png` (the Content-Type says which); `204` before any. |
-| `PUT /api/clipboard` | Body: UTF-8 text, or a PNG with `Content-Type: image/png`; it becomes the desktop clipboard. `202`; `413` over 1 MiB of text or 16 MiB of image. |
+| `GET /api/clipboard` | What a desktop application last copied: `text/plain`, `image/png`, or `text/uri-list` (files copied in a file manager, one `file://` URI per line; the Content-Type says which); `204` before any. |
+| `PUT /api/clipboard` | Body: UTF-8 text, a PNG with `Content-Type: image/png`, or `file://` URIs with `Content-Type: text/uri-list`; it becomes the desktop clipboard. `202`; `413` over 1 MiB of text or 16 MiB of image. |
+| `POST /api/clipboard/files` | Body `{"names": [...]}`, files of the transfer folder: they become the desktop clipboard as a file manager's copy (`text/uri-list` and `x-special/gnome-copied-files`). `202`. |
+| `GET /api/clipboard/files/{index}` | The `index`th file of the URI list on the desktop clipboard, as an attachment. `404` when the clipboard holds no such list or entry. |
 | `POST /api/token/rotate` | Replaces both tokens: written to the data directory, printed as new URLs, returned as `{"token": …, "viewer_token": …}`; every session is closed with `4001 token rotated` and the old tokens stop working. Control token only; not an MCP tool. |
 | `GET /api/windows/{id}/elements` | The window's UI elements (below). `501` the server runs without `--elements`, `503` the tree couldn't be read: no D-Bus session or accessibility bus, the application went away, or 2 s passed (body: `{"error": …}`), `404` unknown id. |
 

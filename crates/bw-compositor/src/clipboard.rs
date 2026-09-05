@@ -27,6 +27,9 @@ pub enum Selection {
 
 pub const TEXT_MIMES: [&str; 5] = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "TEXT", "STRING"];
 pub const PNG: &str = "image/png";
+/// Files: file managers put both on the clipboard, the second with a `copy\n` (or `cut\n`) first line.
+pub const URI_LIST: &str = "text/uri-list";
+pub const GNOME_FILES: &str = "x-special/gnome-copied-files";
 /// A pipe nobody reads or writes for this long is closed, so a stalled peer costs nothing for good.
 const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -34,9 +37,10 @@ fn limit(mime: &str) -> usize {
     if mime == PNG { 16 << 20 } else { 1 << 20 }
 }
 
-/// The mime type to read a selection as: its text if it offers any, else a PNG.
+/// The mime type to read a selection as: a URI list if it offers one (a file manager's copy offers the
+/// paths as text too, and the list says more), else its text if it offers any, else a PNG.
 pub fn pick_mime(mimes: &[String]) -> Option<String> {
-    TEXT_MIMES.iter().chain([&PNG]).find(|m| mimes.iter().any(|o| o == *m)).map(|m| m.to_string())
+    [URI_LIST].iter().chain(TEXT_MIMES.iter()).chain([&PNG]).find(|m| mimes.iter().any(|o| o == *m)).map(|m| m.to_string())
 }
 
 /// The read in flight, if any: its event-loop source, and a generation so a slow owner can't
@@ -128,7 +132,11 @@ impl State {
     /// Text or a PNG from the browser or the API becomes the clipboard, offered to Wayland and X11 clients.
     pub fn set_clipboard(&mut self, mime: String, data: Vec<u8>) {
         self.cancel_clipboard_read(); // an application's older clipboard must not land after this one
-        let mimes: Vec<String> = if mime == PNG { vec![mime.clone()] } else { TEXT_MIMES.iter().map(|m| m.to_string()).collect() };
+        let mimes: Vec<String> = match mime.as_str() {
+            PNG => vec![mime.clone()],
+            URI_LIST => vec![URI_LIST.into(), GNOME_FILES.into()],
+            _ => TEXT_MIMES.iter().map(|m| m.to_string()).collect(),
+        };
         let _ = self.events.send(Event::Clipboard { mime: mime.clone(), data: data.clone().into() }); // the server learns of every change in order
         set_data_device_selection(&self.dh, &self.seat, mimes.clone(), Selection::Ours(Arc::new(data)));
         if let Some(xwm) = self.xwm.as_mut()
@@ -140,8 +148,10 @@ impl State {
 
     /// Serve our clipboard to a client that asked for it, from the event loop as the pipe accepts it, so
     /// a reader that stalls costs a source, not a thread.
-    pub fn serve_clipboard(&mut self, data: Arc<Vec<u8>>, fd: OwnedFd) {
+    pub fn serve_clipboard(&mut self, data: Arc<Vec<u8>>, mime: &str, fd: OwnedFd) {
         let _ = rustix::fs::fcntl_setfl(&fd, rustix::fs::OFlags::NONBLOCK);
+        // a file list asked for in the file managers' own format gets their "copy" first line
+        let data: Arc<Vec<u8>> = if mime == GNOME_FILES { Arc::new([b"copy\n".as_slice(), &data].concat()) } else { data };
         let mut written = 0;
         let token = self.handle.insert_source(Generic::new(fd, Interest::WRITE, Mode::Level), move |_, fd, _| {
             loop {

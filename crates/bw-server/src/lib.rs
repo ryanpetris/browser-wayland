@@ -209,6 +209,8 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
                 .route("/api/notifications/{id}/icon", get(api_notification_icon))
                 .route("/api/token/rotate", post(api_token_rotate))
                 .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard))
+                .route("/api/clipboard/files", post(api_clipboard_files))
+                .route("/api/clipboard/files/{index}", get(api_clipboard_file))
                 .nest_service("/mcp", mcp_service(app.clone()))
                 .layer(middleware::from_fn_with_state(app.clone(), bearer)),
         )
@@ -425,7 +427,7 @@ async fn api_token_rotate(headers: HeaderMap, State(app): State<Arc<App>>) -> Re
 /// What a desktop application last copied, as text or as a PNG (its Content-Type says which), or 204 if nothing yet.
 async fn api_clipboard(State(app): State<Arc<App>>) -> Response {
     match app.clipboard() {
-        Some((mime, data)) => (NO_STORE, [(header::CONTENT_TYPE, if mime == api::PNG { api::PNG.to_string() } else { "text/plain; charset=utf-8".into() })], data).into_response(),
+        Some((mime, data)) => (NO_STORE, [(header::CONTENT_TYPE, match mime.as_str() { api::PNG | api::URI_LIST => mime.clone(), _ => "text/plain; charset=utf-8".into() })], data).into_response(),
         None => (StatusCode::NO_CONTENT, NO_STORE).into_response(),
     }
 }
@@ -436,12 +438,40 @@ async fn api_set_clipboard(Extension(key): Extension<Key>, State(app): State<Arc
     if let Err(e) = writable(key) {
         return e.into_response();
     }
-    let png = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with(api::PNG));
-    let mime = if png { api::PNG } else { api::TEXT };
+    let content_type = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default();
+    let mime = if content_type.starts_with(api::PNG) { api::PNG } else if content_type.starts_with(api::URI_LIST) { api::URI_LIST } else { api::TEXT };
     let Ok(body) = axum::body::to_bytes(req.into_body(), api::clipboard_limit(mime)).await else { return ApiError::TooLarge.into_response() };
-    let body = if png { body } else { Bytes::from(String::from_utf8_lossy(&body).into_owned()) };
+    let body = if mime == api::PNG { body } else { Bytes::from(String::from_utf8_lossy(&body).into_owned()) };
     match app.set_clipboard(mime, body) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `{"names": [...]}`: files of the transfer folder become the desktop clipboard as a URI list, as a file
+/// manager's copy would; `202`.
+async fn api_clipboard_files(Extension(key): Extension<Key>, State(app): State<Arc<App>>, Json(msg): Json<serde_json::Value>) -> Response {
+    let names: Vec<&str> = msg.get("names").and_then(|n| n.as_array()).map(|a| a.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
+    match writable(key).and_then(|()| app.set_clipboard_files(&names)) {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// The `index`th file of the URI list on the desktop clipboard, as an attachment; `404` if the clipboard
+/// holds no such list or entry.
+async fn api_clipboard_file(UrlPath(index): UrlPath<usize>, State(app): State<Arc<App>>) -> Response {
+    match app.clipboard_file(index).await {
+        Ok((name, len, body)) => (
+            NO_STORE,
+            [
+                (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+                (header::CONTENT_LENGTH, len.to_string()),
+                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", name.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect::<String>(), files::percent(&name))),
+            ],
+            body,
+        )
+            .into_response(),
         Err(e) => e.into_response(),
     }
 }

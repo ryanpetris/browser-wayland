@@ -27,8 +27,10 @@ const ROUTES: &str = "\
 | `GET /api/screenshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the whole output; `429`, `500`, `503` as for a window |
 | `POST /api/control` | **Control** | `202`; fire-and-forget; `404` unknown application (`launch`); `503` compositor gone |
 | `POST /api/input` | **Input** | `202`, with `{\"warning\": …}` when a click aims past the desktop's edge at an X11 window (Xwayland pins it to the edge); `404` unknown window; `503` compositor gone |
-| `GET /api/clipboard` | | what an application last copied: `text/plain`, or `image/png`; `204` before any |
-| `PUT /api/clipboard` | UTF-8 text body, or a PNG with `Content-Type: image/png` | becomes the desktop clipboard; `202`; `413` over 1 MiB (text) or 16 MiB (PNG) |
+| `GET /api/clipboard` | | what an application last copied: `text/plain`, `image/png`, or `text/uri-list` (files copied in a file manager); `204` before any |
+| `PUT /api/clipboard` | UTF-8 text body, a PNG with `Content-Type: image/png`, or `file://` URIs with `text/uri-list` | becomes the desktop clipboard; `202`; `413` over 1 MiB (text) or 16 MiB (PNG) |
+| `POST /api/clipboard/files` | `{\"names\": [...]}` from the transfer folder | those files become the desktop clipboard, as a file manager's copy; `202` |
+| `GET /api/clipboard/files/{index}` | | the `index`th file on the desktop clipboard (a file manager's copy), as an attachment; `404` |
 | `POST /api/token/rotate` | | `{\"token\": …, \"viewer_token\": …}`: new tokens replace both at once (files, viewers, API); the server prints the new URLs |
 | `POST /mcp` | MCP Streamable HTTP | the tools below |
 | `GET /skill/SKILL.md`, `GET /skill/reference.md` | no token needed | this documentation |
