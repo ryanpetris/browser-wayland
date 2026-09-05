@@ -168,8 +168,11 @@ impl State {
     pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<Under> {
         for window in self.space.elements().rev() {
             let Some(loc) = self.space.element_location(window) else { continue };
-            if let Some((surface, p)) = window.surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL) {
-                return Some(Under::Surface(surface, (p + loc).to_f64()));
+            // the space places the geometry; surface_under wants the point from the surface's own origin,
+            // which sits a shadow margin up and left of it for client-side decorated windows
+            let origin = loc - window.geometry().loc;
+            if let Some((surface, p)) = window.surface_under(pos - origin.to_f64(), WindowSurfaceType::ALL) {
+                return Some(Under::Surface(surface, (p + origin).to_f64()));
             }
             if let Some(hit) = self.decoration_hit(window, pos) {
                 return Some(Under::Decoration(window.clone(), hit));
