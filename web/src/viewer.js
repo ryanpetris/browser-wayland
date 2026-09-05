@@ -455,7 +455,7 @@ export function createViewer() {
   const camStop = () => { stopCam(); if (state().cam) store.set({ cam: false }); };
   async function camStart() {
     try {
-      await startCam(buf => send(CAM, buf.byteLength, dv => new Uint8Array(dv.buffer, 1).set(new Uint8Array(buf))), camStop);
+      await startCam(buf => send(CAM, buf.byteLength, dv => new Uint8Array(dv.buffer, 1).set(new Uint8Array(buf))), camStop, () => (ws?.bufferedAmount ?? 0) > 1_000_000);
       if (state().role === 'controller') store.set({ cam: true });
       else camStop();
     } catch (e) {

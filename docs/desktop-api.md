@@ -272,7 +272,10 @@ way window streams do; audio and events are broadcast with `try_send`. The contr
 go to `Config::mic`, the channel `bw-stream`'s `audio_sink` plays into the microphone sink (`bw`
 creates the sink and the remapped source next to the audio sink), and its `Cam` frames to `Config::cam`,
 which `video_sink` decodes (VP8) and scales to 720p YUY2 for the `--webcam` loopback device (which keeps
-the first format it is given); the `Role` message's second byte tells sessions which of the two exist.
+the first format it is given); a session whose frame didn't fit the channel sends nothing more until a
+keyframe (a VP8 frame tag's low bit is clear), and a pipeline that dies (its bus says so; the feeder
+logs it and ends) withdraws the feature and tells the controller; the `Role` message's second byte tells
+sessions which of the two exist.
 
 The controller's `Resize` becomes `Command::Resize` and re-fits everyone else (`retarget`); another
 session's `Resize` only sets its own encoder's size (`fit`: the output's aspect within its window, never

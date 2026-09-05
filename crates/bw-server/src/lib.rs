@@ -104,6 +104,8 @@ pub struct App {
     sinks: SinkFactory,
     mic: Option<mpsc::Sender<Bytes>>,
     cam: Option<mpsc::Sender<Bytes>>,
+    /// The webcam pipeline died (the device refused the frames; the log says why): the feature is withdrawn.
+    cam_dead: std::sync::atomic::AtomicBool,
     /// Event senders of the window-stream sessions (cursor, clipboard, window list go to them too).
     window_viewers: Mutex<HashMap<u64, mpsc::Sender<Bytes>>>,
     snapshot_lock: tokio::sync::Semaphore,
@@ -160,6 +162,9 @@ pub(crate) struct ViewerSession {
     codec: Codec,
     preset: protocol::Preset,
     quality: bw_core::Quality,
+    /// A webcam frame of this session was dropped: the next ones are too, until a keyframe (a VP8 delta
+    /// without its reference would corrupt the picture until the next one anyway).
+    cam_wait_key: bool,
 }
 
 /// `audio_rx` carries the clients' Opus packets, for every viewer.
@@ -179,6 +184,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         sinks: cfg.sinks,
         mic: cfg.mic,
         cam: cfg.cam,
+        cam_dead: Default::default(),
         window_viewers: Mutex::default(),
         snapshot_lock: tokio::sync::Semaphore::new(1),
         notifications: Mutex::default(),

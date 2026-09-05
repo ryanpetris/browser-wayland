@@ -165,7 +165,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         }
         let id = v.next_id;
         v.next_id += 1;
-        v.sessions.insert(id, ViewerSession { key, events: etx, audio: atx, audio_seq: 0, size: None, control, hw, sw, want_codec, codec, preset, quality });
+        v.sessions.insert(id, ViewerSession { key, events: etx, audio: atx, audio_seq: 0, size: None, control, hw, sw, want_codec, codec, preset, quality, cam_wait_key: false });
         if key == Key::Control && v.controller.is_none() {
             v.controller = Some(id);
         }
@@ -482,7 +482,8 @@ impl App {
 
     /// What the desktop takes from the browser (`Role`'s second byte).
     pub(crate) fn features(&self) -> u8 {
-        (self.mic.is_some() as u8) * protocol::FEATURE_MIC | (self.cam.is_some() as u8) * protocol::FEATURE_CAM
+        let cam = self.cam.is_some() && !self.cam_dead.load(std::sync::atomic::Ordering::Relaxed);
+        (self.mic.is_some() as u8) * protocol::FEATURE_MIC | (cam as u8) * protocol::FEATURE_CAM
     }
 
     /// A state message to every viewer and window session.
@@ -607,8 +608,22 @@ impl App {
                 None
             }
             ClientMsg::Cam(frame) if controls => {
-                if let Some(cam) = &self.cam {
-                    let _ = cam.try_send(frame);
+                // a VP8 frame tag's low bit is clear on a keyframe; after a drop only one of those makes sense
+                let key = frame.first().is_some_and(|b| b & 1 == 0);
+                if let (Some(cam), Some(s)) = (&self.cam, v.sessions.get_mut(&id))
+                    && (key || !s.cam_wait_key)
+                {
+                    match cam.try_send(frame) {
+                        Ok(()) => s.cam_wait_key = false,
+                        Err(mpsc::error::TrySendError::Full(_)) => s.cam_wait_key = true,
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            // the pipeline died (the log says why); nobody gets the button any more, this
+                            // session hears why its camera does nothing
+                            if !self.cam_dead.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                let _ = s.events.try_send(protocol::notice("the webcam device stopped taking frames; see the server's log"));
+                            }
+                        }
+                    }
                 }
                 None
             }

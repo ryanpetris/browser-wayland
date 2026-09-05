@@ -345,12 +345,13 @@ pub fn audio_sink(device: &str, rx: mpsc::Receiver<Bytes>) -> Result<Running> {
 
 /// Plays VP8 frames from the browser's webcam into `device`, a v4l2loopback camera, as 1280×720 YUY2 (the
 /// loopback keeps the first format it is given, so every frame is scaled to that one, letterboxed):
-/// applications open it like any camera. Frames that pile up behind a stall are dropped at the source;
-/// the browser sends a keyframe every couple of seconds, so the decoder recovers.
+/// applications open it like any camera. The decoder gets every frame it is handed (a dropped delta would
+/// corrupt the picture until the next keyframe): the source blocks the feeder when it is four frames
+/// behind, the channel fills, and the server drops there, deltas until the next keyframe.
 pub fn video_sink(device: &std::path::Path, rx: mpsc::Receiver<Bytes>) -> Result<Running> {
     feed(
         &format!(
-            "appsrc name=src is-live=true format=time do-timestamp=true max-buffers=4 leaky-type=downstream caps=video/x-vp8 \
+            "appsrc name=src is-live=true format=time do-timestamp=true max-buffers=4 block=true caps=video/x-vp8 \
              ! vp8dec ! videoconvert ! videoscale ! video/x-raw,format=YUY2,width=1280,height=720,pixel-aspect-ratio=1/1 ! v4l2sink device={} sync=false",
             device.display()
         ),
