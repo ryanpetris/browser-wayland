@@ -166,6 +166,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
                 .route("/api/windows/{id}/snapshot.png", get(api_window_snapshot))
                 .route("/api/screenshot.png", get(api_screenshot))
                 .route("/api/windows/{id}/elements", get(api_window_elements))
+                .route("/api/windows/{id}/icon", get(api_window_icon))
                 .route("/api/token/rotate", post(api_token_rotate))
                 .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard))
                 .nest_service("/mcp", mcp_service(app.clone()))
@@ -273,6 +274,13 @@ async fn api_applications(State(app): State<Arc<App>>) -> Response {
 
 async fn api_application_icon(UrlPath(id): UrlPath<String>, State(app): State<Arc<App>>) -> Response {
     match app.application_icon(id).await {
+        Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=86400")], bytes).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn api_window_icon(UrlPath(id): UrlPath<u64>, State(app): State<Arc<App>>) -> Response {
+    match app.window_icon(id).await {
         Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=86400")], bytes).into_response(),
         Err(e) => e.into_response(),
     }

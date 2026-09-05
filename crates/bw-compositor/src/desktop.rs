@@ -20,7 +20,7 @@ use smithay::{
     desktop::{Window, WindowSurface, PopupManager},
     reexports::{wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState, wayland_server::Resource},
     utils::{Buffer, Physical, Rectangle, SERIAL_COUNTER, Scale, Size, Transform},
-    wayland::{compositor::with_states, shell::xdg::XdgToplevelSurfaceData},
+    wayland::{compositor::with_states, shell::xdg::XdgToplevelSurfaceData, xdg_toplevel_icon::ToplevelIconCachedState},
 };
 
 use crate::State;
@@ -61,9 +61,11 @@ impl State {
             Rectangle::new(loc, window.geometry().size)
         });
         let mut popups = Vec::new();
+        let mut icon = None;
         let (x11, pid, maximized, fullscreen) = match window.underlying_surface() {
             WindowSurface::Wayland(t) => {
                 let st = t.current_state().states;
+                icon = with_states(t.wl_surface(), |s| s.cached_state.get::<ToplevelIconCachedState>().current().icon_name().map(str::to_string));
                 let pid = t.wl_surface().client().and_then(|c| c.get_credentials(&self.dh).ok()).map(|c| c.pid as u32);
                 // a popup's location is relative to the parent's geometry, like our x/y
                 popups.extend(PopupManager::popups_for_surface(t.wl_surface()).map(|(p, loc)| {
@@ -78,6 +80,7 @@ impl State {
             id: window_id(window),
             title,
             app_id,
+            icon,
             x11,
             pid,
             x: geo.loc.x,
@@ -177,6 +180,18 @@ impl State {
         }
         self.dirty = true;
         self.reconstrain_popups(); // a move or resize takes the window's open menus with it
+    }
+
+    /// The largest of the icon buffers a window's client set through xdg-toplevel-icon.
+    pub fn window_icon(&self, id: u64) -> Result<Snapshot, SnapshotError> {
+        let window = self.window_by_id(id).ok_or(SnapshotError::NoSuchWindow)?;
+        let buffers = window.toplevel().map(|t| with_states(t.wl_surface(), |s| s.cached_state.get::<ToplevelIconCachedState>().current().buffers().to_vec())).unwrap_or_default();
+        buffers
+            .iter()
+            .filter_map(|(b, _)| crate::cursor::shm_rgba(b))
+            .max_by_key(|(w, h, _)| w * h)
+            .map(|(width, height, rgba)| Snapshot { width, height, rgba })
+            .ok_or(SnapshotError::NoSuchWindow)
     }
 
     /// One window (its xdg geometry, popups included, transparent where it doesn't paint) or the whole

@@ -16,6 +16,7 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `GET /api/windows` | | JSON array of **Window** |
 | `GET /api/applications` | | JSON array of **Application**: the installed launchers, for `launch` |
 | `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
+| `GET /api/windows/{id}/icon` | | the window's icon (its own, else its launcher's), SVG or PNG; `404` none |
 | `GET /api/windows/{id}/elements` | | **Elements**; `501` without `--elements`, `503` tree unreadable, `404` unknown window |
 | `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
 | `GET /api/screenshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the whole output; `429`, `500`, `503` as for a window |
@@ -63,6 +64,13 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
     "h": {
       "type": "integer",
       "format": "int32"
+    },
+    "icon": {
+      "description": "the icon name the client set (xdg-toplevel-icon); the picture is at `/api/windows/{id}/icon`, which falls back to the launcher's icon",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "id": {
       "type": "integer",

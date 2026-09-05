@@ -7,7 +7,7 @@ use smithay::{
     wayland::{compositor::SurfaceAttributes, viewporter::ViewportCachedState},
     backend::renderer::utils::with_renderer_surface_state,
     input::pointer::{CursorIcon, CursorImageStatus, CursorImageSurfaceData},
-    reexports::wayland_server::protocol::{wl_shm, wl_surface::WlSurface},
+    reexports::wayland_server::protocol::{wl_buffer::WlBuffer, wl_shm, wl_surface::WlSurface},
     wayland::{compositor::with_states, shm::with_buffer_contents},
 };
 
@@ -70,7 +70,15 @@ fn surface_cursor(surface: &WlSurface) -> Option<CursorImage> {
         Some((hotspot, scale, s.cached_state.get::<ViewportCachedState>().current().size()))
     })?;
     let buffer = with_renderer_surface_state(surface, |s| s.buffer().cloned())??;
-    with_buffer_contents(&buffer, |ptr, len, data| {
+    let (w, h, rgba) = shm_rgba(&buffer)?;
+    let (logical_w, logical_h) = viewport.map_or((w / scale, h / scale), |v| (v.w.max(1) as u32, v.h.max(1) as u32));
+    tracing::debug!(w, h, logical_w, logical_h, ?hotspot, "client cursor");
+    Some(CursorImage { width: w, height: h, hot_x: hotspot.x, hot_y: hotspot.y, logical_w, logical_h, rgba })
+}
+
+/// A wl_shm [AX]RGB8888 buffer as straight RGBA, top row first: `(width, height, pixels)`.
+pub fn shm_rgba(buffer: &WlBuffer) -> Option<(u32, u32, Vec<u8>)> {
+    with_buffer_contents(buffer, |ptr, len, data| {
         let opaque = match data.format {
             wl_shm::Format::Argb8888 => false,
             wl_shm::Format::Xrgb8888 => true,
@@ -86,9 +94,7 @@ fn surface_cursor(surface: &WlSurface) -> Option<CursorImage> {
             let p = ptr.add(i);
             (p.add(2).read_volatile(), p.add(1).read_volatile(), p.read_volatile(), if opaque { 255 } else { p.add(3).read_volatile() })
         });
-        let (logical_w, logical_h) = viewport.map_or((w as u32 / scale, h as u32 / scale), |v| (v.w.max(1) as u32, v.h.max(1) as u32));
-        tracing::debug!(w, h, logical_w, logical_h, ?hotspot, "client cursor");
-        Some(CursorImage { width: w as u32, height: h as u32, hot_x: hotspot.x, hot_y: hotspot.y, logical_w, logical_h, rgba: unpremultiply(pixels) })
+        Some((w as u32, h as u32, unpremultiply(pixels)))
     })
     .ok()
     .flatten()

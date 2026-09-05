@@ -124,6 +124,7 @@ impl State {
             Command::ReleasePointerLock => self.release_pointer_lock(),
             Command::Control(msg) => self.control(msg),
             Command::Snapshot { id, scale, reply } => (reply.0)(self.snapshot(id, scale)),
+            Command::WindowIcon { id, reply } => (reply.0)(self.window_icon(id)),
             Command::WindowStream { key, window, sink: Some(sink) } => self.start_window_stream(key, window, sink),
             Command::WindowStream { key, sink: None, .. } => self.stop_window_stream(key),
             Command::Quit => self.running = false,
@@ -460,6 +461,9 @@ impl State {
         }
         if let Some(window) = window {
             self.space.raise_element(window, true);
+            for child in self.transients_of(window) {
+                self.space.raise_element(&child, false); // dialogs stay over their parent
+            }
             if let Some(x11) = window.x11_surface().filter(|x| !x.is_override_redirect()) {
                 if let Some(xwm) = self.xwm.as_mut() {
                     let _ = xwm.raise_window(x11);

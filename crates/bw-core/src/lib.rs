@@ -53,6 +53,8 @@ pub enum Command {
     /// Render one window (or the whole output) to pixels and hand them to `reply`.
     /// `scale` is relative to the output scale and only applies to windows.
     Snapshot { id: Option<u64>, scale: f64, reply: SnapshotReply },
+    /// The icon a window's client set as pixels (xdg-toplevel-icon), the largest; `NoSuchWindow` when it set none.
+    WindowIcon { id: u64, reply: SnapshotReply },
     /// Encode one window into its own stream through `sink` (`None` stops the stream). `key` names
     /// the stream, so two viewers of the same window don't disturb each other.
     WindowStream { key: u64, window: u64, sink: Option<Box<dyn FrameSink>> },
@@ -124,6 +126,8 @@ pub struct WindowInfo {
     pub title: String,
     /// X11: the WM_CLASS
     pub app_id: String,
+    /// the icon name the client set (xdg-toplevel-icon); the picture is at `/api/windows/{id}/icon`, which falls back to the launcher's icon
+    pub icon: Option<String>,
     pub x11: bool,
     pub pid: Option<u32>,
     /// xdg geometry in logical px

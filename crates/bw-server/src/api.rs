@@ -115,20 +115,7 @@ impl App {
             Ok(Ok(Err(SnapshotError::Render(e)))) => return Err(ApiError::Internal(e)),
             _ => return Err(ApiError::Unavailable("the compositor didn't answer".into())),
         };
-        let png = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
-            let mut out = Vec::new();
-            let mut enc = png::Encoder::new(&mut out, snap.width, snap.height);
-            enc.set_color(png::ColorType::Rgba);
-            enc.set_depth(png::BitDepth::Eight);
-            enc.write_header()?.write_image_data(&snap.rgba)?;
-            Ok(out)
-        })
-        .await;
-        match png {
-            Ok(Ok(bytes)) => Ok(bytes),
-            Ok(Err(e)) => Err(ApiError::Internal(format!("png: {e}"))),
-            Err(e) => Err(ApiError::Internal(format!("png: {e}"))),
-        }
+        encode_png(snap).await
     }
 
     /// The snapshot scale that fits a window's (or, with `None`, the output's) long side in `px` device pixels; at most 1.
@@ -201,6 +188,34 @@ impl App {
         .map_err(|e| ApiError::Internal(e.to_string()))?
     }
 
+    /// A window's icon as bytes and media type: the name its client set, else the pixels it set, else
+    /// its launcher's icon.
+    pub async fn window_icon(&self, id: u64) -> Result<(Vec<u8>, &'static str), ApiError> {
+        let (icon, app_id) = self.viewers.lock().unwrap().window_list.iter().find(|w| w.id == id).map(|w| (w.icon.clone(), w.app_id.clone())).ok_or(ApiError::NotFound)?;
+        let file = |icon: Option<String>, app_id: String| async move {
+            tokio::task::spawn_blocking(move || {
+                let (path, mime) = apps::window_icon(icon.as_deref(), &app_id).ok_or(ApiError::NotFound)?;
+                Ok((std::fs::read(path).map_err(|e| ApiError::Internal(e.to_string()))?, mime))
+            })
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+        };
+        if icon.is_some() {
+            return file(icon, app_id).await;
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<Snapshot, SnapshotError>>();
+        let reply = SnapshotReply(Box::new(move |s| {
+            let _ = tx.send(s);
+        }));
+        self.send(Command::WindowIcon { id, reply })?;
+        match tokio::time::timeout(Duration::from_secs(2), rx).await {
+            Ok(Ok(Ok(snap))) => Ok((encode_png(snap).await?, "image/png")),
+            Ok(Ok(Err(SnapshotError::NoSuchWindow))) => file(None, app_id).await,
+            Ok(Ok(Err(SnapshotError::Render(e)))) => Err(ApiError::Internal(e)),
+            _ => Err(ApiError::Unavailable("the compositor didn't answer".into())),
+        }
+    }
+
     /// Pointer and keyboard input. `window` makes coordinates relative to that window's geometry; the
     /// compositor resolves it against the live geometry, this only answers 404 for an unknown id.
     pub fn input(&self, msg: InputMsg) -> Result<(), ApiError> {
@@ -212,5 +227,23 @@ impl App {
 
     fn send(&self, cmd: Command) -> Result<(), ApiError> {
         self.commands.send(cmd).map_err(|_| ApiError::Unavailable("the compositor is gone".into()))
+    }
+}
+
+/// Straight-alpha RGBA rows to PNG, on the blocking pool.
+async fn encode_png(snap: Snapshot) -> Result<Vec<u8>, ApiError> {
+    let png = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, snap.width, snap.height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header()?.write_image_data(&snap.rgba)?;
+        Ok(out)
+    })
+    .await;
+    match png {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(e)) => Err(ApiError::Internal(format!("png: {e}"))),
+        Err(e) => Err(ApiError::Internal(format!("png: {e}"))),
     }
 }

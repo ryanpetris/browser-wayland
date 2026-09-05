@@ -32,6 +32,13 @@ export const appIcon = id => {
   return icons.get(id);
 };
 
+// A window's icon as a blob URL, cached by what decides it (the client's icon name and app id).
+const windowIcons = new Map();
+export const windowIcon = (id, key) => {
+  if (!windowIcons.has(key)) windowIcons.set(key, api(`/api/windows/${id}/icon`).then(r => (r.ok ? r.blob().then(URL.createObjectURL) : null)).catch(() => null));
+  return windowIcons.get(key);
+};
+
 // The server renders one snapshot at a time (429 otherwise): thumbnails are fetched one by one, and
 // one nobody wants any more by its turn (`wanted()` false) is skipped.
 let queue = Promise.resolve();

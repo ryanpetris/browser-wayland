@@ -132,7 +132,7 @@ curl -X POST ... /api/input -d '{"type":"click","window":3,"x":549,"y":47}'  # c
 curl -X POST ... /api/input -d '{"type":"text","text":"hello"}'                 # type; also key, scroll, move, button
 ```
 
-Each window reports `id`, `title`, `app_id`, `x11`, `pid`, its geometry `x y w h` in logical pixels, where
+Each window reports `id`, `title`, `app_id`, `icon` (with the picture at `/api/windows/{id}/icon`), `x11`, `pid`, its geometry `x y w h` in logical pixels, where
 that geometry sits in the client's surface (`geo_x geo_y`), its open `popups` (`[x, y, w, h]` relative to
 the geometry), the height of the title bar the compositor draws above it (`decoration`, 0 when the
 application draws its own), its stacking index `z` (`null` while minimized), `maximized`, `fullscreen`,

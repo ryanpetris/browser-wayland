@@ -133,17 +133,27 @@ pub fn exec(id: &str) -> Option<String> {
 
 const SIZES: [&str; 10] = ["scalable", "512x512", "256x256", "128x128", "96x96", "64x64", "48x48", "32x32", "24x24", "16x16"];
 
-/// An application's icon: the file and its media type. SVG or PNG from the icon themes (hicolor,
-/// where applications install their own, then the others) or the pixmaps directory.
+/// An application's icon: the file and its media type.
 pub fn icon(id: &str) -> Option<(PathBuf, &'static str)> {
-    let icon = entry(id)?.icon?;
+    icon_file(&entry(id)?.icon?)
+}
+
+/// A window's icon: the name its client set, else its launcher's (the app id is the desktop id for
+/// Wayland clients; X11 classes are often the lowercase name).
+pub fn window_icon(icon: Option<&str>, app_id: &str) -> Option<(PathBuf, &'static str)> {
+    icon.and_then(icon_file).or_else(|| entry(app_id).or_else(|| entry(&app_id.to_lowercase()))?.icon.and_then(|i| icon_file(&i)))
+}
+
+/// An icon name (or path) as a file and its media type: SVG or PNG from the icon themes (hicolor,
+/// where applications install their own, then the others) or the pixmaps directory.
+fn icon_file(icon: &str) -> Option<(PathBuf, &'static str)> {
     let mime = |p: &Path| match p.extension().and_then(|e| e.to_str()) {
         Some("svg") => Some("image/svg+xml"),
         Some("png") => Some("image/png"),
         _ => None,
     };
     if icon.starts_with('/') {
-        let p = PathBuf::from(&icon);
+        let p = PathBuf::from(icon);
         return mime(&p).filter(|_| p.is_file()).map(|m| (p, m));
     }
     let name = icon.trim_end_matches(".png").trim_end_matches(".svg").trim_end_matches(".xpm");

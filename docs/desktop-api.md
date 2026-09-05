@@ -35,7 +35,9 @@ fronts cannot drift. See [mcp.md](mcp.md).
 `desktop.rs`. `window_info` builds a `WindowInfo` from a `Window`: title and app id from the xdg
 toplevel data or the X11 surface, geometry from the space (or the saved position for a minimized
 window), states from the acked xdg state or the X11 flags, `focused` from `State::active`, the pid from
-the client's socket credentials or `_NET_WM_PID`, `updated_ms` from a per-window `LastCommit` cell set
+the client's socket credentials or `_NET_WM_PID`, `icon` from the name the client set through
+xdg-toplevel-icon (its picture, or the pixels it set instead, or its launcher's icon by app id, is at
+`GET /api/windows/{id}/icon`), `updated_ms` from a per-window `LastCommit` cell set
 in the commit handler (also for minimized windows and for a window whose popup committed). `windows()`
 walks the space bottom to top, skipping X11 override-redirect surfaces, then the minimized list.
 `refresh_windows` runs once per loop iteration and sends `Event::Windows` only when the list differs from

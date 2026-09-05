@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Camera, ChevronDown, ChevronUp, ExternalLink, Maximize2, Minimize2, Play, X } from 'lucide-react';
 import { useStore } from '../store.js';
-import { queuedSnapshot, snapshot } from '../api.js';
+import { queuedSnapshot, snapshot, windowIcon } from '../api.js';
 import { codecName, windowColor } from './ui.jsx';
 
 // The two panels stay mounted (hidden) so the window list keeps its thumbnails across toggles.
@@ -63,6 +63,17 @@ function Spawn({ viewer }) {
   );
 }
 
+function WinIcon({ w }) {
+  const key = `${w.icon ?? ''}|${w.app_id}`;
+  const [src, setSrc] = useState(null);
+  useEffect(() => {
+    let live = true;
+    windowIcon(w.id, key).then(u => { if (live) setSrc(u); });
+    return () => { live = false; };
+  }, [w.id, key]);
+  return src ? <img src={src} alt="" className="size-4 shrink-0 object-contain" /> : null;
+}
+
 function WindowRow({ viewer, w, acts }) {
   const badges = [w.fullscreen && 'fullscreen', w.maximized && 'maximized', w.minimized && 'minimized'].filter(Boolean);
   const act = (op, e) => { e.stopPropagation(); e.currentTarget.blur(); viewer.control({ id: w.id, op }); };
@@ -75,6 +86,7 @@ function WindowRow({ viewer, w, acts }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="size-2 shrink-0 rounded-full" style={{ background: windowColor(w) }} />
+          <WinIcon w={w} />
           <span className={`truncate text-sm ${w.focused ? 'text-zinc-100' : 'text-zinc-300'}`} title={w.title}>{w.title || w.app_id || `#${w.id}`}</span>
         </div>
         <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-zinc-500">
