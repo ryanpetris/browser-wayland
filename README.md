@@ -83,12 +83,19 @@ cargo run --release -- --exec 'dbus-run-session -- sh -c "xfce4-panel & exec foo
 xfce4-panel needs a D-Bus session bus for xfconfd; the wrapper is only needed where there is none.
  Its pager shows the single workspace. Waybar's default config draws its
 icons with Font Awesome (`otf-font-awesome`); GTK only shows icons in the Xfce menus with
-`gtk-menu-images=1` in `~/.config/gtk-3.0/settings.ini`, which xfsettingsd normally sets.
+`gtk-menu-images=1` in `~/.config/gtk-3.0/settings.ini`, which xfsettingsd normally sets. Windows
+that draw their own title bar (GTK applications, Firefox, Chromium) take its buttons from the GSettings
+key `org.gnome.desktop.wm.preferences button-layout`, whose GNOME default is `appmenu:close`; without
+a desktop that sets it, minimize and maximize are missing until you do:
+
+```sh
+gsettings set org.gnome.desktop.wm.preferences button-layout 'menu:minimize,maximize,close'
+```
 
 The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps,
 Firefox and Chromium, with PipeWire for audio and Mesa's OpenGL and Vulkan drivers for Intel and AMD
-(`glxgears`, `vkcube` and the info tools are included to check them); the desktop starts with the
-panel, whose menu launches the rest. `make docker-run` builds the image and runs it; the details are
+(`glxgears`, `vkcube` and the info tools are included to check them), and the two GTK settings above;
+the desktop starts with the panel, whose menu launches the rest. `make docker-run` builds the image and runs it; the details are
 in the Dockerfile's header.
 
 The page says when the server closed its socket with a token dialog ("wrong token" or "token

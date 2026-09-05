@@ -45,8 +45,12 @@ RUN pacman -Sy --noconfirm archlinux-keyring \
         xfce4 firefox chromium ttf-dejavu \
     && rm -rf /var/cache/pacman/pkg/*
 COPY --from=build /src/target/release/browser-wayland /usr/local/bin/
-# GTK hides menu icons unless told otherwise; on a real Xfce session xfsettingsd does this.
-RUN printf '[Settings]\ngtk-menu-images=1\n' > /etc/gtk-3.0/settings.ini
+# GTK hides menu icons unless told otherwise, and on Wayland it takes the title-bar buttons of
+# client-decorated windows (GTK apps, Firefox, Chromium) from GSettings, where GNOME's default keeps
+# only Close. On a real Xfce session xfsettingsd provides both.
+RUN printf '[Settings]\ngtk-menu-images=1\n' > /etc/gtk-3.0/settings.ini \
+    && printf "[org.gnome.desktop.wm.preferences]\nbutton-layout='menu:minimize,maximize,close'\n" > /usr/share/glib-2.0/schemas/50-browser-wayland.gschema.override \
+    && glib-compile-schemas /usr/share/glib-2.0/schemas
 # Seed the default panel layout so the first run doesn't stop at the "first start" dialog.
 # The data dir exists (bw-owned) so a `-v` named volume mounted there is writable from the first run.
 # Chromium (its launcher reads ~/.config/chromium-flags.conf): Wayland when it can, its accessibility
