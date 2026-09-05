@@ -457,7 +457,7 @@ async fn api_set_clipboard(Extension(key): Extension<Key>, State(app): State<Arc
 /// `{"names": [...]}`: files of the transfer folder become the desktop clipboard as a URI list, as a file
 /// manager's copy would; `202`.
 async fn api_clipboard_files(Extension(key): Extension<Key>, State(app): State<Arc<App>>, Json(msg): Json<serde_json::Value>) -> Response {
-    let names: Vec<&str> = msg.get("names").and_then(|n| n.as_array()).map(|a| a.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
+    let names: Vec<String> = msg.get("names").and_then(|n| n.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
     match writable(key).and_then(|()| app.set_clipboard_files(&names)) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e) => e.into_response(),

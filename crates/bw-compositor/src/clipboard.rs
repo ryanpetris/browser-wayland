@@ -5,13 +5,20 @@
 
 use std::{os::fd::OwnedFd, sync::Arc};
 
-use bw_core::Event;
+use bw_core::{Drag, Event};
 use smithay::{
+    backend::input::ButtonState,
+    input::pointer::{ButtonEvent, GrabStartData, MotionEvent},
     reexports::{
+        wayland_server::protocol::wl_data_device_manager::DndAction,
         calloop::{Interest, Mode, PostAction, RegistrationToken, generic::Generic, timer::{TimeoutAction, Timer}},
         rustix,
     },
-    wayland::selection::{SelectionTarget, data_device::{request_data_device_client_selection, set_data_device_selection}},
+    utils::SERIAL_COUNTER,
+    wayland::selection::{
+        SelectionTarget,
+        data_device::{SourceMetadata, request_data_device_client_selection, set_data_device_selection, start_dnd},
+    },
 };
 
 use crate::State;
@@ -144,6 +151,89 @@ impl State {
             && let Err(e) = xwm.new_selection(SelectionTarget::Clipboard, Some(mimes))
         {
             tracing::warn!("xwayland selection: {e:?}");
+        }
+    }
+
+    /// The browser drags local files over the desktop. `Start` presses the left button over nothing (so no
+    /// client sees a press it never gets the release of) and starts a compositor-owned drag offering
+    /// `text/uri-list` from there; the browser's pointer motion moves it, and the application under it is
+    /// told what is coming. `Drop` supplies the list, which the files were uploaded for after the user let
+    /// go, so the target only now learns what it is being given: it is left and entered again with a fresh
+    /// offer (Thunar reads the list during the drag to decide, once per offer, and refuses without it), and
+    /// the button is released once it has accepted a mime and chosen an action, with a motion every 100 ms
+    /// to make it look again, or after 1.5 s regardless. `Cancel` lets go over nothing. The button counts
+    /// as pressed meanwhile, so a viewer that goes away lets go too.
+    pub fn drag(&mut self, drag: Drag) {
+        let pointer = self.seat.get_pointer().unwrap();
+        let location = self.pointer_location;
+        let (serial, time) = (SERIAL_COUNTER.next_serial(), self.now());
+        match drag {
+            Drag::Start => {
+                self.drag_data = None;
+                self.drag_accepted = false;
+                self.drag_action = DndAction::empty();
+                self.drag_dropping = None;
+                pointer.motion(self, None, &MotionEvent { location, serial, time });
+                pointer.button(self, &ButtonEvent { button: crate::input::BTN_LEFT, state: ButtonState::Pressed, serial, time });
+                pointer.frame(self);
+                self.pressed_buttons.insert(crate::input::BTN_LEFT);
+                let start = GrabStartData { focus: None, button: crate::input::BTN_LEFT, location };
+                let source = SourceMetadata { mime_types: vec![URI_LIST.into()], dnd_action: DndAction::Copy };
+                let (dh, seat) = (self.dh.clone(), self.seat.clone());
+                start_dnd(&dh, &seat, self, serial, Some(start), None, source);
+                self.pointer_motion(location); // enter the application under the pointer
+            }
+            Drag::Drop(list) => {
+                self.drag_data = Some(Arc::new(list));
+                self.drag_dropping = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
+                self.drag_accepted = false;
+                self.drag_action = DndAction::empty();
+                pointer.motion(self, None, &MotionEvent { location, serial, time }); // out and back in: a fresh offer, readable now
+                self.pointer_motion(location);
+                if self.drag_dropping.is_some() {
+                    let _ = self.handle.insert_source(Timer::from_duration(std::time::Duration::from_millis(100)), |_, _, state| match state.drag_dropping {
+                        None => TimeoutAction::Drop,
+                        Some(deadline) if std::time::Instant::now() >= deadline => {
+                            state.drag_release();
+                            TimeoutAction::Drop
+                        }
+                        Some(_) => {
+                            state.pointer_motion(state.pointer_location); // the target looks at the offer again
+                            TimeoutAction::ToDuration(std::time::Duration::from_millis(100))
+                        }
+                    });
+                }
+            }
+            Drag::Cancel => {
+                self.drag_dropping = None;
+                pointer.motion(self, None, &MotionEvent { location, serial, time }); // out of the application: the release drops on nothing
+                self.drag_release();
+                self.pointer_motion(location); // back in, as a plain pointer
+            }
+        }
+    }
+
+    /// Let go of a drop the target is ready for (`ServerDndGrabHandler::accept` and `action`). On the next
+    /// loop turn: the callbacks run inside the offer's request handler, which holds the lock the drop takes.
+    pub fn drag_settle(&mut self) {
+        if self.drag_dropping.is_some() && self.drag_accepted && !self.drag_action.is_empty() {
+            self.handle.insert_idle(|state| {
+                if state.drag_dropping.is_some() {
+                    state.drag_release();
+                }
+            });
+        }
+    }
+
+    /// Release the drag's button: the grab drops (`dropped`, then `cancelled` too if nothing took it).
+    fn drag_release(&mut self) {
+        let pointer = self.seat.get_pointer().unwrap();
+        let ended = self.drag_dropping.take().is_some();
+        pointer.button(self, &ButtonEvent { button: crate::input::BTN_LEFT, state: ButtonState::Released, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
+        pointer.frame(self);
+        self.pressed_buttons.remove(&crate::input::BTN_LEFT);
+        if ended {
+            let _ = self.events.send(Event::DragEnded { taken: self.drag_taken });
         }
     }
 

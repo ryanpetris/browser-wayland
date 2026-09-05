@@ -47,6 +47,8 @@ pub enum Command {
     Control(ControlMsg),
     /// Text or an image (`image/png`) from the browser or the API becomes the desktop clipboard.
     SetClipboard { mime: String, data: Vec<u8> },
+    /// The browser is dragging local files over the desktop (the pointer is already where the drag is).
+    Drag(Drag),
     /// Pointer or keyboard input from the API or MCP, resolved on the compositor thread (window-relative
     /// coordinates against the live geometry, keys through the keymap) so a whole click lands as one unit.
     Input(InputMsg),
@@ -251,6 +253,19 @@ pub enum Event {
     Windows(Vec<WindowInfo>),
     /// A desktop application put text (a `text/*` mime) or a PNG on the clipboard.
     Clipboard { mime: String, data: Bytes },
+    /// A drag from the browser was dropped: the application under the pointer took it, or nobody did.
+    DragEnded { taken: bool },
+}
+
+/// A drag from the browser, carried by the compositor as its own drag-and-drop offering `text/uri-list`.
+#[derive(Debug)]
+pub enum Drag {
+    /// Take the pointer with a drag; the application under it is told what is coming.
+    Start,
+    /// The files are on the desktop now: this is their URI list; drop it on the application under the pointer.
+    Drop(Vec<u8>),
+    /// Let go over nothing.
+    Cancel,
 }
 
 #[derive(Debug)]

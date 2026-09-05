@@ -67,6 +67,13 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 v.clipboard = Some((mime, data));
                 msg
             }
+            Event::DragEnded { taken } => {
+                // the controller dragged; it alone hears how it went
+                if let Some(s) = v.controller.and_then(|c| v.sessions.get(&c)) {
+                    let _ = s.events.try_send(protocol::notice(if taken { "the application took the files" } else { "no application took the files; they are in the desktop's transfer folder" }));
+                }
+                continue;
+            }
         };
         drop(v);
         app.broadcast(msg);
@@ -586,6 +593,7 @@ impl App {
             }
             ClientMsg::Control(m) if key == Key::Control => self.command_for(m).ok(),
             ClientMsg::SetClipboard(text) if key == Key::Control => Some(Command::SetClipboard { mime: api::TEXT.into(), data: text.into() }),
+            ClientMsg::Drag(d) if controls => Some(self.drag_command(d)),
             m if controls => input_command(m),
             _ => None,
         };

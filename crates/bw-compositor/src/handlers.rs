@@ -30,7 +30,7 @@ use smithay::{
         },
         wayland_server::{
             Client, Resource,
-            protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
+            protocol::{wl_buffer::WlBuffer, wl_data_device_manager::DndAction, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
         },
     },
     utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
@@ -677,8 +677,30 @@ impl PrimarySelectionHandler for State {
     }
 }
 impl ClientDndGrabHandler for State {}
+/// The browser's drag (`State::drag`): the target reads the URI list like our clipboard, once it exists.
 impl ServerDndGrabHandler for State {
-    fn send(&mut self, _mime_type: String, _fd: OwnedFd, _seat: Seat<Self>) {}
+    /// Before the drop there is nothing yet, and the pipe is closed at once (EOF) rather than left pending:
+    /// GTK 3 never asks for that mime again if the pointer leaves it while a read is pending.
+    fn send(&mut self, mime_type: String, fd: OwnedFd, _seat: Seat<Self>) {
+        if let Some(data) = self.drag_data.clone() {
+            self.serve_clipboard(data, &mime_type, fd);
+        }
+    }
+    fn accept(&mut self, mime_type: Option<String>, _seat: Seat<Self>) {
+        self.drag_accepted = mime_type.is_some();
+        self.drag_settle();
+    }
+    fn action(&mut self, action: DndAction, _seat: Seat<Self>) {
+        self.drag_action = action;
+        self.drag_settle();
+    }
+    fn dropped(&mut self, _seat: Seat<Self>) {
+        self.drag_taken = true;
+    }
+    /// Follows `dropped` when nothing under the pointer took it.
+    fn cancelled(&mut self, _seat: Seat<Self>) {
+        self.drag_taken = false;
+    }
 }
 
 impl OutputHandler for State {

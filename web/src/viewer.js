@@ -4,7 +4,7 @@
 import { KEYCODES } from './keycodes.js';
 import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, clipboardFiles, pref, codecs as serverCodecs } from './api.js';
 import { createStore } from './store.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, BTN } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -460,6 +460,30 @@ export function createViewer() {
     return saved; // the names they got there
   }
   document.addEventListener('dragover', e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+  // Over the stage, a controller's drag is carried on as a drag on the desktop: the application under the
+  // pointer sees a text/uri-list coming and shows its drop zone; on drop the files are uploaded to the
+  // transfer folder first (the drag holds still meanwhile), then dropped as their URIs. Elsewhere on the
+  // page a drop is a plain upload.
+  let dragging = false;
+  const drag = msg => sendText(DRAG, JSON.stringify(msg));
+  function onDragEnter(e) {
+    if (dragging || !driving() || !e.dataTransfer?.types.includes('Files')) return;
+    dragging = true;
+    onPointerMove(e);
+    drag({ op: 'start' });
+  }
+  function onDragOver(e) { if (dragging) onPointerMove(e); }
+  function onDragLeave() { if (dragging) { dragging = false; drag({ op: 'cancel' }); } }
+  async function onDrop(e) {
+    if (!dragging) return; // not ours (a view-only session): the page's own drop handler answers
+    e.preventDefault();
+    e.stopPropagation();
+    dragging = false;
+    onPointerMove(e);
+    const files = e.dataTransfer.files;
+    const names = await uploadFiles(files);
+    drag(names.length === files.length ? { op: 'drop', names } : { op: 'cancel' });
+  }
   document.addEventListener('drop', e => {
     if (!e.dataTransfer?.files.length) return;
     e.preventDefault();
@@ -608,6 +632,10 @@ export function createViewer() {
     canvas.addEventListener('pointerup', onPointerButton);
     canvas.addEventListener('contextmenu', e => e.preventDefault());
     canvas.addEventListener('wheel', onWheel, { passive: false });
+    canvas.addEventListener('dragenter', onDragEnter);
+    canvas.addEventListener('dragover', onDragOver);
+    canvas.addEventListener('dragleave', onDragLeave);
+    canvas.addEventListener('drop', onDrop);
     initRenderer().then(connect);
   }
 

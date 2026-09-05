@@ -110,13 +110,29 @@ impl App {
     }
 
     /// Files of the folder as the desktop clipboard's URI list (a file manager's copy).
-    pub fn set_clipboard_files(&self, names: &[&str]) -> Result<(), ApiError> {
+    pub fn set_clipboard_files(&self, names: &[String]) -> Result<(), ApiError> {
+        self.set_clipboard(crate::api::URI_LIST, self.uri_list(names)?.into())
+    }
+
+    /// A `text/uri-list` naming files of the transfer folder.
+    fn uri_list(&self, names: &[String]) -> Result<Vec<u8>, ApiError> {
         let mut list = String::new();
         for name in names {
             let path = self.files_dir.join(safe(name)?);
             list += &format!("file://{}\r\n", percent_path(&path));
         }
-        self.set_clipboard(crate::api::URI_LIST, list.into())
+        Ok(list.into_bytes())
+    }
+
+    /// The browser's drag as a compositor command; a drop names files of the transfer folder (one that
+    /// isn't there cancels instead, so the desktop lets go).
+    pub fn drag_command(&self, msg: crate::protocol::DragMsg) -> bw_core::Command {
+        use crate::protocol::DragMsg;
+        bw_core::Command::Drag(match msg {
+            DragMsg::Start => bw_core::Drag::Start,
+            DragMsg::Drop { names } => self.uri_list(&names).map_or(bw_core::Drag::Cancel, bw_core::Drag::Drop),
+            DragMsg::Cancel => bw_core::Drag::Cancel,
+        })
     }
 
     /// The `index`th `file://` URI of the list on the desktop clipboard, streamed: its name, size and body.

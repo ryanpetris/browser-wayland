@@ -28,7 +28,7 @@ use crate::{
     handlers::KeyboardFocus,
 };
 
-const BTN_LEFT: u32 = 0x110;
+pub(crate) const BTN_LEFT: u32 = 0x110;
 
 /// The keycode producing `sym` in `layout` and the shift level it sits on; lower levels win.
 fn key_for(keymap: &xkb::Keymap, layout: u32, sym: Keysym) -> Option<(Keycode, u32)> {
@@ -112,6 +112,7 @@ impl State {
             }
             Command::Input(msg) => self.input(msg),
             Command::SetClipboard { mime, data } => self.set_clipboard(mime, data),
+            Command::Drag(drag) => self.drag(drag),
             Command::ReleaseAllInput => self.release_all(),
             Command::PointerMotionAbsolute { x, y } => self.pointer_motion((x, y).into()),
             Command::PointerMotionRelative { dx, dy } => self.pointer_motion(self.pointer_location + Point::<f64, Logical>::from((dx, dy))),
@@ -131,7 +132,7 @@ impl State {
         }
     }
 
-    fn now(&self) -> u32 {
+    pub(crate) fn now(&self) -> u32 {
         self.clock.now().as_millis()
     }
 

@@ -50,6 +50,10 @@ pub const NOTIFY: u8 = 0x8E;
 /// JSON `{"codec": "auto" | name, "quality": "auto" | "low" | "medium" | "high" | "max"}`, either field
 /// optional: this session's choice, applied live. Any session.
 pub const STREAM: u8 = 0x8F;
+/// `[DRAG][JSON]`: the browser drags local files over the desktop: `{"op": "start"}` where the pointer is,
+/// `{"op": "drop", "names": [...]}` with the files' names in the transfer folder (uploaded first), or
+/// `{"op": "cancel"}`. Controlling session only.
+pub const DRAG: u8 = 0x90;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -217,6 +221,15 @@ pub enum ClientMsg {
     TakeControl,
     Notify(NotifyMsg),
     Stream(StreamChoice),
+    Drag(DragMsg),
+}
+
+#[derive(Debug, PartialEq, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+pub enum DragMsg {
+    Start,
+    Drop { names: Vec<String> },
+    Cancel,
 }
 
 /// `{"codec": "auto" | "h264" | …, "quality": "auto" | "low" | …}`, either optional (unchanged).
@@ -260,6 +273,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         TAKE_CONTROL => ClientMsg::TakeControl,
         NOTIFY => ClientMsg::Notify(serde_json::from_slice(&b[1..]).ok()?),
         STREAM => ClientMsg::Stream(serde_json::from_slice(&b[1..]).ok()?),
+        DRAG => ClientMsg::Drag(serde_json::from_slice(&b[1..]).ok()?),
         _ => return None,
     })
 }

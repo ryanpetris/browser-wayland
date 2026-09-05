@@ -179,6 +179,21 @@ in the Files tab and a notice at the end) or picked with the Upload button, and 
 folder with download (fetch and a blob, so no token is in a URL) and delete; the list refreshes when the
 tab opens and after an upload.
 
+Dragging local files over the stage is carried on as a drag on the desktop (`Drag` message; `State::drag`
+in `clipboard.rs`, `ServerDndGrabHandler` in `handlers.rs`). `dragenter` starts a compositor-owned drag
+(`start_dnd`) offering `text/uri-list` with the `copy` action, from a synthetic left-button press made
+over nothing so no client sees a press without its release; `dragover` is ordinary pointer motion, which
+the drag grab turns into `wl_data_device` enter/motion for the application under the pointer; `dragleave`
+lets go over nothing (`cancel`). The browser gives file contents only on `drop`, so the files are
+uploaded then (the drag holds still; the page shows the upload) and `drop` names them: the compositor
+leaves and re-enters the target with a fresh offer whose list it can read now (Thunar reads it during
+the drag to decide, once per offer, and refuses without it; a request before the drop gets EOF at once,
+because GTK 3 never asks again if the pointer leaves while a read is pending), then releases the button
+once the target has accepted a mime and chosen an action, sending a motion every 100 ms so it looks
+again, or after 1.5 s regardless. The page is told whether the application took the files (`Notice`); a
+refused drop leaves them in the transfer folder. The button counts as pressed meanwhile, so a viewer
+that disconnects mid-drag lets go too. X11 applications get no drop (Smithay's XWM does not speak XDND).
+
 ## Notifications
 
 `notify.rs`. Applications send desktop notifications to `org.freedesktop.Notifications` on the session
