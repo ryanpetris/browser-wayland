@@ -729,3 +729,8 @@ impl smithay::wayland::idle_inhibit::IdleInhibitHandler for State {
 }
 smithay::delegate_idle_inhibit!(State);
 smithay::delegate_presentation!(State);
+// cursor-shape can also name a tablet tool's cursor; there are no tablets here.
+impl smithay::wayland::tablet_manager::TabletSeatHandler for State {}
+smithay::delegate_cursor_shape!(State);
+smithay::delegate_single_pixel_buffer!(State);
+smithay::delegate_alpha_modifier!(State);

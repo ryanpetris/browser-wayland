@@ -18,7 +18,7 @@ snapshots, browser UI).
 | Transport | WebSocket + WebCodecs. WebCodecs needs a secure context, so the server speaks HTTPS with a self-signed certificate unless `--no-tls` (localhost development). |
 | Windowing | Floating desktop: stacking, click-to-focus, decorations by the client or, for those that draw none, by the compositor, xdg move/resize, maximize/fullscreen, minimize, layer-shell panels. `--kiosk` fullscreens every window for nested desktops. |
 | Viewers | Any number, each with its own encoder at its own size and codec. One controls (input and output size): the first control-token session, or whoever took control last. A second, read-only token lets people watch. |
-| Cursor | Drawn by the browser (CSS cursor from the compositor's image), never composited: pointer motion costs no frames. |
+| Cursor | Drawn by the browser (CSS cursor from the compositor's image), never composited: pointer motion costs no frames. Clients name a shape through cursor-shape-v1 or upload a surface; either ends as the same image. |
 | Rendering cadence | Damage-driven. No commit, no frame, no bandwidth. |
 | Auth | Two shared tokens (control and view-only), handed to a viewer once in the URL fragment and kept in `sessionStorage`; rotatable through the API. WebSocket authenticates with its first message; HTTP API uses `Authorization: Bearer`. No cookies. |
 
@@ -106,7 +106,8 @@ cascade inside the work area (the output minus panel exclusive zones); maximize 
 fullscreen the output. Focus, raising and activation go through one function (`focus_window`), which
 the click handler, the taskbar protocol, the desktop API and minimize all use. Minimized windows leave
 the space into a list (no rendering, hit-testing or frame callbacks) and come back through `relayout`.
-Windows that don't draw their own decorations (X11 windows, Wayland toplevels that ask for server-side
+Client buffers are wl_shm, linux-dmabuf or single-pixel-buffer-v1 (GTK4's solid backgrounds), and
+alpha-modifier-v1 fades a surface without redrawing it. Windows that don't draw their own decorations (X11 windows, Wayland toplevels that ask for server-side
 decorations or bind neither xdg-decoration nor KDE's server-decoration protocol) get a title bar drawn
 by the compositor (`decor.rs`, see [desktop-api.md](desktop-api.md)). Super/Alt + left drag moves any
 window besides.
