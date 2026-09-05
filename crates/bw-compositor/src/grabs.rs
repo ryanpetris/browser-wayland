@@ -72,7 +72,8 @@ impl PointerGrab<State> for MoveGrab {
     fn motion(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, event: &MotionEvent) {
         handle.motion(data, None, event); // no focus while dragging
         let delta = event.location - self.start_data.location;
-        let location = (self.initial_location.to_f64() + delta).to_i32_round();
+        // the pointer may be anywhere, the window keeps a corner on the desktop
+        let location = data.clamp_to_output(&self.window, (self.initial_location.to_f64() + delta).to_i32_round());
         data.space.map_element(self.window.clone(), location, true);
         if let Some(x11) = self.window.x11_surface() {
             let _ = x11.configure(Rectangle::new(location, self.window.geometry().size));

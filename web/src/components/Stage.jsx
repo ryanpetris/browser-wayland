@@ -73,7 +73,7 @@ function Notice({ viewer }) {
   const notice = useStore(viewer.store, s => s.notice);
   if (!notice) return null;
   return (
-    <div className="absolute bottom-3 left-1/2 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-500/40 bg-zinc-900/95 px-3 py-2 text-xs text-amber-100 shadow-lg">
+    <div className="pointer-events-none absolute bottom-3 left-1/2 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-500/40 bg-zinc-900/95 px-3 py-2 text-xs text-amber-100 shadow-lg">
       <TriangleAlert className="size-4 shrink-0 text-amber-400" /> {notice}
     </div>
   );

@@ -95,7 +95,8 @@ the viewer's panel opens one, sized to the window). The same messages as `/ws`, 
   window, the pointer). Any control-token session drives its popup, whoever controls the desktop; a
   viewer-token session only watches. Focusing the tab activates the window.
 - `Cursor`, `PointerLock`, `Windows` and `Clipboard` arrive as on `/ws`; there is no audio. The page
-  uses the window list only for the tab title.
+  uses the window list only for the tab title. `Notice` arrives only here: a press on the part of an
+  X11 window that hangs past the desktop's edge, which Xwayland pins to the edge.
 - Any number can run beside the viewer, each with its own encoder (one `--bitrate` each). The
   compositor renders a window stream only when that window changed; it drops the stream when the
   window closes (close code 4003) or the socket ends. `Hello` still picks the codec. A token rotation

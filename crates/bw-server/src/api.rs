@@ -175,13 +175,15 @@ impl App {
     }
 
     /// Xwayland's screen is the output, and the X server pins its pointer to it: a click on the part of an
-    /// X11 window that hangs past the output's edge lands on the edge instead. Says so for such a click.
+    /// X11 window that hangs past the output's edge lands on the edge instead. Says so for such a click
+    /// (one inside the client's own area; the title bar and resize band around it are ours).
     pub fn x11_edge_warning(&self, window: u64, x: f64, y: f64) -> Option<&'static str> {
         let v = self.viewers.lock().unwrap();
         let w = v.window_list.iter().find(|w| w.id == window).filter(|w| w.x11)?;
+        let inside = (0.0..w.w as f64).contains(&x) && (0.0..w.h as f64).contains(&y);
         let (ax, ay) = (w.x as f64 + x, w.y as f64 + y);
         let (ow, oh) = (v.output.width_px as f64 / v.output.scale, v.output.height_px as f64 / v.output.scale);
-        (ax < 0.0 || ay < 0.0 || ax >= ow || ay >= oh).then_some(X11_EDGE)
+        (inside && (ax < 0.0 || ay < 0.0 || ax >= ow || ay >= oh)).then_some(X11_EDGE)
     }
 
     /// The installed applications, by name. A few hundred small files: read off the async workers.
