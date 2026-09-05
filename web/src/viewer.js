@@ -2,7 +2,7 @@
 // React only draws the chrome around it (App.jsx) and reads what it publishes on `store`.
 // Wire format mirrors crates/bw-server/src/protocol.rs.
 import { KEYCODES } from './keycodes.js';
-import { TOKEN, WINDOW, api, elementsOf, snapshot } from './api.js';
+import { TOKEN, WINDOW, api, elementsOf, snapshot, control } from './api.js';
 import { createStore } from './store.js';
 import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, ROLES, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, BTN } from './protocol.js';
 
@@ -31,6 +31,7 @@ export function createViewer() {
 
   let canvas = null, ctx = null, draw = null; // draw(frame) takes ownership of the frame and closes it
   let stage = { w: 0, h: 0 }; // CSS size of the area the canvas lives in
+  let quitting = false; // this page asked the desktop to shut down: the socket's end is not a failure
   let ws, decoder, stream = null, awaitingKey = true;
   let frames = 0, received = 0, windowFrames = 0, windowBytes = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [], keyframes = 0, decodeErrors = 0, dropped = 0;
   let videoSeq = -1, audioSeq = -1, lost = 0, dropNext = false; // seq: last message seen per stream; lost: gaps in either
@@ -139,6 +140,7 @@ export function createViewer() {
         return;
       }
       if (e.code === 4003) { store.set({ status: 'gone', reason: e.reason }); return; } // the window is gone
+      if (quitting) { store.set({ status: 'quit', stream: null }); return; } // we asked for this
       store.set({ status: 'retrying' });
       setTimeout(connect, 1000);
     };
@@ -520,6 +522,8 @@ export function createViewer() {
     elements: elementsOf,
     activate: id => sendControl({ id, op: 'activate' }),
     spawn: cmd => sendControl({ op: 'spawn', cmd }),
+    launch: app => control({ op: 'launch', app }),
+    quit: () => { quitting = true; return control({ op: 'quit' }); },
     setElementsOn(on) { store.set({ elementsOn: on }); fetchElements(); },
     setStatsOn(on) { store.set({ statsOn: on }); inflight.clear(); stage_.decode.length = stage_.paint.length = stage_.interval.length = 0; lastPaint = 0; },
     releaseInput: () => send(BLUR, 0), // a key held on the canvas must not stay held while a text field has the keyboard

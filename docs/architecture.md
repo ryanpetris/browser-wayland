@@ -186,10 +186,12 @@ as JSON.
 
 ## Running and deployment
 
-See the README for flags and the `Dockerfile` for a complete Arch Linux image with the Xfce panel,
-Xfce applications, Firefox, Chromium, PipeWire and Mesa's GL and Vulkan drivers (`make docker-run`). Practical notes: `--exec` runs at startup, with a Wayland session's
-environment; nested desktops need `--kiosk`; the data directory should be persisted in containers or every
-start prints a new token.
+See the README for flags and the `Dockerfile` for a complete Arch Linux image with the Xfce applications
+and panel, Firefox, Chromium, PipeWire and Mesa's GL and Vulkan drivers (`make docker-run`). The desktop
+needs no panel: the viewer's application menu (`GET /api/applications`, from the `.desktop` files) and
+power menu, with its window list, stand in for one. Practical notes: `--exec` runs at startup, with a
+Wayland session's environment; nested desktops need `--kiosk`; the data directory should be persisted in
+containers or every start prints a new token.
 
 ## Known limitations
 

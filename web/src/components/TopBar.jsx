@@ -1,4 +1,4 @@
-import { Expand, Eye, LayoutList, Maximize, MousePointer2, PanelRight, ScanSearch } from 'lucide-react';
+import { Expand, Eye, LayoutGrid, LayoutList, Maximize, MousePointer2, PanelRight, Power, ScanSearch } from 'lucide-react';
 import { useStore } from '../store.js';
 import { WINDOW } from '../api.js';
 import { IconButton, codecName } from './ui.jsx';
@@ -10,20 +10,23 @@ const STATUS = {
   retrying: ['bg-amber-400 animate-pulse', 'Reconnecting…'],
   unauthorized: ['bg-rose-400', 'Not authorized'],
   gone: ['bg-zinc-500', 'Window closed'],
+  quit: ['bg-zinc-500', 'Shut down'],
 };
 
-export function TopBar({ viewer, windowMode, borders, onBorders, elements, onElements, sidebar, onSidebar, onFullscreen }) {
+export function TopBar({ viewer, windowMode, borders, onBorders, elements, onElements, sidebar, onSidebar, onFullscreen, menu, onMenu }) {
   const status = useStore(viewer.store, s => s.status);
   const stream = useStore(viewer.store, s => s.stream);
   const windowTitle = useStore(viewer.store, s => s.windowTitle);
   const role = useStore(viewer.store, s => s.role);
   const [dot, text] = STATUS[status];
+  const acts = !windowMode && role && role !== 'viewer' && status === 'connected'; // the menus act on the desktop
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-zinc-800 bg-zinc-900 px-3">
       <div className="flex min-w-0 shrink items-center gap-2 font-medium text-zinc-100">
         <Logo />
         <span className="truncate">{windowMode ? windowTitle || `Window ${WINDOW}` : 'browser-wayland'}</span>
       </div>
+      {acts && <IconButton icon={LayoutGrid} label="Applications" active={menu === 'apps'} onClick={() => onMenu('apps')} />}
       <div className="flex min-w-0 shrink-0 items-center gap-2 text-xs text-zinc-400">
         <span className={`size-2 shrink-0 rounded-full ${dot}`} />
         <span className="truncate">{text}</span>
@@ -52,6 +55,7 @@ export function TopBar({ viewer, windowMode, borders, onBorders, elements, onEle
           </>
         )}
         <IconButton icon={Expand} label="Fullscreen (browser shortcuts go to the desktop)" onClick={onFullscreen} />
+        {acts && <IconButton icon={Power} label="Quit browser-wayland" active={menu === 'power'} onClick={() => onMenu('power')} className="hover:text-rose-300" />}
       </div>
     </header>
   );

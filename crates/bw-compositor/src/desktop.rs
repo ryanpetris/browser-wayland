@@ -172,7 +172,8 @@ impl State {
                     }
                 }
             }
-            ControlOp::Move { .. } | ControlOp::Resize { .. } | ControlOp::Spawn { .. } => {}
+            // launch and quit are resolved by the server (an Exec line, Command::Quit) before they get here
+            ControlOp::Move { .. } | ControlOp::Resize { .. } | ControlOp::Spawn { .. } | ControlOp::Launch { .. } | ControlOp::Quit => {}
         }
         self.dirty = true;
         self.reconstrain_popups(); // a move or resize takes the window's open menus with it

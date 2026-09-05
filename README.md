@@ -94,8 +94,9 @@ gsettings set org.gnome.desktop.wm.preferences button-layout 'menu:minimize,maxi
 
 The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps,
 Firefox and Chromium, with PipeWire for audio and Mesa's OpenGL and Vulkan drivers for Intel and AMD
-(`glxgears`, `vkcube` and the info tools are included to check them), and the two GTK settings above;
-the desktop starts with the panel, whose menu launches the rest. `make docker-run` builds the image and runs it; the details are
+(`glxgears`, `vkcube` and the info tools are included to check them), and the two GTK settings above.
+The desktop starts empty; the viewer's menu launches the applications, and `--exec xfce4-panel` after
+the image name adds the panel. `make docker-run` builds the image and runs it; the details are
 in the Dockerfile's header.
 
 The page says when the server closed its socket with a token dialog ("wrong token" or "token
@@ -137,7 +138,9 @@ the geometry), the height of the title bar the compositor draws above it (`decor
 application draws its own), its stacking index `z` (`null` while minimized), `maximized`, `fullscreen`,
 `minimized`, `focused`, and `updated_ms`, the time of its last commit to the second. Ops: `activate`, `close`, `minimize`, `unminimize`, `maximize`,
 `unmaximize`, `fullscreen`, `unfullscreen`, `move` (`x`, `y`), `resize` (`w`, `h`), `spawn` (`cmd`, run
-with `sh -c` in the same environment as `--exec`). Requests are fire-and-forget; unknown ids are ignored.
+with `sh -c` in the same environment as `--exec`), `launch` (`app`, an id from `GET /api/applications`,
+the installed `.desktop` launchers, whose icons are at `/api/applications/{id}/icon`) and `quit`, which
+ends browser-wayland. Requests are fire-and-forget; unknown ids are ignored.
 Snapshots are lossless PNGs of a window's own buffers, so they include covered and minimized windows;
 `scale` (0.05 to 2) is relative to the output scale.
 
@@ -158,8 +161,8 @@ browser's (copy in an application, paste locally; Ctrl+V in the page pastes the 
 
 The same operations are MCP tools at `/mcp` (Streamable HTTP, same bearer token), so a coding agent can
 drive the desktop: `windows`, `elements`, `snapshot`, `screenshot`, `window_control`, `move_window`,
-`resize_window`, `spawn`, `click`, `move_pointer`, `button`, `scroll`, `key`, `type`, `clipboard_read`,
-`clipboard_write`.
+`resize_window`, `applications`, `launch`, `spawn`, `click`, `move_pointer`, `button`, `scroll`, `key`,
+`type`, `clipboard_read`, `clipboard_write`.
 
 ```sh
 claude mcp add --transport http bw https://host:8443/mcp --header "Authorization: Bearer $T"
@@ -171,11 +174,13 @@ generated `reference.md` with every route, body and tool schema; both are also s
 without a token and can be copied into an agent's skills directory. With a self-signed certificate,
 point the agent at the fingerprint the server prints, or run `--no-tls` behind a reverse proxy.
 
-The viewer page uses the same data over its WebSocket: its side panel lists the windows with thumbnails
+The viewer page uses the same data over its WebSocket: its application menu lists the installed
+programs by category, with a search box, and starts them; its side panel lists the windows with thumbnails
 and open-in-popup, snapshot, maximize, minimize and close buttons (click a row to bring the window
-forward, type in the box at the top to start a program), its Statistics tab shows the stream's numbers
+forward, type in the box at the top to run a command), its Statistics tab shows the stream's numbers
 (per-stage timings, drops, audio lead) once a second, and the top bar toggles colour-coded borders with
-the app id over every window and an outline of the focused window's elements. In the browser console,
+the app id over every window and an outline of the focused window's elements; its power menu quits
+browser-wayland. A panel is optional. In the browser console,
 `bw.windows()`, `bw.activate(id)`, `bw.control({...})`, `bw.spawn(cmd)`, `bw.snapshot(id)` and
 `bw.elements(id)` do the same.
 

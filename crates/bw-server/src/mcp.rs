@@ -86,6 +86,12 @@ pub struct ResizeWindowArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct LaunchArgs {
+    /// An `id` from `applications`.
+    pub app: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct SpawnArgs {
     /// Shell command, run with `sh -c` as a client of this desktop.
     pub cmd: String,
@@ -243,6 +249,16 @@ impl Mcp {
     #[tool(description = "Start a program as a client of this desktop (`sh -c cmd`). Its window appears in `windows` after a moment.")]
     fn spawn(&self, Extension(parts): Extension<Parts>, Parameters(SpawnArgs { cmd }): Parameters<SpawnArgs>) -> ToolResult {
         self.control(&parts, 0, ControlOp::Spawn { cmd })
+    }
+
+    #[tool(description = "The applications installed on the desktop (its .desktop launchers): id, name, comment, categories. `launch` starts one.")]
+    fn applications(&self) -> ToolResult {
+        json(self.app.applications())
+    }
+
+    #[tool(description = "Start an installed application by its id from `applications`, as a click in the menu would. Its window appears in `windows` after a moment.")]
+    fn launch(&self, Extension(parts): Extension<Parts>, Parameters(LaunchArgs { app }): Parameters<LaunchArgs>) -> ToolResult {
+        self.control(&parts, 0, ControlOp::Launch { app })
     }
 
     #[tool(description = "Move the pointer there and click. With `window`, x y are relative to that window, e.g. the centre of an element's rectangle.")]

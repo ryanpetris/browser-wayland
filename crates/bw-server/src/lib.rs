@@ -4,6 +4,7 @@
 //! viewer token only looks.
 
 mod api;
+mod apps;
 mod elements;
 mod mcp;
 mod protocol;
@@ -158,6 +159,8 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         .merge(
             Router::new()
                 .route("/api/windows", get(api_windows))
+                .route("/api/applications", get(api_applications))
+                .route("/api/applications/{id}/icon", get(api_application_icon))
                 .route("/api/control", post(api_control))
                 .route("/api/input", post(api_input))
                 .route("/api/windows/{id}/snapshot.png", get(api_window_snapshot))
@@ -262,6 +265,17 @@ async fn api_window_snapshot(UrlPath(id): UrlPath<u64>, Query(q): Query<HashMap<
 
 async fn api_screenshot(Query(q): Query<HashMap<String, String>>, State(app): State<Arc<App>>) -> Response {
     png(app.snapshot(None, scale_of(&q)).await)
+}
+
+async fn api_applications(State(app): State<Arc<App>>) -> Response {
+    (NO_STORE, Json(app.applications())).into_response()
+}
+
+async fn api_application_icon(UrlPath(id): UrlPath<String>, State(app): State<Arc<App>>) -> Response {
+    match app.application_icon(&id) {
+        Ok((bytes, mime)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=86400")], bytes).into_response(),
+        Err(e) => e.into_response(),
+    }
 }
 
 async fn api_window_elements(UrlPath(id): UrlPath<u64>, State(app): State<Arc<App>>) -> Response {

@@ -196,7 +196,7 @@ Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; se
 
 ### Control message
 
-`{"id": <window id>, "op": "<op>", ...}`; `id` is omitted for `spawn`.
+`{"id": <window id>, "op": "<op>", ...}`; `id` is omitted for `spawn`, `launch` and `quit`.
 
 | `op` | Effect |
 |---|---|
@@ -207,11 +207,23 @@ Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; se
 | `move` (`x`, `y`) | floating windows only (mapped, not maximized or fullscreen) |
 | `resize` (`w`, `h`) | floating windows only; a size hint for Wayland clients, a configure for X11 |
 | `spawn` (`cmd`) | `sh -c cmd` with the `--exec` environment: `WAYLAND_DISPLAY`, `DISPLAY`, `PULSE_SINK`, `XDG_SESSION_TYPE` and the toolkits' backend switches |
+| `launch` (`app`) | start an installed application: `app` is an `id` from `GET /api/applications`, its `Exec` line runs like `spawn`; `404` over HTTP for an unknown id |
+| `quit` | browser-wayland exits, every window with it |
 
 Unknown ids and impossible requests are ignored. `spawn` is remote code execution by design; the token
 is the boundary.
 
+### Applications
+
+`GET /api/applications` lists the launchers of the `.desktop` files in the XDG data directories
+(`$XDG_DATA_HOME`, `$XDG_DATA_DIRS`; the first directory that has a file wins, so a user's copy hides a
+system entry): `id` (the file name without `.desktop`), `name`, `comment`, `categories`. Entries that a
+menu would not show are left out: `NoDisplay`, `Hidden`, `OnlyShowIn` (meant for one desktop), `Terminal`
+(nothing to run them in), and `TryExec` binaries that aren't installed. `GET /api/applications/{id}/icon`
+is the entry's icon as SVG or PNG, from the icon themes (hicolor first) or `pixmaps`; `404` without one.
+
 ## Browser console
 
 `window.bw()` returns viewer statistics. `bw.windows()`, `bw.activate(id)`, `bw.control({...})`,
-`bw.spawn(cmd)`, `bw.snapshot(id, scale)` (a `Blob`) and `bw.elements(id)` wrap the same messages and routes.
+`bw.spawn(cmd)`, `bw.launch(app)`, `bw.quit()`, `bw.snapshot(id, scale)` (a `Blob`) and `bw.elements(id)` wrap the
+same messages and routes.

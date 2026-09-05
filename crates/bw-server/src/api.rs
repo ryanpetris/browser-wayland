@@ -9,9 +9,9 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
-use bw_core::{Command, ControlMsg, InputMsg, Snapshot, SnapshotError, SnapshotReply, WindowInfo};
+use bw_core::{Command, ControlMsg, ControlOp, InputMsg, Snapshot, SnapshotError, SnapshotReply, WindowInfo};
 
-use crate::{App, elements::Page};
+use crate::{App, apps, elements::Page};
 
 #[derive(Debug)]
 pub enum ApiError {
@@ -23,6 +23,8 @@ pub enum ApiError {
     Forbidden,
     /// No such window.
     NotFound,
+    /// No such application (`launch`, icons).
+    NoSuchApp,
     /// Another snapshot is in flight.
     Busy,
     /// The compositor or the accessibility bus didn't answer.
@@ -39,7 +41,7 @@ impl ApiError {
             ApiError::Disabled(_) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
             ApiError::Forbidden => StatusCode::FORBIDDEN,
-            ApiError::NotFound => StatusCode::NOT_FOUND,
+            ApiError::NotFound | ApiError::NoSuchApp => StatusCode::NOT_FOUND,
             ApiError::Busy => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -55,6 +57,7 @@ impl std::fmt::Display for ApiError {
             ApiError::Unauthorized => f.write_str("not the current token"),
             ApiError::Forbidden => f.write_str("read-only token"),
             ApiError::NotFound => f.write_str("no such window"),
+            ApiError::NoSuchApp => f.write_str("no such application"),
             ApiError::Busy => f.write_str("another snapshot is in flight"),
             ApiError::TooLarge => f.write_str("over 1 MiB"),
             ApiError::Unavailable(why) | ApiError::Internal(why) => f.write_str(why),
@@ -152,9 +155,32 @@ impl App {
         self.send(Command::SetClipboard(text))
     }
 
-    /// A window action or spawn. Fire-and-forget: the compositor ignores unknown ids and impossible requests.
+    /// A window action, spawn, launch or quit. Fire-and-forget: the compositor ignores unknown ids and
+    /// impossible requests.
     pub fn control(&self, msg: ControlMsg) -> Result<(), ApiError> {
-        self.send(Command::Control(msg))
+        let cmd = self.command_for(msg)?;
+        self.send(cmd)
+    }
+
+    /// The compositor's command for a control request: a launcher becomes its Exec line, quit ends the
+    /// desktop, the rest is the window action itself.
+    pub fn command_for(&self, msg: ControlMsg) -> Result<Command, ApiError> {
+        Ok(match msg.op {
+            ControlOp::Launch { app } => Command::Control(ControlMsg { id: 0, op: ControlOp::Spawn { cmd: apps::exec(&app).ok_or(ApiError::NoSuchApp)? } }),
+            ControlOp::Quit => Command::Quit,
+            _ => Command::Control(msg),
+        })
+    }
+
+    /// The installed applications, by name.
+    pub fn applications(&self) -> Vec<apps::AppInfo> {
+        apps::list()
+    }
+
+    /// An application's icon as bytes and media type.
+    pub fn application_icon(&self, id: &str) -> Result<(Vec<u8>, &'static str), ApiError> {
+        let (path, mime) = apps::icon(id).ok_or(ApiError::NoSuchApp)?;
+        Ok((std::fs::read(path).map_err(|e| ApiError::Internal(e.to_string()))?, mime))
     }
 
     /// Pointer and keyboard input. `window` makes coordinates relative to that window's geometry; the

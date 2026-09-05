@@ -321,6 +321,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                             Some(Command::RequestFullFrame)
                         }
                         Some(_) if key != Key::Control => None, // the viewer token watches
+                        Some(ClientMsg::Control(m)) => app.command_for(m).ok(),
                         // window-relative, resolved against the live geometry on the compositor thread
                         Some(ClientMsg::MotionAbs { x, y }) => Some(Command::Input(InputMsg::Move { x: x as f64, y: y as f64, window: Some(id) })),
                         Some(ClientMsg::Resize { css_w, css_h, .. }) => Some(Command::Control(ControlMsg { id, op: ControlOp::Resize { w: css_w as i32, h: css_h as i32 } })),
@@ -437,7 +438,7 @@ impl App {
                 }
                 Some(Command::RequestFullFrame)
             }
-            ClientMsg::Control(m) if key == Key::Control => Some(Command::Control(m)),
+            ClientMsg::Control(m) if key == Key::Control => self.command_for(m).ok(),
             ClientMsg::SetClipboard(text) if key == Key::Control => {
                 v.clipboard = Some(text.clone());
                 Some(Command::SetClipboard(text))
@@ -504,7 +505,6 @@ fn input_command(m: ClientMsg) -> Option<Command> {
         ClientMsg::Key { evdev, pressed } => Command::Key { evdev: evdev as u32, pressed },
         ClientMsg::Blur => Command::ReleaseAllInput,
         ClientMsg::PointerLockLost => Command::ReleasePointerLock,
-        ClientMsg::Control(m) => Command::Control(m),
         _ => return None,
     })
 }

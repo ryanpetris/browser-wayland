@@ -172,6 +172,10 @@ pub enum ControlOp {
     Resize { w: i32, h: i32 },
     /// `sh -c`, with the same environment as `--exec`
     Spawn { cmd: String },
+    /// Start an installed application by its id from `GET /api/applications` (its `.desktop` file's name)
+    Launch { app: String },
+    /// End browser-wayland: every window closes with it
+    Quit,
 }
 
 impl Command {

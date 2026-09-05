@@ -125,10 +125,10 @@ fn main() -> Result<()> {
         events_tx,
     )?;
     tracing::info!(socket = %socket_name, x11_display = ?x11_display.map(|d| format!(":{d}")), "compositor ready");
+    // the compositor ends on Quit (the API, the viewer's power menu) or when it panics
+    let (exited_tx, exited_rx) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
-        let _ = join.join();
-        tracing::error!("compositor thread exited; shutting down");
-        std::process::exit(1);
+        let _ = exited_tx.send(join.join().is_ok());
     });
 
     let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, version: env!("BW_VERSION"), sinks };
@@ -137,6 +137,7 @@ fn main() -> Result<()> {
         tokio::select! {
             r = bw_server::run(server, commands, audio_rx, events_rx) => r,
             _ = tokio::signal::ctrl_c() => Ok(()),
+            ok = exited_rx => if ok.unwrap_or(false) { Ok(()) } else { Err(anyhow::anyhow!("the compositor thread died")) },
         }
     });
     drop(audio);

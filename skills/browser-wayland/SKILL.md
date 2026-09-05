@@ -65,9 +65,10 @@ curl -s -H "$H" https://host:8443/api/windows | jq
   `unminimize`, `maximize`, `unmaximize`, `fullscreen`, `unfullscreen` do what they say; `move` and
   `resize` work on floating windows. These requests are fire-and-forget: check the window list
   afterwards.
-- `spawn` runs a shell command as a client of this desktop (`sh -c`), with the display variables set.
-  Programs take a moment to map their window; poll the window list. A program that is already
-  running elsewhere may just open a new window in that instance.
+- `applications` lists what is installed (the desktop's `.desktop` launchers) and `launch` starts one by
+  its `id`; `spawn` runs any shell command as a client of this desktop (`sh -c`), with the display
+  variables set. Programs take a moment to map their window; poll the window list. A program that is
+  already running elsewhere may just open a new window in that instance.
 - `updated_ms` on a window is the time of its last redraw to the second. If it stops changing, the
   application is idle.
 

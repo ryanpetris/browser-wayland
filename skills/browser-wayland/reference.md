@@ -14,10 +14,12 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | Method and path | Body or query | Result |
 |---|---|---|
 | `GET /api/windows` | | JSON array of **Window** |
+| `GET /api/applications` | | JSON array of **Application**: the installed launchers, for `launch` |
+| `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
 | `GET /api/windows/{id}/elements` | | **Elements**; `501` without `--elements`, `503` tree unreadable, `404` unknown window |
 | `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
 | `GET /api/screenshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the whole output; `429`, `500`, `503` as for a window |
-| `POST /api/control` | **Control** | `202`; fire-and-forget; `503` compositor gone |
+| `POST /api/control` | **Control** | `202`; fire-and-forget; `404` unknown application (`launch`); `503` compositor gone |
 | `POST /api/input` | **Input** | `202`; `404` unknown window; `503` compositor gone |
 | `GET /api/clipboard` | | the last text an application copied, `text/plain`; `204` before any |
 | `PUT /api/clipboard` | UTF-8 text body | becomes the desktop clipboard; `202`; `413` over 1 MiB |
@@ -161,6 +163,44 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
     "minimized",
     "focused",
     "updated_ms"
+  ]
+}
+```
+
+## Application
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AppInfo",
+  "description": "One launcher, as the menu shows it.",
+  "type": "object",
+  "properties": {
+    "categories": {
+      "description": "The entry's categories (`Network`, `Office`, ...), for grouping.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "comment": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "The desktop file's name without `.desktop`; what `launch` takes.",
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "categories"
   ]
 }
 ```
@@ -337,6 +377,36 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
       "required": [
         "op",
         "cmd"
+      ]
+    },
+    {
+      "description": "Start an installed application by its id from `GET /api/applications` (its `.desktop` file's name)",
+      "type": "object",
+      "properties": {
+        "app": {
+          "type": "string"
+        },
+        "op": {
+          "type": "string",
+          "const": "launch"
+        }
+      },
+      "required": [
+        "op",
+        "app"
+      ]
+    },
+    {
+      "description": "End browser-wayland: every window closes with it",
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "quit"
+        }
+      },
+      "required": [
+        "op"
       ]
     }
   ]
@@ -593,6 +663,17 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 
 Streamable HTTP at `/mcp`, same bearer token. Failures come back as tool errors with the same text as the API.
 
+### `applications`
+
+The applications installed on the desktop (its .desktop launchers): id, name, comment, categories. `launch` starts one.
+
+```json
+{
+  "properties": {},
+  "type": "object"
+}
+```
+
 ### `button`
 
 Press or release a pointer button where the pointer is (for drags: press, move_pointer, release).
@@ -753,6 +834,26 @@ Press a key chord and release it: `ctrl+s`, `ctrl+shift+t`, `alt+F4`, `Return`, 
   },
   "required": [
     "keys"
+  ],
+  "type": "object"
+}
+```
+
+### `launch`
+
+Start an installed application by its id from `applications`, as a click in the menu would. Its window appears in `windows` after a moment.
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "app": {
+      "description": "An `id` from `applications`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "app"
   ],
   "type": "object"
 }

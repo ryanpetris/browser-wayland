@@ -81,6 +81,15 @@ function Banner({ viewer }) {
     );
   }
   const card = 'flex flex-col items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/95 px-8 py-6 text-center shadow-2xl';
+  if (status === 'quit') {
+    return (
+      <div className={`absolute ${card}`}>
+        <MonitorX className="size-6 text-zinc-500" />
+        <div className="text-sm text-zinc-200">browser-wayland was shut down</div>
+        <div className="text-xs text-zinc-500">Start it again and reload this page.</div>
+      </div>
+    );
+  }
   if (status === 'connecting') {
     return (
       <div className={`absolute ${card}`}>

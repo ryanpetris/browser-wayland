@@ -232,7 +232,8 @@ React and Tailwind, built by Vite into `web/dist` by `make web` and embedded (se
 `viewer.js` owns the canvas and the connection and publishes state through `store.js`; the components
 read it with `useSyncExternalStore` and send actions back through the engine.
 
-- **Layout** (`App.jsx`): a top bar (name, connection status, codec and size, the toggles, fullscreen),
+- **Layout** (`App.jsx`): a top bar (name, the application menu, connection status, codec and size, the
+  toggles, fullscreen, the power menu),
   the stage (`Stage.jsx`: the canvas, centred and fitted to it, plus the overlays and the status banners), the
   side panel (`Sidebar.jsx`) and a status bar (`StatusBar.jsx`: fps, bandwidth, input-to-paint latency,
   loss counters, clipboard, pointer lock, audio). The controller's stage sizes the desktop's output; the
@@ -240,6 +241,14 @@ read it with `useSyncExternalStore` and send actions back through the engine.
   is requested on the stage element, so the chrome is gone while it lasts. Toggles are remembered in
   `localStorage`. A popup (`?window=ID`) shows the window's title in the top bar, no side panel, and the
   canvas centred at the window's size, scaled down if the popup is smaller.
+- **Application menu** (`Launcher.jsx`): the installed launchers from `GET /api/applications`, grouped by
+  their freedesktop main category (`Network` shows as Internet, `Utility` as Accessories, and so on), with
+  a search box that filters by name and comment and launches the first match on Enter; a click sends
+  `launch`. Icons come through `fetch()` and blob URLs like thumbnails, cached per page, with a generic
+  glyph for entries without one. The **power menu** asks twice, then sends `quit`; the page remembers it
+  asked and shows "shut down" instead of reconnecting when the socket ends. Both are for sessions that
+  act (not the viewer token, not a window popup); together with the window list they cover what a panel
+  provides, so the desktop can run without one.
 - **Windows tab**: one row per window, top-most first, minimized last: a thumbnail, a colour dot, the
   title, the app id and size, state badges, and (on hover) buttons to open the window in its own popup
   (a window stream), snapshot, maximize/restore, minimize/restore (restore uses `activate`, so the window
@@ -271,7 +280,8 @@ read it with `useSyncExternalStore` and send actions back through the engine.
 There are no cookies, so there is no ambient credential to ride on: every HTTP request carries a
 bearer token and the WebSocket authenticates with its first message. Two tokens: the control token can
 do everything (`spawn` is remote code execution for whoever holds it, which the viewer already implied,
-since it can type into a terminal); the viewer token is for showing the desktop to someone who should
+since it can type into a terminal; `launch` runs an installed program's `Exec` line, `quit` ends the
+desktop); the viewer token is for showing the desktop to someone who should
 only watch: it gets the video, the window list, elements, snapshots and the clipboard's text, and `403`
 (or a tool error) for anything that acts, including taking control. The bearer middleware tags each
 request with which token it carried; handlers and MCP tools check the tag. Snapshot
