@@ -39,7 +39,7 @@ RUN BW_VISUALISER=$BW_VISUALISER npm run build
 
 FROM archlinux:latest AS build
 RUN pacman -Sy --noconfirm archlinux-keyring \
-    && pacman -Syu --noconfirm --needed rust pkgconf gstreamer gst-plugins-base mesa libxkbcommon \
+    && pacman -Syu --noconfirm --needed rust pkgconf clang libpipewire gstreamer gst-plugins-base mesa libxkbcommon \
     && rm -rf /var/cache/pacman/pkg/*
 WORKDIR /src
 COPY . .

@@ -9,8 +9,8 @@ arch=('x86_64')
 url="https://github.com/ryanpetris/browser-wayland"
 license=('MIT')
 if [[ ${BW_VISUALISER:-1} != 0 ]]; then license+=('AGPL-3.0-or-later'); fi
-depends=('gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-plugin-va' 'mesa' 'libxkbcommon')
-makedepends=('cargo' 'nodejs' 'npm')
+depends=('gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-plugin-va' 'mesa' 'libxkbcommon' 'libpipewire')
+makedepends=('cargo' 'nodejs' 'npm' 'clang')
 optdepends=('xorg-xwayland: X11 clients'
             'ttf-dejavu: titles on the window decorations the compositor draws'
             'pipewire: private native audio services (PipeWire 1.4.2 or later)'

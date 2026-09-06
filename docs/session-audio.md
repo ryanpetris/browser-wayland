@@ -94,6 +94,12 @@ individual service exits. Failed audio must be cleaned up while the desktop keep
 microphone silence transitions, malformed packet handling and capability withdrawal.
 `crates/bw/checks/audio-isolation.py` checks two desktops alongside an unrelated audio graph, separate
 tones and lifecycles, and native/Pulse mpv playback with saved device choices across app restarts.
+The native meter check is `cargo run --release -p browser-wayland --example audio-graph`, also
+run inside Docker. It creates its own private services and checks playback, output, microphone and
+recording peaks through mute and gain changes, then verifies monitoring nodes disappear when meters
+are dropped while the management connection stays open. Output monitors follow channel volume and mute. Recording-stream monitoring is before that
+stream's own controls; the check separately verifies muted samples delivered to the recorder.
+
 The browser check's fake capture source is a test WAV;
 production capture still requires browser consent.
 

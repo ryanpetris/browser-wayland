@@ -38,7 +38,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends pkg-config cmake libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev libgbm-dev libegl-dev libxkbcommon-dev
+            libgstreamer-plugins-base1.0-dev libpipewire-0.3-dev libclang-dev libgbm-dev libegl-dev libxkbcommon-dev
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v6
         with:
@@ -93,7 +93,7 @@ jobs:
         run: |
           pacman -Sy --noconfirm archlinux-keyring
           pacman -Syu --noconfirm --needed cargo nodejs npm gstreamer gst-plugins-base gst-plugins-good \
-            gst-plugins-bad gst-plugin-va mesa libxkbcommon git
+            gst-plugins-bad gst-plugin-va mesa libxkbcommon libpipewire clang git
           useradd -m builder
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2

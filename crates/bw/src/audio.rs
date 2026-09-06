@@ -1,4 +1,7 @@
 //! Private audio services. Pipelines must stop before this owner is dropped.
+#[path = "audio/meter.rs"]
+pub mod meter;
+
 use anyhow::{Context, Result, bail, ensure};
 use std::{
     fs,

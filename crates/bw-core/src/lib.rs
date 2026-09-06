@@ -1,6 +1,8 @@
 //! Types shared between the compositor, the encoder and the web server.
 //! Nothing here depends on Smithay or GStreamer.
 
+pub mod audio;
+
 use std::{any::Any, os::fd::OwnedFd, time::Duration};
 
 pub use bytes::Bytes;
