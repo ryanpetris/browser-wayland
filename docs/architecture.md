@@ -54,10 +54,19 @@ post-processor and encoder import that same dmabuf → bitstream → browser GPU
 copies. Without a GPU (`--render-node none`, or no node) the renderer is llvmpipe on Mesa's surfaceless
 EGL platform, frames are rendered into one texture and read back (`gpu::Targets::Texture`,
 `FrameBuffer::Memory`) for the software encoders, and there is no dmabuf or explicit-sync global: clients
-draw into shared memory. Audio: clients play into a private PulseAudio/PipeWire null sink; its monitor is captured and
-encoded as Opus. The browser's microphone comes back as Opus packets played into a second null sink,
-whose monitor is remapped as a real source (`module-remap-source`) for applications to record from; its
-webcam comes back as VP8 frames decoded into a `v4l2loopback` device (`--webcam`), a camera to them.
+draw into shared memory.
+
+Audio uses a private PipeWire server, pipewire-pulse and WirePlumber per desktop. A native null sink
+receives application playback; a native mono loopback publishes the browser microphone. Hardware
+discovery and host routing state are excluded. The main process owns service startup and cleanup.
+A supervised helper process runs GStreamer `pipewiresrc` capture → stereo Opus and browser Opus →
+`pipewiresink` microphone injection, connected through explicit native socket descriptors. Framed
+Opus crosses the helper's pipes; the existing browser packet format is unchanged. The helper lets the
+owner bound GStreamer initialization and stop pipelines before destroying services, even when plugin
+startup blocks. The application launch path exports private native/Pulse selectors and clears inherited
+device overrides. See [session audio](session-audio.md) for readiness, failure and compatibility checks.
+
+The webcam comes back as VP8 frames decoded into a `v4l2loopback` device (`--webcam`), a camera to applications.
 
 ## Crates
 

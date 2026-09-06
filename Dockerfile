@@ -52,7 +52,7 @@ RUN pacman -Sy --noconfirm archlinux-keyring \
         gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-plugin-va \
         mesa vulkan-intel vulkan-radeon libva intel-media-driver libva-mesa-driver xorg-xwayland \
         mesa-utils mesa-demos vulkan-tools \
-        dbus pipewire pipewire-pulse pipewire-alsa wireplumber libpulse \
+        dbus pipewire pipewire-pulse pipewire-alsa wireplumber libpulse gst-plugin-pipewire \
         xfce4 firefox chromium ttf-dejavu \
         guvcview audacity gimp mpv ristretto pavucontrol nano sudo \
     && rm -rf /var/cache/pacman/pkg/*
@@ -79,15 +79,13 @@ RUN useradd -m bw \
     && install -d /home/bw/.config/browser-wayland \
     && printf -- '--ozone-platform-hint=auto\n--force-renderer-accessibility\n--no-sandbox\n' > /home/bw/.config/chromium-flags.conf \
     && chown -R bw:bw /home/bw
-# One session bus for xfconfd, PipeWire and the clients. PipeWire provides the null sink the
-# compositor captures for browser audio.
+# One session bus for xfconfd and the clients. The compositor owns its private audio services.
 COPY --chmod=755 <<'EOF' /usr/local/bin/start
 #!/bin/sh
 mkdir -p -m 700 "$XDG_RUNTIME_DIR"
-exec dbus-run-session -- sh -c '
-    pipewire & pipewire-pulse & wireplumber &
-    until pactl info >/dev/null 2>&1; do sleep 0.2; done
-    exec browser-wayland --elements "$@"' sh "$@"
+DBUS_SESSION_BUS_ADDRESS=$(dbus-daemon --session --fork --print-address) || exit
+export DBUS_SESSION_BUS_ADDRESS
+exec browser-wayland --elements "$@"
 EOF
 # Programs launched from the desktop inherit the compositor's working directory: a terminal opens at home.
 WORKDIR /home/bw

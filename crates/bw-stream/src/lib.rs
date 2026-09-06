@@ -298,22 +298,47 @@ fn nal_units(au: &[u8]) -> impl Iterator<Item = &[u8]> {
 }
 
 /// A running pipeline (audio capture, microphone playback, the webcam); drop to stop it.
-pub struct Running(gst::Pipeline);
+pub struct Running {
+    pipeline: gst::Pipeline,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    // The plugin duplicates this descriptor and keys its shared cores by the original number.
+    _connection: Option<std::os::unix::net::UnixStream>,
+}
 
-impl Drop for Running {
-    fn drop(&mut self) {
-        let _ = self.0.set_state(gst::State::Null);
+impl Running {
+    pub fn check(&self) -> Result<()> {
+        if let Some(msg) = self.pipeline.bus().context("pipeline bus")?.pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos]) {
+            if let gst::MessageView::Error(e) = msg.view() {
+                anyhow::bail!("{} ({:?})", e.error(), e.debug());
+            }
+            anyhow::bail!("audio pipeline ended");
+        }
+        Ok(())
     }
 }
 
-pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<Running> {
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() { let _ = stop.send(()); }
+        let _ = self.pipeline.set_state(gst::State::Null);
+        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+    }
+}
+
+pub fn audio_source(socket: &std::path::Path, device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<Running> {
     gst::init()?;
     let desc = format!(
-        "pulsesrc device={device} buffer-time=40000 latency-time=10000 ! audio/x-raw,rate=48000,channels=2 \
+        "pipewiresrc name=source target-object={device} \
+         stream-properties=\"properties,node.name=(string)browser-wayland-capture,stream.capture.sink=(boolean)true,node.dont-fallback=(boolean)true\" \
+         ! audio/x-raw,rate=48000,channels=2 \
          ! audioconvert ! audioresample ! opusenc bitrate=96000 frame-size=20 audio-type=generic dtx=true \
          ! appsink name=sink sync=false max-buffers=0"
     );
     let pipeline = gst::parse::launch(&desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
+    use std::os::fd::AsRawFd;
+    let connection = std::os::unix::net::UnixStream::connect(socket).context("private PipeWire connection")?;
+    pipeline.by_name("source").context("PipeWire source")?.set_property("fd", connection.as_raw_fd());
     let sink = pipeline.by_name("sink").context("sink element")?.downcast::<gst_app::AppSink>().unwrap();
     sink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
@@ -322,27 +347,31 @@ pub fn audio_source(device: &str, tx: mpsc::Sender<StreamMsg>) -> Result<Running
                 let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                 let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
                 let pts_us = buffer.pts().map(|t| t.useconds()).unwrap_or(0);
-                let _ = tx.blocking_send(StreamMsg::Audio { pts_us, data: Bytes::copy_from_slice(&map) });
+                let _ = tx.try_send(StreamMsg::Audio { pts_us, data: Bytes::copy_from_slice(&map) });
                 Ok(gst::FlowSuccess::Ok)
             })
             .build(),
     );
-    pipeline.set_state(gst::State::Playing)?;
-    Ok(Running(pipeline))
+    let running = Running { pipeline, stop: None, thread: None, _connection: Some(connection) };
+    running.pipeline.set_state(gst::State::Playing)?;
+    Ok(running)
 }
 
-/// Plays Opus packets from the browser's microphone into `device` (the sink whose monitor is the
-/// virtual source applications record from), as they come: `sync=false`, the sink paces at 48 kHz and
+/// Plays Opus packets from the browser's microphone into the private microphone loopback input.
+/// With `sync=false`, the sink paces at 48 kHz and
 /// swallows the network's jitter in its buffer, and packets that pile up behind a stall (or clock
 /// drift) are dropped at the source rather than played late.
-pub fn audio_sink(device: &str, rx: mpsc::Receiver<Bytes>) -> Result<Running> {
+pub fn audio_sink(socket: &std::path::Path, device: &str, rx: mpsc::Receiver<Bytes>) -> Result<Running> {
     feed(
         &format!(
             "appsrc name=src is-live=true format=time do-timestamp=true max-buffers=10 leaky-type=downstream \
-             caps=audio/x-opus,channel-mapping-family=0,channels=1,rate=48000 ! opusdec ! pulsesink device={device} sync=false"
+             caps=audio/x-opus,channel-mapping-family=0,channels=1,rate=48000 ! opusdec \
+             ! pipewiresink name=output target-object={device} sync=false \
+             stream-properties=\"properties,node.name=(string)browser-wayland-microphone-stream,node.dont-fallback=(boolean)true\""
         ),
         "microphone",
         rx,
+        Some(socket),
     )
 }
 
@@ -360,33 +389,48 @@ pub fn video_sink(device: &std::path::Path, rx: mpsc::Receiver<Bytes>) -> Result
         ),
         "webcam",
         rx,
+        None,
     )
 }
 
 /// A pipeline whose `appsrc` a thread feeds from `rx`, one buffer per message; the pipeline stops when the
 /// handle is dropped (the thread ends with the channel), or when it fails (the failure is logged and the
 /// thread ends: pushing into a leaky source never fails by itself).
-fn feed(desc: &str, name: &str, mut rx: mpsc::Receiver<Bytes>) -> Result<Running> {
+fn feed(desc: &str, name: &str, mut rx: mpsc::Receiver<Bytes>, socket: Option<&std::path::Path>) -> Result<Running> {
     gst::init()?;
     let pipeline = gst::parse::launch(desc)?.downcast::<gst::Pipeline>().expect("parse::launch returns a pipeline");
     let src = pipeline.by_name("src").context("src element")?.downcast::<gst_app::AppSrc>().unwrap();
-    let bus = pipeline.bus().context("pipeline bus")?;
-    pipeline.set_state(gst::State::Playing)?;
+    let connection = socket.map(std::os::unix::net::UnixStream::connect).transpose().context("private PipeWire connection")?;
+    if let Some(connection) = &connection {
+        use std::os::fd::AsRawFd;
+        pipeline.by_name("output").context("PipeWire sink")?.set_property("fd", connection.as_raw_fd());
+    }
+    // Native audio has a supervisor polling Running::check; webcam feeds own their error reporting.
+    let bus = if socket.is_none() { Some(pipeline.bus().context("pipeline bus")?) } else { None };
+    let mut running = Running { pipeline, stop: None, thread: None, _connection: connection };
+    running.pipeline.set_state(gst::State::Playing)?;
     let what = name.to_string();
-    std::thread::Builder::new().name(name.into()).spawn(move || {
-        while let Some(packet) = rx.blocking_recv() {
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+    running.stop = Some(stop_tx);
+    running.thread = Some(std::thread::Builder::new().name(name.into()).spawn(move || runtime.block_on(async move {
+        loop {
+            let packet = tokio::select! {
+                _ = &mut stop_rx => break,
+                packet = rx.recv() => match packet { Some(packet) => packet, None => break },
+            };
             if src.push_buffer(gst::Buffer::from_slice(packet)).is_err() {
                 break; // the pipeline is gone
             }
-            if let Some(msg) = bus.pop_filtered(&[gst::MessageType::Error])
+            if let Some(msg) = bus.as_ref().and_then(|bus| bus.pop_filtered(&[gst::MessageType::Error]))
                 && let gst::MessageView::Error(e) = msg.view()
             {
                 tracing::warn!("{what}: {} ({:?})", e.error(), e.debug());
                 break;
             }
         }
-    })?;
-    Ok(Running(pipeline))
+    }))?);
+    Ok(running)
 }
 
 /// The real sink: compositor dmabufs → `appsrc`. Clone it for a keyframe handle before moving it into the compositor.

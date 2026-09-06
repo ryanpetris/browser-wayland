@@ -24,7 +24,9 @@ GStreamer (core and base), libgbm, libEGL and libxkbcommon; `make` builds the vi
 - GStreamer 1.24+ with the VA plugin: `gst-plugin-va` on Arch (`vapostproc`, `vah264enc`), for
   hardware encoding; or `--software-encoding` with the vpx (good), x264 (ugly), x265 or svtav1 (bad)
   plugins, which encodes on the CPU (the desktop then runs at 30 Hz) for machines without a usable GPU encoder.
-- `xorg-xwayland` for X11 clients, and PipeWire or PulseAudio with `pactl` for audio (both optional).
+- `xorg-xwayland` for X11 clients. Audio requires PipeWire 1.4.2+, its Pulse compatibility service,
+  WirePlumber 0.5.6+, the native GStreamer PipeWire plugin and `pactl`. See [session audio](docs/session-audio.md)
+  for packages and host-service compatibility. `--no-audio` needs none of these audio dependencies.
 - Rust stable and Node 24 to build. The browser needs WebCodecs (Chromium, Firefox 130+, Safari 26+).
 
 ## Run
@@ -62,15 +64,16 @@ Other clients can join later: `WAYLAND_DISPLAY=wayland-browser some-app`. X11 ap
 Xwayland is started automatically and the log prints its `DISPLAY`. Super (or Alt) + left drag moves
 any window from anywhere in it.
 
-Audio from clients goes to the browser instead of the host speakers: the server creates a private
-`browser-wayland-<pid>` sink (printed in the log) and captures it as Opus. Clients started with
-`--exec` get `PULSE_SINK` set; for others use `PULSE_SINK=<that name> some-app`. The other way, the
-microphone button in the viewer's status bar sends the browser's microphone (Opus, with echo
-cancellation and noise suppression) into a virtual source `browser-wayland-microphone-<pid>` that
-applications record from (`PULSE_SOURCE` for `--exec` children; a video call sees it as a microphone);
-only the controlling session's is taken, and stopping it ends the capture, so the browser's recording
-indicator goes off. `--no-audio` turns both off; both devices are unloaded when the server exits (Ctrl+C
-or SIGTERM).
+Each desktop owns a private PipeWire server, Pulse compatibility service and WirePlumber policy.
+Startup commands, menu/API launches and their descendants receive the private audio socket selectors.
+Applications play into the session output, which is encoded as 48 kHz stereo Opus for the browser.
+The viewer's microphone button sends the controlling browser's microphone into the session microphone.
+Stopping capture stops the browser's recording indicator and leaves silence for recording applications.
+
+`--no-audio` starts no audio services. Audio startup or service failure leaves the desktop running with
+audio unavailable. Shutdown stops the audio pipelines before the private services. For clients launched
+separately, use the connection variables printed in the log. See [session audio](docs/session-audio.md)
+for the device names, environment and lifecycle.
 
 The browser's webcam works the same way through a `v4l2loopback` device, the one kind of camera every
 application understands: on the host, `modprobe v4l2loopback exclusive_caps=1 card_label=browser-wayland`

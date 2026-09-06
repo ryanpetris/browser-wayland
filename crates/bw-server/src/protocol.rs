@@ -336,7 +336,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         DRAG => ClientMsg::Drag(serde_json::from_slice(&b[1..]).ok()?),
         INPUT => ClientMsg::Input(serde_json::from_slice(&b[1..]).ok()?),
         TOUCH => ClientMsg::Touch { kind: u8_at(1)?, id: u8_at(2)?, x: f32_at(3)?, y: f32_at(7)? },
-        MIC => ClientMsg::Mic(Bytes::copy_from_slice(b.get(1..)?)),
+        MIC if (2..=65_537).contains(&b.len()) => ClientMsg::Mic(Bytes::copy_from_slice(&b[1..])),
         CAM => ClientMsg::Cam(Bytes::copy_from_slice(b.get(1..)?)),
         RTC_CLIENT => ClientMsg::Rtc(serde_json::from_slice(&b[1..]).ok()?),
         REPORT => ClientMsg::Report { delay_ms: u16_at(1)?, dropped: u16_at(3)? },
@@ -347,6 +347,15 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn microphone_payload_bounds() {
+        for length in [0, 1, 65_536, 65_537] {
+            let mut packet = vec![0; length + 1];
+            packet[0] = MIC;
+            assert_eq!(matches!(decode(&packet), Some(ClientMsg::Mic(_))), (1..=65_536).contains(&length));
+        }
+    }
 
     #[test]
     fn decode_matches_js_layout() {

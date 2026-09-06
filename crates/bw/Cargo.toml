@@ -18,11 +18,12 @@ A headless Wayland compositor whose output is hardware-encoded (VA-API) and show
 over a WebSocket with WebCodecs; mouse, keyboard and audio travel the same way. Runs Wayland and \
 X11 clients, layer-shell panels and taskbars, and exposes a window-management HTTP API."""
 depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad"
-recommends = "xwayland, pulseaudio-utils | pipewire-pulse, va-driver-all, fonts-dejavu-core"
+recommends = "xwayland, pipewire (>= 1.4.2), pipewire-pulse (>= 1.4.2), wireplumber (>= 0.5.6), gstreamer1.0-pipewire (>= 1.4.2), pulseaudio-utils, va-driver-all, fonts-dejavu-core"
 assets = [
     ["target/release/browser-wayland", "usr/bin/", "755"],
     ["../../web/dist/THIRD_PARTY.txt", "usr/share/doc/browser-wayland/", "644"],
     ["../../docs/audio-visualiser.md", "usr/share/doc/browser-wayland/", "644"],
+    ["../../docs/session-audio.md", "usr/share/doc/browser-wayland/", "644"],
     ["../../README.md", "usr/share/doc/browser-wayland/", "644"],
 ]
 
@@ -36,8 +37,10 @@ bw-compositor = { path = "../bw-compositor" }
 bw-server = { path = "../bw-server" }
 bw-stream = { path = "../bw-stream" }
 anyhow.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "signal"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "signal", "time"] }
 serde_json = "1"
+tempfile = "3"
+signal-hook = "0.3"
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }

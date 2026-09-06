@@ -418,6 +418,10 @@ impl State {
             .env("MOZ_ENABLE_WAYLAND", "1")
             .env("ELECTRON_OZONE_PLATFORM_HINT", "auto")
             .envs(self.exec_env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        if self.exec_env.iter().any(|(key, _)| key == "PIPEWIRE_REMOTE") {
+            // WirePlumber chooses playback and recording defaults in the private graph.
+            for key in ["PULSE_SINK", "PULSE_SOURCE", "PIPEWIRE_NODE", "PIPEWIRE_CONFIG_PREFIX", "PIPEWIRE_CONFIG_NAME"] { command.env_remove(key); }
+        }
         match self.x11_display {
             Some(d) => command.env("DISPLAY", format!(":{d}")),
             None => command.env_remove("DISPLAY"),

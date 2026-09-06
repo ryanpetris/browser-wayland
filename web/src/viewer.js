@@ -339,6 +339,8 @@ export function createViewer() {
         const role = ROLES[dv.getUint8(1)] ?? 'viewer';
         const features = dv.getUint8(2);
         store.set({ role, audioAvailable: !!(features & 4), micAvailable: !!(features & 1), camAvailable: !!(features & 2) });
+        if (!(features & 4)) stopPlayback();
+        if (!(features & 1)) micStop();
         if (role !== 'controller') {
           if (document.pointerLockElement) document.exitPointerLock(); // only the controller's pointer is the desktop's
           micStop(); camStop(); // and only its microphone and webcam
@@ -440,6 +442,7 @@ export function createViewer() {
   // gesture, so it's resumed from the first click or key.
   let audioCtx, audioDecoder, nextPlay = 0, analyser, audioPackets = 0, audioDecoded = 0, signalPeak = 0;
   function onAudioData(data) {
+    if (!audioCtx) { data.close(); return; }
     audioDecoded++;
     const now = audioCtx.currentTime;
     // Not running (no user gesture yet) or too far ahead (capture clock faster than ours): drop 20 ms.
@@ -464,6 +467,7 @@ export function createViewer() {
     audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
   }
   function onAudio(buf) {
+    if (!state().audioAvailable) return;
     if (!audioCtx) {
       audioCtx = new AudioContext({ sampleRate: 48000 });
       analyser = audioCtx.createAnalyser(); // lets the stats report what is playing
@@ -479,6 +483,13 @@ export function createViewer() {
     audioDecoder.decode(new EncodedAudioChunk({ type: 'key', timestamp: Number(dv.getBigUint64(4, true)), data: new Uint8Array(buf, 12) }));
   }
   const resumeAudio = () => { if (audioCtx?.state === 'suspended') audioCtx.resume(); };
+  function stopPlayback() {
+    if (audioDecoder && audioDecoder.state !== 'closed') audioDecoder.close();
+    audioCtx?.close().catch(() => {});
+    audioDecoder = audioCtx = analyser = undefined;
+    nextPlay = signalPeak = 0;
+    store.set({ playback: null });
+  }
   function audioStats() {
     if (!analyser) return null;
     const bins = new Uint8Array(analyser.frequencyBinCount);

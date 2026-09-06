@@ -13,7 +13,11 @@ depends=('gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gs
 makedepends=('cargo' 'nodejs' 'npm')
 optdepends=('xorg-xwayland: X11 clients'
             'ttf-dejavu: titles on the window decorations the compositor draws'
-            'libpulse: audio to the browser (pactl)'
+            'pipewire: private native audio services (PipeWire 1.4.2 or later)'
+            'pipewire-pulse: Pulse client compatibility in the private session'
+            'wireplumber>=0.5.6: private audio routing policy'
+            'gst-plugin-pipewire: native audio capture and microphone playback'
+            'libpulse: Pulse readiness probe (pactl)'
             'intel-media-driver: VA-API on Intel GPUs'
             'libva-mesa-driver: VA-API on AMD GPUs')
 options=('!lto' '!debug') # one package; no split -debug package with the symbols
@@ -29,5 +33,6 @@ package() {
     install -Dm644 web/dist/THIRD_PARTY.txt "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY.txt"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 docs/audio-visualiser.md "$pkgdir/usr/share/doc/$pkgname/audio-visualiser.md"
+    install -Dm644 docs/session-audio.md "$pkgdir/usr/share/doc/$pkgname/session-audio.md"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 }

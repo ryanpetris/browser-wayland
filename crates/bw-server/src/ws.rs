@@ -28,6 +28,19 @@ pub async fn distribute_audio(app: Arc<App>, mut rx: mpsc::Receiver<StreamMsg>) 
             }
         }
     }
+    app.audio_available.store(false, Ordering::Relaxed);
+    let targets: Vec<_> = app.viewers.lock().unwrap().sessions.iter().map(|(&id, s)| (id, s.events.clone())).collect();
+    for (id, events) in targets {
+        let app = app.clone();
+        tokio::spawn(async move {
+            if let Ok(permit) = events.reserve().await {
+                let viewers = app.viewers.lock().unwrap();
+                if viewers.sessions.contains_key(&id) {
+                    permit.send(protocol::role(viewers.role_of(id), app.features()));
+                }
+            }
+        });
+    }
 }
 
 /// Compositor events (cursor, pointer lock, window list, clipboard) to every viewer and window session.
@@ -538,7 +551,9 @@ impl App {
     /// What the desktop takes from the browser (`Role`'s second byte).
     pub(crate) fn features(&self) -> u8 {
         let cam = self.cam.is_some() && !self.cam_dead.load(std::sync::atomic::Ordering::Relaxed);
-        (self.mic.is_some() as u8) * protocol::FEATURE_MIC | (cam as u8) * protocol::FEATURE_CAM | (self.audio_available as u8) * protocol::FEATURE_AUDIO
+        let audio = self.audio_available.load(Ordering::Relaxed);
+        (audio && self.mic.as_ref().is_some_and(|tx| !tx.is_closed())) as u8 * protocol::FEATURE_MIC
+            | (cam as u8) * protocol::FEATURE_CAM | (audio as u8) * protocol::FEATURE_AUDIO
     }
 
     /// A state message to every viewer and window session.

@@ -5,9 +5,13 @@ use bw_core::{Codec, FrameSink, StreamControl};
 use clap::Parser;
 use tokio::sync::mpsc;
 
+mod audio;
+
 #[derive(Parser)]
 #[command(about = "A Wayland compositor whose screen is a browser tab", version = env!("BW_VERSION"))]
 struct Cli {
+    #[arg(long, hide = true)]
+    audio_worker: bool,
     /// Address to serve the viewer on.
     #[arg(long, default_value = "0.0.0.0:8443")]
     listen: SocketAddr,
@@ -25,7 +29,7 @@ struct Cli {
     /// for machines without a usable GPU encoder. Slower; the desktop runs at 30 Hz.
     #[arg(long)]
     software_encoding: bool,
-    /// Command to run (via `sh -c`) at startup, with WAYLAND_DISPLAY, DISPLAY, PULSE_SINK, PULSE_SOURCE
+    /// Command to run (via `sh -c`) at startup, with WAYLAND_DISPLAY, DISPLAY, PIPEWIRE_REMOTE, PULSE_SERVER
     /// and a Wayland session's environment set for it.
     #[arg(long)]
     exec: Option<String>,
@@ -78,73 +82,15 @@ struct Cli {
 
 const DEFAULT_RENDER_NODE: &str = "/dev/dri/renderD128";
 
-/// A private PulseAudio/PipeWire sink for this instance's clients; its monitor is what we stream.
-/// Per process, so two instances never hear each other; unloaded on drop.
-struct AudioSink {
-    name: String,
-    module: String,
-}
-
-/// `pactl load-module`, returning the module's id.
-fn load_module(args: &[&str]) -> Result<String> {
-    let out = std::process::Command::new("pactl").arg("load-module").args(args).output()?;
-    anyhow::ensure!(out.status.success(), "pactl load-module failed: {}", String::from_utf8_lossy(&out.stderr).trim());
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// Clients that don't speak the Pulse protocol (ALSA through PipeWire's plugin, as Audacity's PortAudio
-/// does) get the server's defaults rather than `PULSE_SINK`/`PULSE_SOURCE`, so the defaults are ours.
-fn set_default(what: &str, name: &str) {
-    let _ = std::process::Command::new("pactl").args([what, name]).status();
-}
-
-impl AudioSink {
-    fn create() -> Result<AudioSink> {
-        let name = format!("browser-wayland-{}", std::process::id());
-        let module = load_module(&["module-null-sink", &format!("sink_name={name}"), &format!("sink_properties=device.description={name}")])?;
-        set_default("set-default-sink", &name);
-        Ok(AudioSink { name, module })
-    }
-}
-
-impl Drop for AudioSink {
-    fn drop(&mut self) {
-        let _ = std::process::Command::new("pactl").args(["unload-module", &self.module]).status();
-    }
-}
-
-/// The browser's microphone as a source applications can record from: a second null sink the Opus
-/// packets play into, and a remap of its monitor, so it is a real source (with a name and a description),
-/// not a monitor. Unloaded on drop, in reverse.
-struct MicSource {
-    /// The source's name (`PULSE_SOURCE` for clients) and the sink's (`pulsesink device=`).
-    name: String,
-    sink: String,
-    modules: Vec<String>,
-}
-
-impl MicSource {
-    fn create() -> Result<MicSource> {
-        let sink = format!("browser-wayland-mic-{}", std::process::id());
-        let name = format!("browser-wayland-microphone-{}", std::process::id());
-        let m1 = load_module(&["module-null-sink", &format!("sink_name={sink}"), &format!("sink_properties=device.description={sink}")])?;
-        let mut mic = MicSource { name: name.clone(), sink: sink.clone(), modules: vec![m1] };
-        let m2 = load_module(&["module-remap-source", &format!("master={sink}.monitor"), &format!("source_name={name}"), &format!("source_properties=device.description={name}")])?;
-        mic.modules.push(m2);
-        set_default("set-default-source", &name);
-        Ok(mic)
-    }
-}
-
-impl Drop for MicSource {
-    fn drop(&mut self) {
-        for module in self.modules.iter().rev() {
-            let _ = std::process::Command::new("pactl").args(["unload-module", module]).status();
-        }
-    }
-}
-
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+    if cli.audio_worker {
+        tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+        return audio::worker();
+    }
+    let stopping = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGINT, stopping.clone())?;
+    signal_hook::flag::register(signal_hook::consts::SIGTERM, stopping.clone())?;
     // Headless machines (no session) may lack XDG_RUNTIME_DIR; give the Wayland socket a private home.
     if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -157,7 +103,6 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("info".parse()?))
         .init();
-    let cli = Cli::parse();
     let codec = match cli.codec.as_str() {
         "h264" => Some(Codec::H264),
         "hevc" => Some(Codec::Hevc),
@@ -189,26 +134,16 @@ fn main() -> Result<()> {
     let (audio_tx, audio_rx) = mpsc::channel(16);
     let (events_tx, events_rx) = mpsc::unbounded_channel();
 
-    // pipelines first in these pairs: dropped before the devices they play into or capture are unloaded
-    let mut audio = None;
-    let mut mic = None; // the browser's microphone: its playback pipeline, the source, and the packets' way in
-    if !cli.no_audio {
-        match AudioSink::create().and_then(|sink| bw_stream::audio_source(&format!("{}.monitor", sink.name), audio_tx).map(|s| (sink, s))) {
-            Ok((sink, stream)) => {
-                tracing::info!("audio: clients started with PULSE_SINK={} play in the browser", sink.name);
-                audio = Some((stream, sink));
+    let mut audio = if cli.no_audio { None } else {
+        match audio::Session::start(&stopping, audio_tx) {
+            Ok(session) => {
+                tracing::info!(environment = ?session.client_env(), "private session audio ready");
+                Some(session)
             }
-            Err(e) => tracing::warn!("audio disabled: {e:#}"),
+            Err(e) => { tracing::warn!("audio unavailable: {e:#}"); None }
         }
-        let (mic_tx, mic_rx) = mpsc::channel(64);
-        match MicSource::create().and_then(|source| bw_stream::audio_sink(&source.sink, mic_rx).map(|s| (source, s))) {
-            Ok((source, stream)) => {
-                tracing::info!("microphone: clients started with PULSE_SOURCE={} hear the browser's", source.name);
-                mic = Some((stream, source, mic_tx));
-            }
-            Err(e) => tracing::warn!("microphone disabled: {e:#}"),
-        }
-    }
+    };
+    if stopping.load(std::sync::atomic::Ordering::Relaxed) { return Ok(()); }
 
     let mut cam = None; // the browser's webcam: its playback pipeline and the frames' way in
     if let Some(device) = &cli.webcam {
@@ -229,14 +164,19 @@ fn main() -> Result<()> {
         let sink = bw_stream::GstSink::new(bitrate, &va_for_sinks, software, tx)?;
         Ok((Box::new(sink.clone()) as Box<dyn FrameSink>, Box::new(sink.control()) as Box<dyn StreamControl>))
     });
-    let mut exec_env: Vec<(String, String)> = audio.as_ref().map(|(_, sink)| ("PULSE_SINK".to_string(), sink.name.clone())).into_iter().collect();
-    exec_env.extend(mic.as_ref().map(|(_, source, _)| ("PULSE_SOURCE".to_string(), source.name.clone())));
+    let mut exec_env = audio.as_ref().map(audio::Session::client_env).unwrap_or_else(|| {
+        // An unavailable session must not send its applications to the host audio server.
+        vec![("PIPEWIRE_REMOTE".into(), "/dev/null".into()), ("PULSE_SERVER".into(), "unix:/dev/null".into()), ("PIPEWIRE_CONFIG_DIR".into(), "/dev/null".into())]
+    });
     if cli.elements {
         // GTK always publishes its tree; Firefox and Qt only when asked. (Chromium needs --force-renderer-accessibility.)
         exec_env.extend([("GNOME_ACCESSIBILITY", "1"), ("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1")].map(|(k, v)| (k.to_string(), v.to_string())));
     }
     let accepted_formats = bw_stream::accepted_formats(&va, software);
     tracing::info!(?accepted_formats, "render target formats the encoders take (fourcc, modifier)");
+    let data_dir = bw_server::Config::default_data_dir()?;
+    let files_dir = std::path::absolute(cli.files_dir.unwrap_or_else(bw_server::files::default_dir))?;
+    let runtime = tokio::runtime::Runtime::new()?;
     let bw_compositor::CompositorHandle { commands, socket_name, x11_display, join } = bw_compositor::spawn(
         bw_compositor::Config {
             render_node,
@@ -252,7 +192,7 @@ fn main() -> Result<()> {
     )?;
     tracing::info!(socket = %socket_name, x11_display = ?x11_display.map(|d| format!(":{d}")), "compositor ready");
     // the compositor ends on Quit (the API, the viewer's power menu) or when it panics
-    let (exited_tx, exited_rx) = tokio::sync::oneshot::channel();
+    let (exited_tx, mut exited_rx) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         let _ = exited_tx.send(join.join().is_ok());
     });
@@ -264,20 +204,39 @@ fn main() -> Result<()> {
         }
         bw_server::rtc::Config { port: cli.rtc_port.unwrap_or(cli.listen.port()), addr: cli.rtc_addr, ice_servers }
     });
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, software, bitrate_kbps: cli.bitrate, refresh_mhz: if software { 30_000 } else { 60_000 }, data_dir: bw_server::Config::default_data_dir()?, elements: cli.elements, files_dir: std::path::absolute(cli.files_dir.unwrap_or_else(bw_server::files::default_dir))?, version: env!("BW_VERSION"), sinks, audio_available: audio.is_some(), mic: mic.as_ref().map(|(_, _, tx)| tx.clone()), cam: cam.as_ref().map(|(_, tx)| tx.clone()), rtc };
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, software, bitrate_kbps: cli.bitrate, refresh_mhz: if software { 30_000 } else { 60_000 }, data_dir, elements: cli.elements, files_dir, version: env!("BW_VERSION"), sinks, audio_available: audio.is_some(), mic: audio.as_ref().map(|session| session.mic.clone()), cam: cam.as_ref().map(|(_, tx)| tx.clone()), rtc };
     // Ctrl+C and SIGTERM (`docker stop`, a service manager) return here so the audio devices get unloaded
     // and the pipelines stopped.
-    let result = tokio::runtime::Runtime::new()?.block_on(async {
-        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let result = runtime.block_on(async {
+        let mut health = tokio::time::interval(std::time::Duration::from_millis(100));
+        let server = bw_server::run(server, commands.clone(), audio_rx, events_rx);
+        tokio::pin!(server);
+        let mut compositor_exited = false;
+        let result = loop {
         tokio::select! {
-            r = bw_server::run(server, commands, audio_rx, events_rx) => r,
-            _ = tokio::signal::ctrl_c() => Ok(()),
-            _ = terminate.recv() => Ok(()),
-            ok = exited_rx => if ok.unwrap_or(false) { Ok(()) } else { Err(anyhow::anyhow!("the compositor thread died")) },
+            _ = health.tick() => {
+                if stopping.load(std::sync::atomic::Ordering::Relaxed) { break Ok(()); }
+                if let Some(session) = &mut audio {
+                    if let Err(e) = session.check() {
+                        tracing::warn!("audio unavailable: {e:#}");
+                        audio.take();
+                    }
+                }
+            }
+            r = &mut server => break r,
+            ok = &mut exited_rx => {
+                compositor_exited = true;
+                break if ok.unwrap_or(false) { Ok(()) } else { Err(anyhow::anyhow!("the compositor thread died")) };
+            },
         }
+        };
+        if !compositor_exited {
+            let _ = commands.send(bw_core::Command::Quit);
+            let _ = exited_rx.await;
+        }
+        result
     });
     drop(audio);
-    drop(mic);
     drop(cam);
     result
 }
