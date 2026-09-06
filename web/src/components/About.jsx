@@ -29,7 +29,7 @@ export function About({ viewer, onClose }) {
       <p>browser-wayland's original code is available under the MIT License. It includes open source software under other licenses and is provided without warranty.</p>
       <a className={link} href="/assets/license-notices.txt" target="_blank" rel="noreferrer">Open source licenses</a>
       <p>You can download the source and find build instructions in the{' '}
-        <a className={link} href="https://github.com/ryanpetris/browser-wayland#source-code" target="_blank" rel="noreferrer">GitHub repository</a>.
+        <a className={link} href="https://github.com/ryanpetris/browser-wayland" target="_blank" rel="noreferrer">GitHub repository</a>.
       </p>
     </Popover>
   );
