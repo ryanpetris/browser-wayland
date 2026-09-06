@@ -64,7 +64,7 @@ impl State {
         let (mut icon, mut content) = (None, None);
         let (x11, pid, maximized, fullscreen) = match window.underlying_surface() {
             WindowSurface::Wayland(t) => {
-                let st = t.current_state().states;
+                let st = t.with_committed_state(|s| s.map(|s| s.states.clone()).unwrap_or_default());
                 with_states(t.wl_surface(), |s| {
                     icon = s.cached_state.get::<ToplevelIconCachedState>().current().icon_name().map(str::to_string);
                     content = match s.cached_state.get::<ContentTypeSurfaceCachedState>().current().content_type() {

@@ -24,7 +24,6 @@ use std::{
 
 use anyhow::{Context, Result};
 use bw_core::{Command, Event, FrameSink, OutputGeometry, WindowInfo};
-use smithay::reexports::wayland_server::protocol::wl_data_device_manager::DndAction;
 use smithay::{
     wayland::seat::WaylandFocus,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -217,15 +216,16 @@ pub struct State {
     pub content_type_state: ContentTypeState,
     pub xwayland_shell_state: XWaylandShellState,
     pub xwm: Option<X11Wm>,
-    /// The browser's drag (`State::drag`, `ServerDndGrabHandler`): whether one is under way, the URI list
+    /// The browser's drag (`State::drag`, its `FileSource`, `DndGrabHandler`): whether one is under way, the URI list
     /// once it is known, what the target under the pointer accepts and which action it chose, the deadline
     /// for letting go once the list is there, and whether the drop was taken.
     /// The browser's fingers down (`State::touch`), by slot; `release_all` lifts them.
     pub touch_down: std::collections::HashSet<u32>,
     pub drag_active: bool,
-    pub drag_data: Option<Arc<Vec<u8>>>,
-    pub drag_accepted: bool,
-    pub drag_action: DndAction,
+    /// What the drag's data source shares with us: the list, and the target's accept and action.
+    pub drag_shared: Arc<clipboard::DragShared>,
+    /// Rung by the source when the target accepted or chose, from Smithay's dispatch: the settle runs on the loop.
+    pub drag_ping: smithay::reexports::calloop::ping::Ping,
     pub drag_dropping: Option<Instant>,
     pub drag_taken: bool,
     /// The app id of the window that took the drop, for the page's word on it.
@@ -257,6 +257,9 @@ impl State {
         let event_loop: EventLoop<'static, State> = EventLoop::try_new()?;
         let handle = event_loop.handle();
         let display: Display<State> = Display::new()?;
+        // the browser's drag source rings this from inside a client's request; the settle then runs on the loop's own turn
+        let (drag_ping, pinged) = smithay::reexports::calloop::ping::make_ping()?;
+        handle.insert_source(pinged, |_, _, state| state.drag_settle())?;
         let dh = display.handle();
 
         let gpu = gpu::Gpu::new(cfg.render_node.as_deref(), &cfg.initial, &cfg.accepted_formats)?;
@@ -268,6 +271,7 @@ impl State {
                 subpixel: Subpixel::Unknown,
                 make: "browser-wayland".into(),
                 model: "WebSocket".into(),
+                serial_number: String::new(),
             },
         );
         let _global = output.create_global::<State>(&dh);
@@ -327,9 +331,8 @@ impl State {
             refine_due: None,
             touch_down: Default::default(),
             drag_active: false,
-            drag_data: None,
-            drag_accepted: false,
-            drag_action: DndAction::empty(),
+            drag_shared: Default::default(),
+            drag_ping,
             drag_dropping: None,
             drag_taken: false,
             drag_target: None,
@@ -379,15 +382,7 @@ impl State {
             alpha_modifier_state: AlphaModifierState::new::<State>(&dh),
             xdg_activation_state: XdgActivationState::new::<State>(&dh),
             xdg_foreign_state: XdgForeignState::new::<State>(&dh),
-            xdg_toplevel_icon_state: {
-                // Not offered for now: Smithay 0.7.0 removes the wrong shm destruction hook (its
-                // remove_destruction_hook drops the hook whose id differs), so an icon destroyed before
-                // its buffer, as Chromium does, has an error posted on a dead object and the client is
-                // killed without a word. Fixed upstream; the global comes back with the release that has it.
-                let icons = XdgToplevelIconManager::new::<State>(&dh);
-                dh.remove_global::<State>(icons.global());
-                icons
-            },
+            xdg_toplevel_icon_state: XdgToplevelIconManager::new::<State>(&dh),
             fifo_state: FifoManagerState::new::<State>(&dh),
             commit_timing_state: CommitTimingManagerState::new::<State>(&dh),
             content_type_state: ContentTypeState::new::<State>(&dh),

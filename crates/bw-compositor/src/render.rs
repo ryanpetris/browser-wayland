@@ -44,7 +44,7 @@ impl State {
         self.space.elements().any(|w| match w.underlying_surface() {
             // a toplevel that unmapped with a null buffer keeps its state and stays in the space until destroyed
             WindowSurface::Wayland(t) => {
-                t.current_state().states.contains(xdg_toplevel::State::Fullscreen) && with_renderer_surface_state(t.wl_surface(), |s| s.buffer().is_some()).unwrap_or(false)
+                t.with_committed_state(|s| s.is_some_and(|s| s.states.contains(xdg_toplevel::State::Fullscreen))) && with_renderer_surface_state(t.wl_surface(), |s| s.buffer().is_some()).unwrap_or(false)
             }
             WindowSurface::X11(x) => x.is_fullscreen(),
         })

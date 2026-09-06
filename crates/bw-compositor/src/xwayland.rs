@@ -3,7 +3,6 @@
 use std::{os::fd::OwnedFd, process::Stdio};
 
 use smithay::{
-    delegate_xwayland_shell,
     desktop::Window,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Logical, Rectangle},
@@ -35,7 +34,7 @@ impl State {
     /// Launch Xwayland; `x11_display` is set once it is ready and the window manager is attached.
     pub fn start_xwayland(&mut self) {
         // No abstract socket: it has no permissions at all, and X clients get the whole display.
-        let (xwayland, client) = match XWayland::spawn(&self.dh, None, std::iter::empty::<(String, String)>(), false, Stdio::null(), Stdio::null(), |_| {}) {
+        let (xwayland, client) = match XWayland::spawn(&self.dh, None, std::iter::empty::<(String, String)>(), std::iter::empty::<String>(), false, Stdio::null(), Stdio::null(), |_| {}) {
             Ok(x) => x,
             Err(e) => {
                 tracing::warn!("no Xwayland ({e}); X11 clients won't work");
@@ -46,7 +45,7 @@ impl State {
         let res = self.handle.insert_source(xwayland, move |event, _, state| {
             state.xwayland_pending = false;
             match event {
-                XWaylandEvent::Ready { x11_socket, display_number } => match X11Wm::start_wm(handle.clone(), x11_socket, client.clone()) {
+                XWaylandEvent::Ready { x11_socket, display_number } => match X11Wm::start_wm(handle.clone(), &state.dh, x11_socket, client.clone()) {
                     Ok(wm) => {
                         // Only this user may connect to the display.
                         let sock = format!("/tmp/.X11-unix/X{display_number}");
@@ -318,4 +317,3 @@ impl XWaylandShellHandler for State {
         &mut self.xwayland_shell_state
     }
 }
-delegate_xwayland_shell!(State);

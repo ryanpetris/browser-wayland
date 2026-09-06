@@ -16,7 +16,7 @@ snapshots, browser UI).
 
 | Question | Decision |
 |---|---|
-| Stack | Rust + Smithay 0.7; no wlroots, no C. GStreamer (via gstreamer-rs) for encoding. axum for HTTP/WebSocket. |
+| Stack | Rust + Smithay (git master, pinned by commit in `crates/bw-compositor/Cargo.toml`; 0.7.0 kills a client that destroys a toplevel icon before its buffer, as Chromium 152 does); no wlroots, no C. GStreamer (via gstreamer-rs) for encoding. axum for HTTP/WebSocket. |
 | Transport | WebSocket + WebCodecs. WebCodecs needs a secure context, so the server speaks HTTPS with a self-signed certificate unless `--no-tls` (localhost development). |
 | Windowing | Floating desktop: stacking, click-to-focus, decorations by the client or, for those that draw none, by the compositor, xdg move/resize, maximize/fullscreen, minimize, layer-shell panels. `--kiosk` fullscreens every window for nested desktops. |
 | Viewers | Any number, each with its own encoder at its own size and codec. One controls (input and output size): the first control-token session, or whoever took control last. A second, read-only token lets people watch. |

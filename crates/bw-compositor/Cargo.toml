@@ -10,7 +10,7 @@ anyhow.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 xcursor = "0.3"
-smithay = { version = "0.7", default-features = false, features = [
+smithay = { git = "https://github.com/Smithay/smithay", rev = "28c8e0fad905f3e7d01c2446fb60d26659071684", default-features = false, features = [
     "wayland_frontend", "desktop", "backend_drm", "backend_gbm", "backend_egl", "renderer_gl", "xwayland",
 ] }
 ab_glyph = "0.2.32"

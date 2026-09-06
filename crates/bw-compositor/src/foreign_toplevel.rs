@@ -71,7 +71,7 @@ impl State {
     fn toplevel_info(&self, window: &Window) -> Info {
         let (maximized, fullscreen, activated) = match window.underlying_surface() {
             WindowSurface::Wayland(t) => {
-                let st = t.current_state().states;
+                let st = t.with_committed_state(|s| s.map(|s| s.states.clone()).unwrap_or_default());
                 (st.contains(XdgState::Maximized), st.contains(XdgState::Fullscreen), st.contains(XdgState::Activated))
             }
             WindowSurface::X11(x) => (x.is_maximized(), x.is_fullscreen(), x.is_activated()),

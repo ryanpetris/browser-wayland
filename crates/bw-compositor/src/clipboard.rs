@@ -1,23 +1,31 @@
 //! Clipboard bridge for the browser and the API. Text or a PNG copied in a desktop application is read
 //! from its owner (a Wayland client, or an X11 client through Xwayland, whose selection code in Smithay
-//! 0.7 only resolves text targets, so an X11 client's PNG isn't read) into `Event::Clipboard`; data set
+//! only resolves text targets, so an X11 client's PNG isn't read) into `Event::Clipboard`; data set
 //! from outside becomes a compositor-owned selection served to whoever asks. Text up to 1 MiB, images 16.
 
-use std::{os::fd::OwnedFd, sync::Arc};
+use std::{
+    os::fd::OwnedFd,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use bw_core::{Drag, Event};
 use smithay::{
     backend::input::ButtonState,
-    input::pointer::{ButtonEvent, GrabStartData, MotionEvent},
+    input::{
+        dnd::{DnDGrab, DndAction, Source, SourceMetadata},
+        pointer::{ButtonEvent, Focus, GrabStartData, MotionEvent},
+    },
     reexports::{
-        wayland_server::protocol::wl_data_device_manager::DndAction,
-        calloop::{Interest, Mode, PostAction, RegistrationToken, generic::Generic, timer::{TimeoutAction, Timer}},
+        calloop::{Interest, Mode, PostAction, RegistrationToken, generic::Generic, ping::Ping, timer::{TimeoutAction, Timer}},
         rustix,
     },
-    utils::SERIAL_COUNTER,
+    utils::{IsAlive, SERIAL_COUNTER},
     wayland::selection::{
         SelectionTarget,
-        data_device::{SourceMetadata, request_data_device_client_selection, set_data_device_selection, start_dnd},
+        data_device::{request_data_device_client_selection, set_data_device_selection},
     },
 };
 
@@ -37,6 +45,65 @@ pub const PNG: &str = "image/png";
 /// Files: file managers put both on the clipboard, the second with a `copy\n` (or `cut\n`) first line.
 pub const URI_LIST: &str = "text/uri-list";
 pub const GNOME_FILES: &str = "x-special/gnome-copied-files";
+
+/// What the browser's drag shares between `State` and the source Smithay's grab asks: the URI list, there
+/// after the drop, and whether the target has accepted a mime and chosen an action, which the release
+/// waits for.
+#[derive(Debug, Default)]
+pub struct DragShared {
+    data: Mutex<Option<Arc<Vec<u8>>>>,
+    accepted: AtomicBool,
+    action: Mutex<DndAction>,
+}
+
+impl DragShared {
+    fn reset(&self) {
+        self.accepted.store(false, Ordering::Relaxed);
+        *self.action.lock().unwrap() = DndAction::None;
+    }
+    fn ready(&self) -> bool {
+        self.accepted.load(Ordering::Relaxed) && *self.action.lock().unwrap() != DndAction::None
+    }
+}
+
+/// The browser's files as a drag-and-drop source: `text/uri-list`, to copy or to move. The list is
+/// written whole when asked (it fits a pipe's buffer); before the drop there is nothing yet, and the pipe
+/// closes at once (EOF) rather than staying pending, since GTK 3 never asks for that mime again if the
+/// pointer leaves it while a read is pending. What the target accepts and chooses goes to `DragShared`,
+/// and the ping brings `State::drag_settle` round.
+#[derive(Debug)]
+struct FileSource {
+    shared: Arc<DragShared>,
+    ping: Ping,
+}
+
+impl IsAlive for FileSource {
+    fn alive(&self) -> bool {
+        true
+    }
+}
+
+impl Source for FileSource {
+    fn metadata(&self) -> Option<SourceMetadata> {
+        Some(SourceMetadata { mime_types: vec![URI_LIST.into()], dnd_actions: [DndAction::Copy, DndAction::Move].into_iter().collect() })
+    }
+    fn accepted(&self, mime_type: Option<String>) {
+        self.shared.accepted.store(mime_type.is_some(), Ordering::Relaxed);
+        self.ping.ping();
+    }
+    fn choose_action(&self, action: DndAction) {
+        *self.shared.action.lock().unwrap() = action;
+        self.ping.ping();
+    }
+    fn send(&self, _mime_type: &str, fd: OwnedFd) {
+        if let Some(data) = self.shared.data.lock().unwrap().clone() {
+            let _ = rustix::io::write(&fd, &data);
+        }
+    }
+    fn drop_performed(&self) {}
+    fn cancel(&self) {}
+    fn finished(&self) {}
+}
 /// A pipe nobody reads or writes for this long is closed, so a stalled peer costs nothing for good.
 const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -92,7 +159,7 @@ impl State {
         let Ok((read, write)) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) else { return };
         let _ = rustix::fs::fcntl_setfl(&read, rustix::fs::OFlags::NONBLOCK);
         let requested = if x11 {
-            self.xwm.as_mut().map(|xwm| xwm.send_selection(SelectionTarget::Clipboard, mime.clone(), write, self.handle.clone()).map_err(|e| format!("{e:?}"))).unwrap_or(Err("no xwm".into()))
+            self.xwm.as_mut().map(|xwm| xwm.send_selection(SelectionTarget::Clipboard, mime.clone(), write).map_err(|e| format!("{e:?}"))).unwrap_or(Err("no xwm".into()))
         } else {
             request_data_device_client_selection(&self.seat, mime.clone(), write).map_err(|e| format!("{e:?}"))
         };
@@ -176,17 +243,16 @@ impl State {
                     self.drag_release(); // a drop still settling ends first, and is reported
                 }
                 self.drag_active = true;
-                self.drag_data = None;
-                self.drag_accepted = false;
-                self.drag_action = DndAction::empty();
+                *self.drag_shared.data.lock().unwrap() = None;
+                self.drag_shared.reset();
                 pointer.motion(self, None, &MotionEvent { location, serial, time });
                 pointer.button(self, &ButtonEvent { button: crate::input::BTN_LEFT, state: ButtonState::Pressed, serial, time });
                 pointer.frame(self);
                 self.pressed_buttons.insert(crate::input::BTN_LEFT);
                 let start = GrabStartData { focus: None, button: crate::input::BTN_LEFT, location };
-                let source = SourceMetadata { mime_types: vec![URI_LIST.into()], dnd_action: DndAction::Copy | DndAction::Move };
+                let source = FileSource { shared: self.drag_shared.clone(), ping: self.drag_ping.clone() };
                 let (dh, seat) = (self.dh.clone(), self.seat.clone());
-                start_dnd(&dh, &seat, self, serial, Some(start), None, source);
+                pointer.set_grab(self, DnDGrab::new_pointer(&dh, start, source, seat), serial, Focus::Clear);
                 self.pointer_motion(location); // enter the application under the pointer
             }
             Drag::Drop { batch, .. } if !self.drag_active => {
@@ -194,14 +260,13 @@ impl State {
                 let _ = self.events.send(Event::DragEnded { taken: false, target: None, batch });
             }
             Drag::Drop { list, batch } => {
-                self.drag_data = Some(Arc::new(list));
+                *self.drag_shared.data.lock().unwrap() = Some(Arc::new(list));
                 self.drag_batch = batch;
                 self.drag_dropping = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
                 // out and back in: a fresh offer, readable now (a target that asked early keeps what it read,
                 // an empty list; its predecessor's late accept/action requests can't count for the new one:
                 // the flags start over)
-                self.drag_accepted = false;
-                self.drag_action = DndAction::empty();
+                self.drag_shared.reset();
                 pointer.motion(self, None, &MotionEvent { location, serial, time });
                 self.pointer_motion(location);
                 let _ = self.handle.insert_source(Timer::from_duration(std::time::Duration::from_millis(100)), |_, _, state| match state.drag_dropping {
@@ -225,25 +290,21 @@ impl State {
         }
     }
 
-    /// Let go of a drop the target is ready for (`ServerDndGrabHandler::accept` and `action`). On the next
-    /// loop turn: the callbacks run inside the offer's request handler, which holds the lock the drop takes.
+    /// Let go of a drop the target is ready for: it accepted a mime and chose an action (the source's ping,
+    /// answered on the loop's own turn, outside the request that told us).
     pub fn drag_settle(&mut self) {
-        if self.drag_dropping.is_some() && self.drag_accepted && !self.drag_action.is_empty() {
-            self.handle.insert_idle(|state| {
-                if state.drag_dropping.is_some() && state.drag_accepted && !state.drag_action.is_empty() {
-                    state.drag_release();
-                }
-            });
+        if self.drag_dropping.is_some() && self.drag_shared.ready() {
+            self.drag_release();
         }
     }
 
-    /// Release the drag's button: the grab drops (`dropped`, then `cancelled` too if nothing took it).
+    /// Release the drag's button: the grab drops, and `DndGrabHandler::dropped` says whether it was taken.
     fn drag_release(&mut self) {
         let pointer = self.seat.get_pointer().unwrap();
         let ended = self.drag_dropping.take().is_some();
-        self.drag_active = false;
         pointer.button(self, &ButtonEvent { button: crate::input::BTN_LEFT, state: ButtonState::Released, serial: SERIAL_COUNTER.next_serial(), time: self.now() });
-        pointer.frame(self);
+        pointer.frame(self); // the grab drops here, and `DndGrabHandler::dropped` records the outcome while the drag still counts as ours
+        self.drag_active = false;
         self.pressed_buttons.remove(&crate::input::BTN_LEFT);
         if ended {
             let _ = self.events.send(Event::DragEnded { taken: self.drag_taken, target: self.drag_target.take(), batch: std::mem::take(&mut self.drag_batch) });

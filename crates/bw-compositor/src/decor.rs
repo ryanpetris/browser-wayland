@@ -8,7 +8,6 @@ use std::cell::RefCell;
 
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
 use smithay::{
-    delegate_kde_decoration,
     reexports::{
         wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::{Mode as KdeMode, OrgKdeKwinServerDecoration},
         wayland_server::{WEnum, protocol::wl_surface::WlSurface},
@@ -93,7 +92,6 @@ impl KdeDecorationHandler for State {
         });
     }
 }
-delegate_kde_decoration!(State);
 
 /// A sans-serif face from the system, for the titles. None leaves the bars without text.
 pub fn load_font() -> Option<FontVec> {
@@ -110,7 +108,7 @@ pub fn load_font() -> Option<FontVec> {
 
 pub fn maximized(window: &Window) -> bool {
     match window.underlying_surface() {
-        WindowSurface::Wayland(t) => t.current_state().states.contains(XdgState::Maximized),
+        WindowSurface::Wayland(t) => t.with_committed_state(|s| s.is_some_and(|s| s.states.contains(XdgState::Maximized))),
         WindowSurface::X11(x) => x.is_maximized(),
     }
 }

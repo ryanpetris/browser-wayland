@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use bw_core::{AxisSource as Src, Command, ControlMsg, ControlOp, Event, InputMsg, OutputGeometry, TouchKind, decoration::Button as DecorButton};
 use smithay::{
+    backend::input::InputTime,
     backend::input::{Axis, AxisSource, ButtonState, KeyState, Keycode, TouchSlot},
     desktop::{LayerSurface, Window, WindowSurface, WindowSurfaceType, layer_map_for_output},
     input::{
@@ -134,8 +135,8 @@ impl State {
         }
     }
 
-    pub(crate) fn now(&self) -> u32 {
-        self.clock.now().as_millis()
+    pub(crate) fn now(&self) -> InputTime {
+        InputTime::from_millis(self.clock.now().as_millis())
     }
 
     /// Returns whether the event was sent: a press for a held key (browser auto-repeat) or a stray release is dropped.
@@ -328,7 +329,7 @@ impl State {
     pub(crate) fn pointer_motion(&mut self, location: Point<f64, Logical>) {
         let pointer = self.seat.get_pointer().unwrap();
         let delta = location - self.pointer_location;
-        let relative = RelativeMotionEvent { delta, delta_unaccel: delta, utime: self.clock.now().as_micros() };
+        let relative = RelativeMotionEvent { delta, delta_unaccel: delta, time: InputTime::from_micros(self.clock.now().as_micros()) };
         if self.locked(&pointer) {
             // Locked: the pointer stays put and the client only gets deltas.
             let under = self.surface_under(self.pointer_location);
@@ -454,7 +455,7 @@ impl State {
                         WindowSurface::X11(x) => !(x.is_override_redirect() || x.is_maximized() || x.is_fullscreen()),
                         WindowSurface::Wayland(t) => {
                             use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as S;
-                            let st = t.current_state().states;
+                            let st = t.with_committed_state(|s| s.map(|s| s.states.clone()).unwrap_or_default());
                             !(st.contains(S::Maximized) || st.contains(S::Fullscreen))
                         }
                     };

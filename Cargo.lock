@@ -126,15 +126,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e149dc73cd30538307e7ffa2acd3d2221148eaeed4871f246657b1c3eaa1cbd2"
 
 [[package]]
-name = "approx"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f2a05fd1bd10b2527e20a2cd32d8873d115b8b39fe219ee25f42a8aca6ba278"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "arc-swap"
 version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -227,12 +218,6 @@ name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
-
-[[package]]
-name = "atomic_float"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "628d228f918ac3b82fe590352cc719d30664a0c13ca3a60266fe02c7132d480a"
 
 [[package]]
 name = "atomic_refcell"
@@ -565,16 +550,6 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
-
-[[package]]
-name = "cgmath"
-version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a98d30140e3296250832bbaaff83b27dcd6fa3cc70fb6f1f3e5c9c0023b5317"
-dependencies = [
- "approx",
- "num-traits",
-]
 
 [[package]]
 name = "chacha20"
@@ -1326,6 +1301,12 @@ dependencies = [
  "log",
  "xml-rs",
 ]
+
+[[package]]
+name = "glam"
+version = "0.33.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21fef0953c54fd3de2f44b743fbf77e044c81a25faee03636dfccc0d35135e23"
 
 [[package]]
 name = "glib"
@@ -2126,6 +2107,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "portable-atomic"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
+
+[[package]]
 name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2304,6 +2291,18 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "reis"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b967ec6489a42067a20724f11987bb96178ea796873cbe1afd25fb93ee6f85f"
+dependencies = [
+ "calloop",
+ "enumflags2",
+ "log",
+ "rustix 1.1.4",
+]
 
 [[package]]
 name = "ring"
@@ -2698,30 +2697,31 @@ checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
 [[package]]
 name = "smithay"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "740cea6927892bc182d5bf70c8f79806c8bc9f68f2fb96e55a30be171b63af98"
+source = "git+https://github.com/Smithay/smithay?rev=28c8e0fad905f3e7d01c2446fb60d26659071684#28c8e0fad905f3e7d01c2446fb60d26659071684"
 dependencies = [
  "appendlist",
- "atomic_float",
  "bitflags 2.13.1",
  "calloop",
  "cc",
- "cgmath",
  "cursor-icon",
  "downcast-rs",
  "drm",
  "drm-ffi",
  "drm-fourcc",
+ "drm-sys",
  "encoding_rs",
  "errno",
  "gbm",
  "gl_generator",
+ "glam",
  "indexmap",
  "libc",
  "libloading",
  "pkg-config",
+ "portable-atomic",
  "profiling",
- "rand 0.9.5",
+ "rand 0.10.2",
+ "reis",
  "rustix 1.1.4",
  "scopeguard",
  "sha2",
@@ -3657,9 +3657,9 @@ checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
 
 [[package]]
 name = "xkbcommon"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d66ca9352cbd4eecbbc40871d8a11b4ac8107cfc528a6e14d7c19c69d0e1ac9"
+checksum = "a7a974f48060a14e95705c01f24ad9c3345022f4d97441b8a36beb7ed5c4a02d"
 dependencies = [
  "libc",
  "memmap2",

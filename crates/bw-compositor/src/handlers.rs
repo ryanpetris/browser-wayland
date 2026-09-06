@@ -3,6 +3,10 @@
 use std::{borrow::Cow, cell::RefCell, os::unix::io::OwnedFd};
 
 use smithay::{
+    backend::input::{InputTime, TabletToolDescriptor},
+    input::{dnd::{DnDGrab, DndGrabHandler, DndTarget, GrabType, Source}, tablet::TabletSeatHandler},
+    wayland::selection::data_device::WaylandDndGrabHandler,
+
     backend::renderer::utils::with_renderer_surface_state,
     input::pointer::CursorImageSurfaceData,
     backend::{
@@ -10,9 +14,6 @@ use smithay::{
         input::KeyState,
         renderer::ImportDma,
     },
-    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale, delegate_layer_shell,
-    delegate_output, delegate_pointer_constraints, delegate_primary_selection, delegate_relative_pointer, delegate_seat,
-    delegate_shm, delegate_drm_syncobj, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{
         LayerSurface, PopupKind, Window, WindowSurface, WindowSurfaceType, find_popup_root_surface, get_popup_toplevel_coords,
         layer_map_for_output,
@@ -30,7 +31,7 @@ use smithay::{
         },
         wayland_server::{
             Client, Resource,
-            protocol::{wl_buffer::WlBuffer, wl_data_device_manager::DndAction, wl_data_source::WlDataSource, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
+            protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
         },
     },
     utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
@@ -48,7 +49,7 @@ use smithay::{
         pointer_constraints::PointerConstraintsHandler,
         selection::{
             SelectionHandler, SelectionSource, SelectionTarget,
-            data_device::{ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler, set_data_device_focus},
+            data_device::{DataDeviceHandler, DataDeviceState, set_data_device_focus},
             primary_selection::{PrimarySelectionHandler, PrimarySelectionState, set_primary_focus},
         },
         shell::{
@@ -141,7 +142,7 @@ impl KeyboardTarget<State> for KeyboardFocus {
             Self::X11(x) => KeyboardTarget::leave(x, seat, data, serial),
         }
     }
-    fn key(&self, seat: &Seat<State>, data: &mut State, key: KeysymHandle<'_>, state: KeyState, serial: Serial, time: u32) {
+    fn key(&self, seat: &Seat<State>, data: &mut State, key: KeysymHandle<'_>, state: KeyState, serial: Serial, time: InputTime) {
         match self {
             Self::Wayland(s) => KeyboardTarget::key(s, seat, data, key, state, serial, time),
             Self::X11(x) => KeyboardTarget::key(x, seat, data, key, state, serial, time),
@@ -592,7 +593,6 @@ impl WlrLayerShellHandler for State {
         }
     }
 }
-delegate_layer_shell!(State);
 
 /// We draw the decorations unless the client wants to (GTK, Qt, browsers); what it asks for, it gets.
 impl XdgDecorationHandler for State {
@@ -665,9 +665,8 @@ impl SelectionHandler for State {
         match data {
             crate::clipboard::Selection::Ours(ours) => self.serve_clipboard(ours.clone(), &mime_type, fd),
             crate::clipboard::Selection::X11 => {
-                let handle = self.handle.clone();
                 if let Some(xwm) = self.xwm.as_mut()
-                    && let Err(e) = xwm.send_selection(ty, mime_type, fd, handle)
+                    && let Err(e) = xwm.send_selection(ty, mime_type, fd)
                 {
                     tracing::warn!("xwayland selection transfer: {e:?}");
                 }
@@ -676,18 +675,19 @@ impl SelectionHandler for State {
     }
 }
 impl DataDeviceHandler for State {
-    fn data_device_state(&self) -> &DataDeviceState {
-        &self.data_device_state
+    fn data_device_state(&mut self) -> &mut DataDeviceState {
+        &mut self.data_device_state
     }
 }
 impl PrimarySelectionHandler for State {
-    fn primary_selection_state(&self) -> &PrimarySelectionState {
-        &self.primary_selection_state
+    fn primary_selection_state(&mut self) -> &mut PrimarySelectionState {
+        &mut self.primary_selection_state
     }
 }
-/// A client's drag: its icon follows the pointer in the picture while it lasts.
-impl ClientDndGrabHandler for State {
-    fn started(&mut self, _source: Option<WlDataSource>, icon: Option<WlSurface>, _seat: Seat<Self>) {
+/// A client's drag: the grab goes on the pointer or the touch that asked, and its icon follows the pointer
+/// in the picture while it lasts.
+impl WaylandDndGrabHandler for State {
+    fn dnd_requested<S: Source>(&mut self, source: S, icon: Option<WlSurface>, seat: Seat<Self>, serial: Serial, type_: GrabType) {
         if let Some(s) = &icon {
             // not in the space, so it learns its output and scale here, as the cursor surface does
             self.output.enter(s);
@@ -695,43 +695,45 @@ impl ClientDndGrabHandler for State {
         }
         self.dnd_icon = icon.map(|s| (s, Point::default()));
         self.dirty = true;
-    }
-    fn dropped(&mut self, _target: Option<WlSurface>, _validated: bool, _seat: Seat<Self>) {
-        self.dnd_icon = None;
-        self.dirty = true;
-    }
-}
-/// The browser's drag (`State::drag`): the target reads the URI list like our clipboard, once it exists.
-impl ServerDndGrabHandler for State {
-    /// Before the drop there is nothing yet, and the pipe is closed at once (EOF) rather than left pending:
-    /// GTK 3 never asks for that mime again if the pointer leaves it while a read is pending.
-    fn send(&mut self, mime_type: String, fd: OwnedFd, _seat: Seat<Self>) {
-        if let Some(data) = self.drag_data.clone() {
-            self.serve_clipboard(data, &mime_type, fd);
+        let dh = self.dh.clone();
+        match type_ {
+            GrabType::Pointer => {
+                let pointer = seat.get_pointer().unwrap();
+                let start = pointer.grab_start_data().unwrap();
+                pointer.set_grab(self, DnDGrab::new_pointer(&dh, start, source, seat), serial, Focus::Keep);
+            }
+            GrabType::Touch => {
+                let touch = seat.get_touch().unwrap();
+                let start = touch.grab_start_data().unwrap();
+                touch.set_grab(self, DnDGrab::new_touch(&dh, start, source, seat), serial);
+            }
         }
     }
-    fn accept(&mut self, mime_type: Option<String>, _seat: Seat<Self>) {
-        self.drag_accepted = mime_type.is_some();
-        self.drag_settle();
+}
+/// Every drag's end, a client's or the browser's (`State::drag`): the icon goes, and the browser's learns
+/// whether the application under the pointer took the files, and which.
+impl DndGrabHandler for State {
+    fn dropped(&mut self, target: Option<DndTarget<'_, Self>>, validated: bool, _seat: Seat<Self>, _location: Point<f64, Logical>) {
+        self.dnd_icon = None;
+        self.dirty = true;
+        if self.drag_active {
+            self.drag_taken = validated;
+            self.drag_target = target.map(DndTarget::into_inner).and_then(|s| {
+                let mut root = s.clone();
+                while let Some(parent) = get_parent(&root) {
+                    root = parent;
+                }
+                self.window_for(&root).map(|w| Self::title_app_id(&w).1)
+            });
+        }
     }
-    fn action(&mut self, action: DndAction, _seat: Seat<Self>) {
-        self.drag_action = action;
-        self.drag_settle();
-    }
-    fn dropped(&mut self, _seat: Seat<Self>) {
-        self.drag_taken = true;
-        self.drag_target = self.surface_under(self.pointer_location).and_then(|(s, _)| {
-            let mut root = s;
-            while let Some(parent) = get_parent(&root) {
-                root = parent;
-            }
-            self.window_for(&root).map(|w| Self::title_app_id(&w).1)
-        });
-    }
-    /// Follows `dropped` when nothing under the pointer took it.
-    fn cancelled(&mut self, _seat: Seat<Self>) {
-        self.drag_taken = false;
-        self.drag_target = None;
+    fn cancelled(&mut self, _seat: Seat<Self>, _location: Point<f64, Logical>) {
+        self.dnd_icon = None;
+        self.dirty = true;
+        if self.drag_active {
+            self.drag_taken = false;
+            self.drag_target = None;
+        }
     }
 }
 
@@ -748,7 +750,6 @@ impl DrmSyncobjHandler for State {
         self.syncobj_state.as_mut()
     }
 }
-delegate_drm_syncobj!(State);
 
 impl DmabufHandler for State {
     fn dmabuf_state(&mut self) -> &mut DmabufState {
@@ -794,19 +795,6 @@ impl AsRef<ViewporterState> for State {
     }
 }
 
-delegate_compositor!(State);
-delegate_shm!(State);
-delegate_xdg_shell!(State);
-delegate_xdg_decoration!(State);
-delegate_seat!(State);
-delegate_data_device!(State);
-delegate_primary_selection!(State);
-delegate_output!(State);
-delegate_dmabuf!(State);
-delegate_viewporter!(State);
-delegate_fractional_scale!(State);
-delegate_relative_pointer!(State);
-delegate_pointer_constraints!(State);
 
 /// Clients (players, waybar's idle_inhibitor) can declare they inhibit idle. There is no screen to blank,
 /// so the state is accepted and nothing else happens.
@@ -814,13 +802,11 @@ impl smithay::wayland::idle_inhibit::IdleInhibitHandler for State {
     fn inhibit(&mut self, _surface: WlSurface) {}
     fn uninhibit(&mut self, _surface: WlSurface) {}
 }
-smithay::delegate_idle_inhibit!(State);
-smithay::delegate_presentation!(State);
 // cursor-shape can also name a tablet tool's cursor; there are no tablets here.
-impl smithay::wayland::tablet_manager::TabletSeatHandler for State {}
-smithay::delegate_cursor_shape!(State);
-smithay::delegate_single_pixel_buffer!(State);
-smithay::delegate_alpha_modifier!(State);
+impl TabletSeatHandler for State {
+    type ToolFocus = WlSurface;
+    fn tablet_tool_image(&mut self, _tool: &TabletToolDescriptor, _image: CursorImageStatus) {}
+}
 
 /// xdg-activation: one user, so every token is good, and a request brings the window forward like a
 /// click in the window list would.
@@ -842,7 +828,6 @@ impl smithay::wayland::xdg_activation::XdgActivationHandler for State {
         }
     }
 }
-smithay::delegate_xdg_activation!(State);
 
 /// xdg-foreign sets one client's toplevel as the parent of another's (portal dialogs); Smithay records
 /// it as the xdg parent, which placement and raising then follow.
@@ -851,14 +836,11 @@ impl smithay::wayland::xdg_foreign::XdgForeignHandler for State {
         &mut self.xdg_foreign_state
     }
 }
-smithay::delegate_xdg_foreign!(State);
 
 /// The icon name lands in the surface's cached state, read with the window list.
 impl smithay::wayland::xdg_toplevel_icon::XdgToplevelIconHandler for State {}
-smithay::delegate_xdg_toplevel_icon!(State);
 
 // Frame pacing: barriers and timers are released from the frame clock (State::release_barriers);
 // the content type is read with the window list.
-smithay::delegate_fifo!(State);
-smithay::delegate_commit_timing!(State);
-smithay::delegate_content_type!(State);
+
+smithay::delegate_dispatch2!(State);

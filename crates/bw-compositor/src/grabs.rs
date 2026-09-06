@@ -205,28 +205,28 @@ macro_rules! touch_grab {
             pub grab: $grab,
         }
         impl TouchGrab<State> for $name {
-            fn down(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, _event: &DownEvent, _seq: Serial) {}
-            fn motion(&mut self, data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, event: &TouchMotionEvent, _seq: Serial) {
+            fn down(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, _event: &DownEvent) {}
+            fn motion(&mut self, data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _focus: Option<(WlSurface, Point<f64, Logical>)>, event: &TouchMotionEvent) {
                 if event.slot == self.start_data.slot {
                     self.grab.drag(data, event.location);
                 }
             }
-            fn up(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &UpEvent, seq: Serial) {
+            fn up(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &UpEvent) {
                 if event.slot == self.start_data.slot {
-                    handle.up(data, event, seq); // a client whose own request began this got the down: it gets the up
+                    handle.up(data, event); // a client whose own request began this got the down: it gets the up
                     handle.unset_grab(self, data);
                     let $g = &self.grab;
                     $finish;
                 }
             }
-            fn cancel(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, _seq: Serial) {
+            fn cancel(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>) {
                 handle.unset_grab(self, data);
                 let $g = &self.grab;
                 $finish;
             }
-            fn frame(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _seq: Serial) {}
-            fn shape(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _event: &ShapeEvent, _seq: Serial) {}
-            fn orientation(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _event: &OrientationEvent, _seq: Serial) {}
+            fn frame(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>) {}
+            fn shape(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _event: &ShapeEvent) {}
+            fn orientation(&mut self, _data: &mut State, _handle: &mut TouchInnerHandle<'_, State>, _event: &OrientationEvent) {}
             fn start_data(&self) -> &TouchGrabStartData<State> {
                 &self.start_data
             }
@@ -281,7 +281,7 @@ impl State {
     }
 }
 
-/// A popup's grab for touch, which Smithay 0.7 has for the pointer and the keyboard only: a finger down
+/// A popup's grab for touch, which Smithay has for the pointer and the keyboard only: a finger down
 /// on another client's surface (or nothing) dismisses the popup and goes through; everything else goes
 /// through as it is. Over once the popup's grab is.
 pub struct PopupTouchGrab {
@@ -290,36 +290,36 @@ pub struct PopupTouchGrab {
 }
 
 impl TouchGrab<State> for PopupTouchGrab {
-    fn down(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, focus: Option<(WlSurface, Point<f64, Logical>)>, event: &DownEvent, seq: Serial) {
+    fn down(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, focus: Option<(WlSurface, Point<f64, Logical>)>, event: &DownEvent) {
         let popup_client = self.grab.current_grab().and_then(|k| WlSurface::try_from(k).ok()).map(|s| s.id());
         let outside = focus.as_ref().map(|(s, _)| s.id()).zip(popup_client).is_none_or(|(a, b)| !a.same_client_as(&b));
         if self.grab.has_ended() || outside {
             self.grab.ungrab(PopupUngrabStrategy::All);
             handle.unset_grab(self, data);
         }
-        handle.down(data, focus, event, seq);
+        handle.down(data, focus, event);
     }
-    fn motion(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, focus: Option<(WlSurface, Point<f64, Logical>)>, event: &TouchMotionEvent, seq: Serial) {
-        handle.motion(data, focus, event, seq);
+    fn motion(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, focus: Option<(WlSurface, Point<f64, Logical>)>, event: &TouchMotionEvent) {
+        handle.motion(data, focus, event);
     }
-    fn up(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &UpEvent, seq: Serial) {
-        handle.up(data, event, seq);
+    fn up(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &UpEvent) {
+        handle.up(data, event);
         if self.grab.has_ended() {
             handle.unset_grab(self, data);
         }
     }
-    fn frame(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, seq: Serial) {
-        handle.frame(data, seq);
+    fn frame(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>) {
+        handle.frame(data);
     }
-    fn cancel(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, seq: Serial) {
-        handle.cancel(data, seq);
+    fn cancel(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>) {
+        handle.cancel(data);
         handle.unset_grab(self, data);
     }
-    fn shape(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &ShapeEvent, seq: Serial) {
-        handle.shape(data, event, seq);
+    fn shape(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &ShapeEvent) {
+        handle.shape(data, event);
     }
-    fn orientation(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &OrientationEvent, seq: Serial) {
-        handle.orientation(data, event, seq);
+    fn orientation(&mut self, data: &mut State, handle: &mut TouchInnerHandle<'_, State>, event: &OrientationEvent) {
+        handle.orientation(data, event);
     }
     fn start_data(&self) -> &TouchGrabStartData<State> {
         &self.start_data

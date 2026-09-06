@@ -37,9 +37,7 @@ toplevel data or the X11 surface, geometry from the space (or the saved position
 window), states from the acked xdg state or the X11 flags, `focused` from `State::active`, the pid from
 the client's socket credentials or `_NET_WM_PID`, `icon` from the name the client set through
 xdg-toplevel-icon (its picture, or the pixels it set instead, or its launcher's icon by app id, is at
-`GET /api/windows/{id}/icon`; the icon global is created but not offered for now, since Smithay 0.7.0
-removes the wrong shm destruction hook and kills a client that destroys its icon before the buffer, as
-Chromium 152 does, so icons come from launchers until the release with the upstream fix), `content` from content-type-v1 (`photo`, `video`, `game`, else `null`),
+`GET /api/windows/{id}/icon`), `content` from content-type-v1 (`photo`, `video`, `game`, else `null`),
 `updated_ms` from a per-window `LastCommit` cell set
 in the commit handler (also for minimized windows and for a window whose popup committed). `windows()`
 walks the space bottom to top, skipping X11 override-redirect surfaces, then the minimized list.
@@ -196,8 +194,8 @@ folder with download (fetch and a blob, so no token is in a URL) and delete; the
 tab opens and after an upload.
 
 Dragging local files over the stage is carried on as a drag on the desktop (`Drag` message; `State::drag`
-in `clipboard.rs`, `ServerDndGrabHandler` in `handlers.rs`). `dragenter` starts a compositor-owned drag
-(`start_dnd`) offering `text/uri-list` to copy or to move (Thunar takes the move, so the staged file
+in `clipboard.rs`; the source is `FileSource` there, the outcome comes to `DndGrabHandler` in `handlers.rs`).
+`dragenter` starts a compositor-owned drag (a `DnDGrab` on the pointer with our source) offering `text/uri-list` to copy or to move (Thunar takes the move, so the staged file
 leaves for the folder shown; Nautilus copies, as GTK 4 prefers when both are offered, and so does an
 application that only copies, leaving the staged file to the sweep), from a synthetic left-button press made
 over nothing so no client sees a press without its release; `dragover` is ordinary pointer motion, which
@@ -213,8 +211,9 @@ next loop turn: the accept and action callbacks run inside the offer's request h
 lock the drop takes. The page is told whether the application took the files (`Notice`); a refused drop
 sends them to the transfer folder. A blur, disconnect or handover mid-drag cancels it (`release_all`),
 and a drop whose upload outlived the grab is answered as not taken. X11 applications get no drop
-(Smithay's XWM does not speak XDND). A drag an application starts itself (a file out of Thunar) is
-Smithay's client drag (`ClientDndGrabHandler`): its icon surface is drawn at the pointer, offset by its
+(Smithay's XWM bridges XDND on master, but our pointer focus is the Wayland surface, and drops on X11
+windows are not verified). A drag an application starts itself (a file out of Thunar) comes to
+`WaylandDndGrabHandler::dnd_requested`, which puts Smithay's `DnDGrab` on the pointer or the touch: its icon surface is drawn at the pointer, offset by its
 buffer offsets, while the drag lasts (`dnd_icon`), and pointer motion renders a frame so it moves.
 
 ## Notifications
@@ -254,7 +253,7 @@ are offered it too. The selection user data distinguishes relayed X11 selections
 the clipboard drops a read still in flight, so an application's older clipboard can't land after the
 new one. Either pipe is closed after ten seconds if its peer stalls. The primary selection is not
 bridged; other image formats aren't read (GTK, Qt, Firefox and Chromium all offer PNG), and an X11
-client's PNG isn't either: Smithay 0.7's Xwayland selection code resolves only text targets. Our PNG is
+client's PNG isn't either: Smithay's Xwayland selection code resolves only text targets. Our PNG is
 offered to X11 clients.
 
 Files: a file manager's copy offers `text/uri-list` and `x-special/gnome-copied-files` (the same list
