@@ -78,6 +78,16 @@ RUN useradd -m bw \
     && install -d /home/bw/.config/browser-wayland \
     && printf -- '--ozone-platform-hint=auto\n--force-renderer-accessibility\n--no-sandbox\n' > /home/bw/.config/chromium-flags.conf \
     && chown -R bw:bw /home/bw
+# The menu uses the loopback selected by --webcam, including nonzero device numbers.
+COPY --chmod=755 <<'EOF' /usr/local/bin/bw-guvcview
+#!/bin/sh
+if [ -n "$BW_WEBCAM_DEVICE" ]; then
+    exec /usr/bin/guvcview --device="$BW_WEBCAM_DEVICE" "$@"
+fi
+exec /usr/bin/guvcview "$@"
+EOF
+RUN sed -i 's/^Exec=guvcview$/Exec=bw-guvcview/' /usr/share/applications/guvcview.desktop \
+    && grep -q '^Exec=bw-guvcview$' /usr/share/applications/guvcview.desktop
 # One session bus for xfconfd and the clients. The compositor owns its private audio services.
 COPY --chmod=755 <<'EOF' /usr/local/bin/start
 #!/bin/sh

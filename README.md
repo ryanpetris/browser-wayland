@@ -88,8 +88,12 @@ application understands: on the host, `modprobe v4l2loopback exclusive_caps=1 ca
 (the package is `v4l2loopback-dkms` on most distributions) and start the server with `--webcam
 /dev/videoN` (the device it made; in Docker add `--device /dev/videoN --group-add $(stat -c %g /dev/videoN)`
 to `docker run`). The camera button in the status bar then sends the webcam as VP8, scaled to 720p, to
-that device, which video calls in the desktop pick as a camera. With `exclusive_caps` the device shows
-up as a camera once the webcam has been on the first time, so turn it on before starting the call.
+that device, which video calls in the desktop pick as a camera. With `exclusive_caps=1`, the loopback
+advertises only video output until it receives frames. Turn the browser camera on before starting a
+call so the application can discover it.
+In the Docker image, the guvcview menu entry uses the device selected by `--webcam`. Enable the
+browser camera before launching guvcview. If it was opened early, close it and relaunch after enabling
+the camera. Applications launched by the compositor receive the configured device in `BW_WEBCAM_DEVICE`.
 Without `--webcam` (or if the device can't be opened, which the log says) there is no button.
 
 `--exec` runs at startup with the environment of a Wayland session (`XDG_SESSION_TYPE`, the toolkits'

@@ -168,6 +168,7 @@ fn main() -> Result<()> {
         // An unavailable session must not send its applications to the host audio server.
         vec![("PIPEWIRE_REMOTE".into(), "/dev/null".into()), ("PULSE_SERVER".into(), "unix:/dev/null".into()), ("PIPEWIRE_CONFIG_DIR".into(), "/dev/null".into())]
     });
+    exec_env.push(("BW_WEBCAM_DEVICE".into(), cli.webcam.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()));
     if cli.elements {
         // GTK always publishes its tree; Firefox and Qt only when asked. (Chromium needs --force-renderer-accessibility.)
         exec_env.extend([("GNOME_ACCESSIBILITY", "1"), ("QT_LINUX_ACCESSIBILITY_ALWAYS_ON", "1")].map(|(k, v)| (k.to_string(), v.to_string())));
