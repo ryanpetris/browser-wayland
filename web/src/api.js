@@ -17,6 +17,12 @@ export const TOKEN = (() => {
 /// `?window=ID`: this tab shows one application window as its own stream.
 export const WINDOW = new URLSearchParams(location.search).get('window');
 
+// Compact viewer hosted in our same-origin Document PiP iframe.
+export const PIP = (() => {
+  try { return window !== window.parent && typeof window.parent.bwReturn === 'function' && new URLSearchParams(location.search).has('pip'); }
+  catch { return false; }
+})();
+
 /// fetch() with the bearer token.
 export const api = (path, init = {}) => fetch(path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${TOKEN}` } });
 export const snapshotUrl = (id, sizing = {}) => `${id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`}?${new URLSearchParams(typeof sizing === 'number' ? { scale: sizing } : sizing)}`;

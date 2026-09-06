@@ -39,6 +39,8 @@ pub const MIXER_STATE: u8 = 0x0F;
 pub const MIXER_LEVELS: u8 = 0x10;
 /// UTF-8 mixer command error.
 pub const MIXER_ERROR: u8 = 0x11;
+/// `[SESSION][u64 id]`: this desktop connection, for conditional presentation handoff.
+pub const SESSION: u8 = 0x12;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
@@ -93,6 +95,8 @@ pub const RTC_CLIENT: u8 = 0x95;
 pub const REPORT: u8 = 0x96;
 /// JSON typed session-mixer command, at most 4096 bytes.
 pub const MIXER_CLIENT: u8 = 0x97;
+/// `[HANDOFF][u64 target]`: only the current controller may transfer to a live control session.
+pub const HANDOFF: u8 = 0x98;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +109,11 @@ pub enum Role {
 /// `[ROLE][role][features]`: what the session may do, and what the desktop takes (`FEATURE_*` bits).
 pub fn role(role: Role, features: u8) -> Bytes {
     Bytes::from(vec![ROLE, role as u8, features])
+}
+pub fn session(id: u64) -> Bytes {
+    let mut b = vec![SESSION];
+    b.extend_from_slice(&id.to_le_bytes());
+    b.into()
 }
 pub const FEATURE_MIC: u8 = 1;
 pub const FEATURE_CAM: u8 = 2;
@@ -312,6 +321,7 @@ pub enum ClientMsg {
     Control(ControlMsg),
     SetClipboard(String),
     TakeControl,
+    Handoff(u64),
     Notify(NotifyMsg),
     Stream(StreamChoice),
     Drag(DragMsg),
@@ -373,6 +383,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         CONTROL => ClientMsg::Control(serde_json::from_slice(&b[1..]).ok()?),
         SET_CLIPBOARD => ClientMsg::SetClipboard(String::from_utf8(b[1..].to_vec()).ok()?),
         TAKE_CONTROL => ClientMsg::TakeControl,
+        HANDOFF if b.len() == 9 => ClientMsg::Handoff(u64::from_le_bytes(b[1..].try_into().ok()?)),
         NOTIFY => ClientMsg::Notify(serde_json::from_slice(&b[1..]).ok()?),
         STREAM => ClientMsg::Stream(serde_json::from_slice(&b[1..]).ok()?),
         DRAG => ClientMsg::Drag(serde_json::from_slice(&b[1..]).ok()?),
@@ -458,6 +469,14 @@ mod tests {
         assert_eq!(decode(&[0x89]), Some(ClientMsg::Blur));
         assert_eq!(decode(&[0x92, 0, 3, 0, 0, 0x80, 0x3f, 0, 0, 0, 0x40]), Some(ClientMsg::Touch { kind: 0, id: 3, x: 1.0, y: 2.0 }));
         assert_eq!(decode(&[0x8D]), Some(ClientMsg::TakeControl));
+        let target = 0x1234_5678_9abc_def0_u64;
+        let mut handoff = vec![HANDOFF];
+        handoff.extend_from_slice(&target.to_le_bytes());
+        assert_eq!(decode(&handoff), Some(ClientMsg::Handoff(target)));
+        assert_eq!(decode(&handoff[..8]), None);
+        handoff.push(0);
+        assert_eq!(decode(&handoff), None);
+        assert_eq!(&session(target)[1..], &target.to_le_bytes());
         assert_eq!(decode(&[0x96, 0x64, 0, 2, 0]), Some(ClientMsg::Report { delay_ms: 100, dropped: 2 }));
         assert_eq!(role(Role::Controller, FEATURE_CAM).as_ref(), &[0x08, 2, 2]);
         let control = |json: &str| decode(&[&[CONTROL][..], json.as_bytes()].concat());

@@ -1,7 +1,7 @@
 // The viewer: chrome around the stage. State comes from the engine (viewer.js) through its store.
 import { useEffect, useState } from 'react';
 import { useStore } from './store.js';
-import { WINDOW, pref } from './api.js';
+import { WINDOW, PIP, pref } from './api.js';
 import { TopBar } from './components/TopBar.jsx';
 import { Stage } from './components/Stage.jsx';
 import { Sidebar } from './components/Sidebar.jsx';
@@ -42,9 +42,9 @@ export function App({ viewer }) {
     document.addEventListener('fullscreenchange', on);
     return () => document.removeEventListener('fullscreenchange', on);
   }, [viewer]);
-  useEffect(() => viewer.setElementsOn(elements && !windowMode), [viewer, elements, windowMode]);
+  useEffect(() => viewer.setElementsOn(elements && !windowMode && !PIP), [viewer, elements, windowMode]);
   useEffect(() => { if (role !== 'controller') setKeyboard(false); }, [role]); // only the controller's typing counts
-  useEffect(() => viewer.setStatsOn(sidebar && tab === 'stats' && !fullscreen), [viewer, sidebar, tab, fullscreen]);
+  useEffect(() => viewer.setStatsOn(!PIP && sidebar && tab === 'stats' && !fullscreen), [viewer, sidebar, tab, fullscreen]);
 
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-zinc-950 text-zinc-300 select-none">
@@ -61,14 +61,14 @@ export function App({ viewer }) {
       {menu === 'power' && <PowerMenu viewer={viewer} onClose={closeMenu} />}
       {menu === 'settings' && !windowMode && !fullscreen && <Settings viewer={viewer} borders={borders} onBorders={setBorders} elements={elements} onElements={setElements} onClose={closeMenu} />}
       <div className="relative flex min-h-0 flex-1">
-        <Stage viewer={viewer} windowMode={windowMode} borders={borders && !windowMode} elements={elements && !windowMode} />
+        <Stage viewer={viewer} windowMode={windowMode} borders={borders && !windowMode && !PIP} elements={elements && !windowMode && !PIP} />
         {/* stays mounted while hidden, so the thumbnails don't reload on every toggle */}
-        {!windowMode && <Sidebar viewer={viewer} tab={tab} onTab={setTab} hidden={!sidebar || fullscreen} />}
+        {!windowMode && !PIP && <Sidebar viewer={viewer} tab={tab} onTab={setTab} hidden={!sidebar || fullscreen} />}
       </div>
       {keyboard && <Keyboard viewer={viewer} onClose={() => setKeyboard(false)} />}
       {audioPanel && !windowMode && <AudioPanel viewer={viewer} hidden={fullscreen} onClose={() => setAudioPanel(false)} />}
       {mixerPanel && !windowMode && <MixerPanel viewer={viewer} hidden={fullscreen} onClose={() => { setMixerPanel(false); document.getElementById('session-mixer-toggle')?.focus(); }} />}
-      <StatusBar mixerPanel={mixerPanel} onMixer={!windowMode ? () => setMixerPanel(!mixerPanel) : undefined} viewer={viewer} audioPanel={audioPanel} onAudioPanel={!windowMode ? () => setAudioPanel(!audioPanel) : undefined} />
+      {!PIP && <StatusBar mixerPanel={mixerPanel} onMixer={!windowMode ? () => setMixerPanel(!mixerPanel) : undefined} viewer={viewer} audioPanel={audioPanel} onAudioPanel={!windowMode ? () => setAudioPanel(!audioPanel) : undefined} />}
       {(status === 'no-token' || status === 'unauthorized') && <TokenForm viewer={viewer} />}
     </div>
   );

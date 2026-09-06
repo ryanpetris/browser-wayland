@@ -1,13 +1,14 @@
 // The streaming engine: WebSocket, WebCodecs decode onto the canvas, input, clipboard, audio.
 // React only draws the chrome around it (App.jsx) and reads what it publishes on `store`.
 // Wire format mirrors crates/bw-server/src/protocol.rs.
+import { createPip } from './pip.js';
 import { KEYCODES } from './keycodes.js';
-import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, clipboardFiles, pref, codecs as serverCodecs } from './api.js';
+import { TOKEN, WINDOW, PIP, api, elementsOf, snapshot, control, uploadFile, clipboardFiles, pref, codecs as serverCodecs } from './api.js';
 import { createStore } from './store.js';
 import { startMic, stopMic } from './mic.js';
 import { startCam, stopCam } from './cam.js';
 import { openRtc, pageEndpoint, RTC_TIMING } from './rtc.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, PRESET_IDS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, PRESET_IDS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT, SESSION, HANDOFF } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 const qualityName = name => PRESETS.includes(name) ? name : 'max';
@@ -20,6 +21,7 @@ export function createViewer() {
     // 'controller' drives the desktop and sizes it; 'participant' (a control token) watches and may take
     // control; 'viewer' (the viewer token) only watches
     role: null,
+    sessionId: null,
     stream: null, // the last Config: {streamId, codec, width, height, scale}
     renderer: '2d',
     windows: [],
@@ -59,6 +61,7 @@ export function createViewer() {
   let canvas = null, ctx = null, draw = null; // draw(frame) takes ownership of the frame and closes it
   let stage = { w: 0, h: 0 }; // CSS size of the area the canvas lives in
   let quitting = false; // this page asked the desktop to shut down: the socket's end is not a failure
+  let playbackEnabled = !PIP;
   let noticeTimer;
   let mixerSubscribed = false, mixerTimer = 0;
   const mixerVolumes = new Map();
@@ -176,7 +179,7 @@ export function createViewer() {
       closeRtc(false);
       iceServers = [];
       recovery('unavailable', 'WebSocket disconnected');
-      store.set({ role: null, playback: null, audioAvailable: false, micAvailable: false, camAvailable: false, rtcAvailable: false, videoVia: 'websocket' });
+      store.set({ sessionId: null, role: null, playback: null, audioAvailable: false, micAvailable: false, camAvailable: false, rtcAvailable: false, videoVia: 'websocket' });
       if (e.code === 4001) {
         stream = null;
         forgetToken();
@@ -422,6 +425,7 @@ export function createViewer() {
       case NOTICE:
         notice(new TextDecoder().decode(new Uint8Array(buf, 2)), dv.getUint8(1) ? 'success' : 'warning');
         break;
+      case SESSION: store.set({ sessionId: dv.getBigUint64(1, true) }); break;
       case ROLE: {
         const role = ROLES[dv.getUint8(1)] ?? 'viewer';
         const features = dv.getUint8(2);
@@ -519,7 +523,10 @@ export function createViewer() {
       canvas.requestPointerLock()?.catch?.(e2 => { lockError += ' / ' + e2; });
     });
   }
+  const lockFailure = 'Pointer capture failed. Return to the main viewer to try again.';
+  document.addEventListener('pointerlockerror', () => { if (PIP) notice(lockFailure); });
   document.addEventListener('pointerlockchange', () => {
+    if (document.pointerLockElement && state().notice?.text === lockFailure) store.set({ notice: null });
     store.set({ locked: !!document.pointerLockElement });
     if (!document.pointerLockElement && wantLock) { wantLock = false; send(POINTER_LOCK_LOST, 0); } // Escape etc.
   });
@@ -555,7 +562,7 @@ export function createViewer() {
     audioDecoder.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
   }
   function onAudio(buf) {
-    if (!state().audioAvailable) return;
+    if (!playbackEnabled || !state().audioAvailable) return;
     if (!audioCtx) {
       audioCtx = new AudioContext({ sampleRate: 48000 });
       analyser = audioCtx.createAnalyser(); // lets the stats report what is playing
@@ -680,12 +687,13 @@ export function createViewer() {
   }
   function dispose() {
     if (disposed) return;
+    viewer.pip?.dispose();
     disposed = true;
     micStop(); camStop(); stopPlayback(); cancelMixerVolumes();
     clearTimeout(reconnectTimer); clearInterval(statsTimer);
     closeRtc(false);
     ws?.close();
-    store.set({ status: 'closed', role: null, stream: null, windows: [] });
+    store.set({ status: 'closed', sessionId: null, role: null, stream: null, windows: [] });
     recovery('unavailable', 'Viewer closed');
   }
 
@@ -1055,6 +1063,9 @@ export function createViewer() {
   const viewer = {
     store,
     resumeAudio,
+    notice,
+    setPlaybackEnabled(on) { playbackEnabled = on; if (!on) stopPlayback(); },
+    handoff: id => { if (id != null) send(HANDOFF, 8, dv => dv.setBigUint64(1, BigInt(id), true)); },
     attach,
     dispose,
     retryRtc,
@@ -1085,7 +1096,7 @@ export function createViewer() {
       if (touch) { clearTimeout(touch.timer); touch = null; }
       pref.set('touchmouse', on); store.set({ touchMouse: on });
     },
-    takeControl: () => send(TAKE_CONTROL, 0),
+    takeControl: () => { viewer.pip.closeDesktop(); send(TAKE_CONTROL, 0); },
     setChoice,
     setTransport,
     uploadFiles,
@@ -1098,6 +1109,7 @@ export function createViewer() {
     windows: () => state().windows,
     dropNext: () => { dropNext = true; },
   };
+  viewer.pip = createPip(viewer);
   // Console helpers, as documented: bw() for the numbers, bw.windows() and friends for the desktop.
   window.bw = () => ({ ...state().stats, stream, renderer: state().renderer, awaitingKey, locked: !!document.pointerLockElement, decoder: decoder?.state, clipboardText: state().clipboardText, videoSeq, audioSeq });
   Object.assign(window.bw, viewer);

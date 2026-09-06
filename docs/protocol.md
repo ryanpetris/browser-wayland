@@ -47,6 +47,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x0F` | MixerState | JSON `{generation, available, error, routing, nodes}`: initial desktop audio snapshot and authoritative updates. Each node has an opaque `id`, `name`, nullable `application`, `kind` (`output`, `input`, `playback`, `recording`), `state`, nullable `volume` and `mute`, `volume_writable`, `mute_writable`, `routing_writable`, `targets` (IDs), `is_default`, `meter_before_volume`, `meter_active`, and nullable `meter_error`. Unavailable state invalidates rows; an error with `available: true` describes degraded service. |
 | `0x10` | MixerLevels | JSON array of `{id, peak}`, at about 10 Hz to subscribed desktop viewers. Peaks are linear amplitudes measured from audio, shared across subscribers. |
 | `0x11` | MixerError | UTF-8 error for the viewer's mixer command. |
+| `0x12` | Session | `u64 id`: this desktop connection, used for conditional presentation handoff. |
 
 ### Client → server
 
@@ -76,6 +77,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/
 | `0x95` | Rtc | JSON: `{"offer": "<sdp>", "g": 1, "endpoint": {"host": "<page hostname or IP>", "port": 8443}}` from the page to open its `video` data channel (ordered, reliable; the page sends the offer once its candidates are gathered, the server resolves the endpoint with a two-second DNS deadline and answers as an ICE-lite peer with numeric candidates for that endpoint. `--rtc-addr` ignores the endpoint and uses the configured address and UDP port; older viewers omitting the endpoint get local candidates. The backend supplies numeric candidates for consistent browser support. An invalid or unresolvable endpoint returns a matching close with `"reason": "Page endpoint resolution failed"`); `{"close": true, "g": 1}` to go back to the socket. `g` numbers the attempt and comes back with answers and server close notifications. A client close must carry the matching generation (an omitted generation is null, as on offers); it cannot close a newer attempt. While a session's channel is open its video frames go there instead of the socket, with the same framing; everything else stays on the socket. Desktop and window sessions alike; the page offers while WebRTC is selected, initially and on recovery. Each attempt belongs to one WebSocket session. |
 | `0x96` | Report | `u16 delay_ms` `u16 dropped`: the page's last second of video, once a second while frames come: how much later they arrived than at their best over the last ten seconds (the link queueing, which comes before it loses) and how many its decoder dropped. Either feeds the server's rate controller, which halves the bitrate under the viewer's quality ceiling and holds two seconds; five clean seconds raise it a quarter. |
 | `0x97` | Mixer | JSON, at most 4096 bytes: `{op: "subscribe", enabled: bool}`, `{op: "volume", id, value}`, `{op: "mute", id, value}`, `{op: "target", id, target}`, or `{op: "default", id}`. Subscriptions are available to every authenticated desktop viewer; mutations require the current controller. Volume is finite 0–100 percent with cubic gain; mute is boolean; target is a compatible endpoint ID or null to follow the session default. Unknown fields, stale IDs and unsupported operations are rejected. Commands never accept a server address or native operation. |
+| `0x98` | Handoff | `u64 target`: the current controller transfers to a live control-token desktop connection. Other senders, missing targets and viewer-token targets are ignored. |
 
 ### Close codes
 
@@ -98,7 +100,9 @@ others' pointer and keyboard messages are ignored and their `Resize` only sets t
 stream is scaled to (the output's aspect, never enlarged; the page letterboxes it). A control-token
 session that isn't controlling still acts through `Control` and `SetClipboard`, and through the API;
 a viewer-token session can't. Control changes send `Role` to the two sessions concerned and release
-whatever the old controller held.
+whatever the old controller held. `Session` identifies each desktop connection. `Handoff` uses the
+same control-change path but checks ownership and the target under the session lock. PiP uses this
+conditional transfer so a late presentation callback cannot displace another controller.
 
 ### Window streams (`/ws/window/{id}`)
 

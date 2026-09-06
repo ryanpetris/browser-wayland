@@ -423,6 +423,66 @@ are forwarded as window-relative `Input` moves, resolved on the compositor threa
 `resize` control for the window. Page: `?window=ID` (see `docs/protocol.md`); the panel's ↗ button opens a popup the window's
 size, and `sessionStorage` (the token) is copied into it by the browser.
 
+## Document picture-in-picture
+
+The top-bar Picture-in-picture action presents the desktop, or the current window in a window viewer.
+Each window row also has a Picture-in-picture action alongside its ordinary popup action. One PiP
+window belongs to an opener: choosing its current content focuses it, and choosing another target
+replaces the iframe and disposes the previous viewer. Return to main viewer closes the presentation,
+not the remote application. Closing the remote application closes its window PiP.
+
+The PiP document hosts a same-origin iframe with the existing viewer. Its keyboard, pointer, clipboard,
+renderer, resize observer and media objects all belong to that iframe's document. Authentication uses
+the existing URL fragment and session storage. The compact toolbar shows title, connection/control
+status and Return. Desktop controllers can open the existing keyboard row for composition input.
+Fullscreen remains available in the normal viewer.
+
+Desktop control transfers only from its current owner to a live control-token connection, using the
+server's conditional `Handoff` message. A participant opening PiP keeps watching until explicitly
+claiming control. Closing PiP conditionally returns control to the opener; a third party's intervening
+claim is preserved. Taking control in the opener closes its desktop PiP first. If the opener is
+disconnected when PiP closes, the server uses its normal oldest-session election. Only the controller sizes the desktop; other presentations scale their stream to
+their actual viewport and DPR. Each presentation has its own decoder.
+
+Desktop PiP owns playback while it is open. The opener stops its playback graph and restores it on
+return. Losing control stops microphone and camera capture; PiP never starts either automatically.
+This playback ownership covers the opener/PiP pair; unrelated viewers still have their own audio.
+Window streams keep their existing video-only behavior. Reconnecting stays inside the existing PiP;
+closing it never schedules another browser window. Opener navigation, authentication failure and
+remote window closure dispose owned content.
+
+The action requires a secure context and a browser exposing Document PiP, and opens directly from a
+click. Requests can fail and requested dimensions can be clamped. The browser controls placement,
+origin identification, close controls and always-on-top behavior. PiP cannot enter fullscreen or
+navigate its top-level document. See the [Document PiP specification](https://wicg.github.io/document-picture-in-picture/)
+and [Chrome implementation guide](https://developer.chrome.com/docs/web-platform/document-picture-in-picture/).
+
+Docker checks used headed Chromium 152.0.7977.82 and Firefox 155.0.1 on a virtual X display with a window
+manager. Both opened desktop and window viewers, accepted real keyboard input, rendered changing
+content while the opener was backgrounded and minimized, and returned control. Native Wayland event
+logs confirmed clicks and wheel input in both browsers, plus touch in Chromium. Both browsers accepted
+pointer lock, composition commits through the desktop keyboard row, and unclaimed file drops into the
+transfer folder. Composition checks inject a browser composition commit; they do not exercise every
+installed operating-system IME. Window PiP keeps the ordinary window viewer's keyboard behavior.
+
+Chromium checks additionally cover pairwise audio ownership, stopped microphone capture, third-party
+control, read-only tokens and handoff targets, rejected/unsupported APIs, ordinary popups/fullscreen,
+content replacement, reconnection, viewport resize, held-key release, navigation and token rotation.
+Browser size hints remain subject to clamping; the viewer uses the dimensions it actually receives.
+Requests for a 100,000-pixel square PiP were clamped to 1280×720 in Chromium and 1280×800 in Firefox
+in the same rig. DPR checks cover 1, 1.5 and 2. CDP omits the iframe media-query event for DPR-only overrides, so that
+check supplies the event and verifies rearming and output scale. It does not simulate physically moving
+a window between monitors. Pointer-lock failure notices are exercised with error events.
+
+Chromium's clipboard-event check delivered text to the remote clipboard. In Firefox's headed native
+Ctrl+Shift+V check, no paste event reached the focused canvas and remote clipboard text stayed empty,
+both in the normal viewer and PiP. This is tracked in [#61](https://github.com/ryanpetris/browser-wayland/issues/61).
+Copied-file download controls and microphone/camera controls remain in the normal viewer; Return takes
+you there. Pointer capture has an indicator and reports failure, but PiP cannot capture fullscreen
+browser shortcuts. The checks live in `web/checks/picture-in-picture.mjs` and
+`web/checks/picture-in-picture-firefox.mjs`; they require the Docker release build, display `:95`,
+`wev`, and a geckodriver on port 4445 for Firefox.
+
 ## Browser UI (`web/src`)
 
 React and Tailwind, built by Vite into `web/dist` by `make web` and embedded (see the README). The engine

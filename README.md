@@ -242,6 +242,19 @@ The ↗ button on a window's row in the panel opens it in a popup of its own, st
 (`/?window=ID`): the pointer, keyboard and clipboard work there as in the viewer, resizing the popup
 resizes the window, and the popup reports when the window closes. Each such popup has its own encoder.
 
+Picture-in-picture is also available in supporting browsers on a secure origin. The top-bar action
+opens the whole desktop; a window row's action opens that application. One PiP window belongs to each
+opener, with a compact title/status bar and Return to main viewer. Choosing another target replaces its
+content. Ordinary popups remain available.
+
+When you control the desktop, control and its dimensions follow the PiP viewport. Returning, or taking
+control in the main viewer, returns that presentation to the main window. Another viewer's control is
+not displaced just by opening or closing PiP. Desktop playback moves to PiP; microphone and camera
+capture stop on handoff and must be restarted explicitly in the main viewer. Window PiP has no audio.
+PiP cannot use fullscreen keyboard capture. Use the keyboard row for desktop composition input and
+return to the normal viewer for copied-file downloads or capture controls. Browser checks and known
+interaction limits are recorded in [the desktop UI notes](docs/desktop-api.md#document-picture-in-picture).
+
 ## Desktop API
 
 The compositor is the window manager, so the viewer and outside scripts can see and drive the desktop.

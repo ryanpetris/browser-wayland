@@ -1,6 +1,6 @@
-import { Expand, Eye, Info, Hand, Keyboard, LayoutGrid, LayoutList, MousePointer2, PanelRight, Power, Settings } from 'lucide-react';
+import { PictureInPicture2, CornerUpLeft, Expand, Eye, Info, Hand, Keyboard, LayoutGrid, LayoutList, MousePointer2, PanelRight, Power, Settings } from 'lucide-react';
 import { useStore } from '../store.js';
-import { WINDOW } from '../api.js';
+import { WINDOW, PIP } from '../api.js';
 import { IconButton, codecName } from './ui.jsx';
 
 const STATUS = {
@@ -19,9 +19,21 @@ export function TopBar({ viewer, windowMode, sidebar, onSidebar, onFullscreen, m
   const stream = useStore(viewer.store, s => s.stream);
   const windowTitle = useStore(viewer.store, s => s.windowTitle);
   const role = useStore(viewer.store, s => s.role);
+  const locked = useStore(viewer.store, s => s.locked);
   const touchMouse = useStore(viewer.store, s => s.touchMouse);
   const [dot, text] = STATUS[status];
   const acts = !windowMode && role && role !== 'viewer' && status === 'connected'; // the menus act on the desktop
+  if (PIP) return (
+    <header className="flex h-9 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-2 text-xs">
+      <span className="min-w-0 flex-1 truncate">{windowMode ? windowTitle || `Window ${WINDOW}` : 'Remote desktop'}</span>
+      <span className={`size-2 shrink-0 rounded-full ${dot}`} title={text} />
+      <span>{status === 'connected' ? role === 'viewer' ? 'View only' : role === 'controller' ? 'Controlling' : 'Watching' : text}</span>
+      {locked && <MousePointer2 className="size-3.5 shrink-0" aria-label="Pointer captured; Escape releases it" />}
+      {!windowMode && role === 'participant' && <button type="button" className="shrink-0 rounded bg-indigo-500 px-2 py-1 text-white hover:bg-indigo-400" onClick={() => viewer.takeControl()}>Take control</button>}
+      {!windowMode && role === 'controller' && <IconButton icon={Keyboard} label="On-screen keyboard" active={keyboard} onClick={onKeyboard} />}
+      <IconButton icon={CornerUpLeft} label="Return to main viewer" onClick={() => window.parent.bwReturn?.()} />
+    </header>
+  );
   return (
     <header onClick={event => { if (!event.target.closest('[data-menu-trigger]')) onMenu(null); }} className="flex h-11 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-2 sm:gap-3 sm:px-3">
       <div className="flex min-w-0 shrink items-center gap-2 font-medium text-zinc-100">
@@ -58,6 +70,7 @@ export function TopBar({ viewer, windowMode, sidebar, onSidebar, onFullscreen, m
           </>
         )}
         <IconButton data-menu-trigger id="about-toggle" icon={Info} label="About / Licenses & source" active={menu === 'about'} aria-haspopup="dialog" aria-expanded={menu === 'about'} aria-controls="viewer-about" onClick={() => onMenu('about')} />
+        {viewer.pip.supported && <IconButton icon={PictureInPicture2} label="Picture-in-picture" onClick={() => viewer.pip.open()} />}
         <IconButton icon={Expand} label="Fullscreen (browser shortcuts go to the desktop)" onClick={onFullscreen} />
         {acts && <IconButton data-menu-trigger id="power-toggle" icon={Power} label="Quit browser-wayland" active={menu === 'power'} onClick={() => onMenu('power')} className="hover:text-rose-300" />}
       </div>

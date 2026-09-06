@@ -194,7 +194,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
             v.control_epoch = v.control_epoch.wrapping_add(1);
         }
         app.mixer_audience(&v);
-        let replay: Vec<Bytes> = [Some(protocol::mixer_state(&app.mixer_state())), v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id), app.features())), Some(notifications.clone())].into_iter().flatten().collect();
+        let replay: Vec<Bytes> = [Some(protocol::session(id)), Some(protocol::mixer_state(&app.mixer_state())), v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id), app.features())), Some(notifications.clone())].into_iter().flatten().collect();
         (id, replay)
     };
     for msg in replay {
@@ -691,6 +691,12 @@ impl App {
             ClientMsg::TakeControl => {
                 if key == Key::Control {
                     self.set_controller(&mut v, Some(id));
+                }
+                None
+            }
+            ClientMsg::Handoff(target) => {
+                if controls && key == Key::Control && v.sessions.get(&target).is_some_and(|s| s.key == Key::Control) {
+                    self.set_controller(&mut v, Some(target));
                 }
                 None
             }

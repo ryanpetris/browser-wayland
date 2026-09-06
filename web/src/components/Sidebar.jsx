@@ -1,6 +1,6 @@
 // The side panel: the window list (with actions and a command box), the transfer folder, or the statistics.
 import { useEffect, useRef, useState } from 'react';
-import { Camera, ChevronDown, ChevronUp, Download, ExternalLink, Maximize2, Minimize2, Play, RefreshCw, Trash2, Upload, X } from 'lucide-react';
+import { PictureInPicture2, Camera, ChevronDown, ChevronUp, Download, ExternalLink, Maximize2, Minimize2, Play, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { useStore } from '../store.js';
 import { deleteFile, downloadFile, files, queueSnapshot, snapshot, windowIcon } from '../api.js';
 import { thumbnailScheduler } from '../thumbnails.js';
@@ -117,6 +117,7 @@ function WindowRow({ viewer, w, acts, eligible, dpr }) {
           // the window's size plus the popup's own bars (TopBar h-11 + StatusBar h-7), so it shows 1:1
           window.open(`/?window=${w.id}`, `bw-window-${w.id}`, `popup,width=${w.w},height=${w.h + 72}`);
         }} />
+        {viewer.pip.supported && <Action icon={PictureInPicture2} label="Picture-in-picture" onClick={e => { e.stopPropagation(); viewer.pip.open(w.id); }} />}
         <Action icon={Camera} label="Snapshot (PNG)" onClick={e => {
           e.stopPropagation(); e.currentTarget.blur();
           const tab = window.open('', '_blank'); // opened now, inside the click, so popup blockers allow it

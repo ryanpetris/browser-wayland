@@ -18,9 +18,15 @@ export function Stage({ viewer, windowMode, borders, elements }) {
     const ro = new ResizeObserver(measure);
     ro.observe(el.current);
     // a move to a display with another scale can leave the CSS size alone: watch the ratio too
-    const dpr = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
-    dpr.addEventListener('change', measure);
-    return () => { ro.disconnect(); dpr.removeEventListener('change', measure); };
+    let dpr;
+    const watchDpr = () => {
+      dpr?.removeEventListener('change', onDpr);
+      dpr = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+      dpr.addEventListener('change', onDpr);
+    };
+    const onDpr = () => { measure(); watchDpr(); };
+    watchDpr();
+    return () => { ro.disconnect(); dpr.removeEventListener('change', onDpr); };
   }, [viewer]);
   return (
     <div ref={el} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-black">
