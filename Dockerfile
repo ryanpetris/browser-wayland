@@ -29,13 +29,12 @@
 
 # The viewer (React, built by Vite into web/dist); the binary embeds it.
 FROM node:24-alpine AS web
-RUN apk add --no-cache tar
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
-COPY . /src/
-ARG BW_VISUALISER=1
-RUN BW_VISUALISER=$BW_VISUALISER npm run build
+COPY web/ /src/web/
+COPY LICENSE /src/LICENSE
+RUN npm run build
 
 FROM archlinux:latest AS build
 RUN pacman -Sy --noconfirm archlinux-keyring \

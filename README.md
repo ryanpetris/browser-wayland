@@ -331,7 +331,24 @@ Pointer Lock API; Escape releases it.
 
 Certificate and tokens live in `$XDG_CONFIG_HOME/browser-wayland/`; delete them to regenerate.
 
-The optional [session audio visualiser](docs/audio-visualiser.md) is enabled by
-default. `BW_VISUALISER=0 make` or Docker's `--build-arg BW_VISUALISER=0` excludes
-audioMotion and its AGPL dependency. Enabled viewers include licence and
-corresponding-source downloads in the About dialog; original code remains MIT.
+The [session audio visualiser](docs/audio-visualiser.md) loads when opened.
+The About dialog links to license notices and the source repository.
+
+## Source code
+
+Source and build instructions are available in the
+[GitHub repository](https://github.com/ryanpetris/browser-wayland).
+For a release, run `browser-wayland --version` and check out the matching
+`vX.Y.Z` tag. For a development or modified build, use the revision and any local
+changes supplied by its distributor; the current default branch may differ.
+
+Install the build dependencies listed under [Install](#install) and
+[Requirements](#requirements), then run
+`make`. This installs the locked npm dependencies, builds the viewer, and builds
+the release binary. The audioMotion source comes from the version pinned in
+`web/package-lock.json`; the viewer's modification is in `web/vite.config.js`.
+The lockfile records the dependency download URL and integrity hash.
+
+Distributors must keep the matching source and required dependency sources
+available. A fork with additional changes must link to its own corresponding
+source rather than this repository.

@@ -66,7 +66,7 @@ export function App({ viewer }) {
         {!windowMode && <Sidebar viewer={viewer} tab={tab} onTab={setTab} hidden={!sidebar} />}
       </div>
       {keyboard && <Keyboard viewer={viewer} onClose={() => setKeyboard(false)} />}
-      {__BW_VISUALISER__ && audioPanel && !windowMode && <AudioPanel viewer={viewer} hidden={fullscreen} onClose={() => setAudioPanel(false)} />}
+      {audioPanel && !windowMode && <AudioPanel viewer={viewer} hidden={fullscreen} onClose={() => setAudioPanel(false)} />}
       {mixerPanel && !windowMode && <MixerPanel viewer={viewer} hidden={fullscreen} onClose={() => { setMixerPanel(false); document.getElementById('session-mixer-toggle')?.focus(); }} />}
       <StatusBar mixerPanel={mixerPanel} onMixer={!windowMode ? () => setMixerPanel(!mixerPanel) : undefined} viewer={viewer} audioPanel={audioPanel} onAudioPanel={!windowMode ? () => setAudioPanel(!audioPanel) : undefined} />
       {(status === 'no-token' || status === 'unauthorized') && <TokenForm viewer={viewer} />}

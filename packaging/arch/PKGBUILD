@@ -7,8 +7,7 @@ pkgrel=1
 pkgdesc="Headless Wayland compositor whose screen is a browser tab"
 arch=('x86_64')
 url="https://github.com/ryanpetris/browser-wayland"
-license=('MIT')
-if [[ ${BW_VISUALISER:-1} != 0 ]]; then license+=('AGPL-3.0-or-later'); fi
+license=('MIT' 'AGPL-3.0-or-later')
 depends=('gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gst-plugins-bad' 'gst-plugin-va' 'mesa' 'libxkbcommon' 'libpipewire')
 makedepends=('cargo' 'nodejs' 'npm' 'clang')
 optdepends=('xorg-xwayland: X11 clients'

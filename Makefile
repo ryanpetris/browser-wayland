@@ -7,30 +7,20 @@
 #   make docker-run the image, built if needed, on port 8443 (ARGS go to browser-wayland)
 #   make clean
 
-.PHONY: all build web test run docker docker-run clean FORCE
+.PHONY: all build web test run docker docker-run clean
 
 all: build
 
 build: web
 	cargo build --release --locked
 
-BW_VISUALISER ?= 1
-export BW_VISUALISER
-
-# All source-archive inputs deliberately invalidate the viewer; directory times cover deleted files.
-WEB_SRC := $(shell find web/src web/checks crates docs skills packaging .github) web/index.html web/vite.config.js web/package.json web/package-lock.json Cargo.toml Cargo.lock LICENSE README.md Makefile Dockerfile .dockerignore
+WEB_SRC := $(shell find web/src) web/index.html web/vite.config.js web/package.json web/package-lock.json LICENSE
 DIST := web/dist/index.html web/dist/app.js web/dist/app.css web/dist/THIRD_PARTY.txt
 
 web: $(DIST)
 
-$(DIST) &: web/node_modules/.package-lock.json web/node_modules/.bw-visualiser $(WEB_SRC)
+$(DIST) &: web/node_modules/.package-lock.json $(WEB_SRC)
 	cd web && npm run build
-
-# Only a changed feature value invalidates the output.
-web/node_modules/.bw-visualiser: FORCE | web/node_modules/.package-lock.json
-	@test "$$(cat $@ 2>/dev/null)" = '$(BW_VISUALISER)' || printf '%s\n' '$(BW_VISUALISER)' > $@
-
-FORCE:
 
 web/node_modules/.package-lock.json: web/package-lock.json
 	cd web && npm ci --no-audit --no-fund
@@ -42,7 +32,7 @@ run: web
 	cargo run --release --locked -- $(ARGS)
 
 docker:
-	docker build --build-arg BW_VISUALISER=$(BW_VISUALISER) -t browser-wayland .
+	docker build -t browser-wayland .
 
 # the render node's group, for hosts where it isn't world-accessible
 docker-run: docker

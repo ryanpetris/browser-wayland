@@ -9,14 +9,11 @@ jobs:
       - name: Browser rig dependencies
         run: |
           pacman -Sy --noconfirm archlinux-keyring
-          pacman -Syu --noconfirm --needed nodejs npm chromium tar make rust pkgconf gstreamer gst-plugins-base mesa libxkbcommon
-      - name: Enabled and disabled builds
+          pacman -Syu --noconfirm --needed nodejs npm chromium make rust pkgconf gstreamer gst-plugins-base mesa libxkbcommon
+      - name: Viewer build and checks
         run: |
           cd web
           npm ci --no-audit --no-fund
           npm run build
           npm run check:visualiser
-          BW_VISUALISER=1 cargo test --manifest-path ../Cargo.toml -p bw-server --release --locked web_asset_tests
-          BW_VISUALISER=0 npm run build
-          BW_VISUALISER=0 npm run check:visualiser
-          BW_VISUALISER=0 cargo test --manifest-path ../Cargo.toml -p bw-server --release --locked web_asset_tests
+          cargo test --manifest-path ../Cargo.toml -p bw-server --release --locked web_asset_tests

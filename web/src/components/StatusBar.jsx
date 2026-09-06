@@ -85,7 +85,7 @@ export function StatusBar({ viewer, audioPanel, onAudioPanel, mixerPanel, onMixe
         ) : clipboardText && <span className="flex max-w-48 items-center gap-1 truncate" title={`Clipboard: ${clipboardText}`}><ClipboardCheck className="size-3 shrink-0" /><span className="truncate">{clipboardText}</span></span>}
         {locked && <span className="flex items-center gap-1 text-indigo-300"><Lock className="size-3" /> pointer locked</span>}
         {onMixer && <button id="session-mixer-toggle" type="button" aria-label="Session audio mixer" aria-expanded={mixerPanel} onClick={onMixer} className="text-indigo-300 hover:text-indigo-200">Mixer</button>}
-        {__BW_VISUALISER__ && onAudioPanel && <button type="button" aria-label="Audio visualiser" aria-expanded={audioPanel} onClick={onAudioPanel} className="text-indigo-300 hover:text-indigo-200">Visualiser</button>}
+        {onAudioPanel && <button type="button" aria-label="Audio visualiser" aria-expanded={audioPanel} onClick={onAudioPanel} className="text-indigo-300 hover:text-indigo-200">Visualiser</button>}
         <span className="flex items-center gap-1" title={s.audio ? `audio ${s.audio.state}` : 'no audio yet'}>
           {s.audio?.state === 'running' ? <Volume2 className="size-3 text-emerald-400" /> : <VolumeX className="size-3" />}
         </span>

@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { pref } from '../api.js';
 import { useStore } from '../store.js';
 
-// This import is eliminated entirely in builds without the optional renderer.
-const loadRenderer = __BW_VISUALISER__ ? () => import('../visualiser.js') : null;
+const loadRenderer = () => import('../visualiser.js');
 
 export function AudioPanel({ viewer, hidden, onClose }) {
   const panel = useRef(null), canvas = useRef(null), renderer = useRef(null);
@@ -40,7 +39,7 @@ export function AudioPanel({ viewer, hidden, onClose }) {
   }, []);
 
   useEffect(() => {
-    if (!playback || !loadRenderer) return;
+    if (!playback) return;
     let cancelled = false, instance;
     setError(''); setReady(false);
     loadRenderer().then(({ createVisualiser }) => {

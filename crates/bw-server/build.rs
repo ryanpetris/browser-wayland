@@ -12,7 +12,6 @@ fn collect(dir: &Path, root: &Path, entries: &mut String) {
                 Some("js") => "text/javascript",
                 Some("css") => "text/css",
                 Some("html") => "text/html",
-                Some("gz") => "application/gzip",
                 _ => "text/plain; charset=utf-8",
             };
             entries.push_str(&format!("({:?}, {:?}, include_bytes!({:?})),\n", name, mime, path));
