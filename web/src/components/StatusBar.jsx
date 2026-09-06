@@ -33,9 +33,8 @@ function Choice({ viewer }) {
         {PRESETS.filter(p => p !== 'auto').map(p => <option key={p} value={p}>{PRESET_LABEL[p]}</option>)}
       </select>
       {rtcAvailable && (
-        <select value={transport} onChange={e => viewer.setTransport(e.target.value)} className={cls} title="Transport: how the video travels">
-          <option value="auto">Auto ({TRANSPORT_LABEL[videoVia]})</option>
-          {TRANSPORTS.filter(t => t !== 'auto').map(t => <option key={t} value={t}>{TRANSPORT_LABEL[t]}</option>)}
+        <select value={transport} onChange={e => viewer.setTransport(e.target.value)} className={cls} title="Transport: how the video travels (the socket unless the data channel is picked and opens)">
+          {TRANSPORTS.map(t => <option key={t} value={t}>{TRANSPORT_LABEL[t]}{t === 'webrtc' && transport === 'webrtc' && videoVia !== 'webrtc' ? ' (no channel)' : ''}</option>)}
         </select>
       )}
     </>

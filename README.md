@@ -127,18 +127,32 @@ rotated"; the tokens change with the data directory, e.g. a fresh container with
 
 ## Transport
 
-Video normally travels on a WebRTC data channel (UDP): a lost packet costs one frame instead of stalling
-everything behind it as a WebSocket over TCP does, and ICE finds a way across NAT. The page offers as soon
-as it is connected, the server answers with its own addresses (it needs no STUN of its own), and the
-frames move to the channel once it opens; input, audio and events stay on the WebSocket. The status bar's
-Transport select shows what carries the video (`Auto (WebRTC)`) and lets a viewer pick one; Auto falls
-back to the socket when the channel doesn't open in three seconds (UDP blocked, say). The server listens
-on UDP on the listen port's number (`--rtc-port` for another; Docker needs `-p 8443:8443/udp`) on every
-local address. In Docker's bridge network the container's own address is not the one browsers reach, so
-add `--rtc-addr <the host's address>` after the image name (or run with `--network host`); the same for a
-NAT with the port forwarded. For browsers behind a strict NAT give them a STUN server (`--stun
-stun:host:3478`) or a TURN server (`--turn turn:host:3478 --turn-user … --turn-pass …`; coturn is easy to
-self-host). `--no-rtc` keeps everything on the WebSocket.
+The video travels on the WebSocket. A viewer can move it to a WebRTC data channel (UDP, unordered but
+reliable) with the Transport select in the status bar: the page offers, the server answers with its own
+addresses, and the frames move to the channel once it opens; input, audio and events stay on the
+WebSocket either way. Measured against each other on a container link with an unloaded 4 Mbit/s desktop
+stream, the two are even on a clean link and the channel is behind under packet loss, which is why the
+socket is what carries the video unless the channel is picked:
+
+| link | WebSocket | data channel |
+| --- | --- | --- |
+| clean, or 20 ms delay | 56 fps, 22 ms longest gap | 56 fps, 23 ms |
+| 0.5 % loss | 56 fps, no frame lost | 54 fps, 15 frames lost |
+| 2 % loss, 20 ms delay | 56 fps, 72 ms longest gap | 19–24 fps, gaps over a second |
+| 1 % loss, 100 ms delay | 27 fps, 199 ms longest gap | 8 fps, gaps over a second |
+
+TCP retransmits a lost packet and the picture barely notices; the channel loses whole frames, each of
+which costs a keyframe, and the keyframes are what the link then spends itself on. Where the channel
+does earn its place is a network the WebSocket can't cross: with the server behind NAT and a TURN
+server given to the browsers, the video flows through the relay at full rate.
+
+The server listens on UDP on the listen port's number (`--rtc-port` for another; Docker needs `-p
+8443:8443/udp`) on every local address. In Docker's bridge network the container's own address is not
+the one browsers reach, so add `--rtc-addr <the host's address>` after the image name (or run with
+`--network host`); the same for a NAT with the port forwarded. For browsers behind a strict NAT give
+them a STUN server (`--stun stun:host:3478`) or a TURN server (`--turn turn:host:3478 --turn-user …
+--turn-pass …`, its address as the browsers reach it; coturn is easy to self-host). `--no-rtc` leaves
+the option out entirely.
 
 ## Without a GPU
 

@@ -33,7 +33,7 @@ export function createViewer() {
     touchMouse: pref.get('touchmouse', false), // fingers as a mouse with gestures, instead of real touch points
     mic: false, // the local microphone is going to the desktop
     micAvailable: false, // the desktop takes one (audio is on there)
-    transport: pref.getStr('transport', 'auto'), // this viewer's pick: auto, webrtc, websocket
+    transport: pref.getStr('transport', 'websocket') === 'webrtc' ? 'webrtc' : 'websocket', // this viewer's pick
     rtcAvailable: false, // the server does WebRTC (it sent ICE servers)
     videoVia: 'websocket', // where the video comes from now
     cam: false, // the local webcam is going to the desktop
@@ -455,12 +455,13 @@ export function createViewer() {
   }
 
   // --- WebRTC transport ------------------------------------------------------------------------
-  // Unless the viewer picked the socket, a data channel is offered as soon as the server says it does
-  // WebRTC; the video moves there when it opens (the server sends where the channel is open) and comes
-  // back to the socket when it closes. Auto gives up after 3 s (UDP blocked, say) and stays on the socket.
+  // The data channel is opened when the viewer picks it: measured against the socket it is even on a
+  // clean link and behind it under packet loss, so Auto stays on the socket (see the README). The video
+  // moves to the channel when it opens and comes back to the socket when it closes; the pick gives up
+  // after 3 s (UDP blocked, say).
   let rtc = null, iceServers = [], rtcTimer, rtcGen = 0;
   function maybeRtc() {
-    if (rtc || state().transport === 'websocket' || !state().rtcAvailable || ws?.readyState !== WebSocket.OPEN) return;
+    if (rtc || state().transport !== 'webrtc' || !state().rtcAvailable || ws?.readyState !== WebSocket.OPEN) return;
     const mine = (rtc = openRtc({
       iceServers,
       g: ++rtcGen,
@@ -469,7 +470,7 @@ export function createViewer() {
       onOpen: () => { if (rtc === mine) { clearTimeout(rtcTimer); store.set({ videoVia: 'webrtc' }); } },
       onClose: () => { if (rtc === mine) { closeRtc(); } },
     }));
-    if (state().transport === 'auto') rtcTimer = setTimeout(() => { if (rtc === mine && state().videoVia !== 'webrtc') closeRtc(); }, 3000);
+    rtcTimer = setTimeout(() => { if (rtc === mine && state().videoVia !== 'webrtc') closeRtc(); }, 3000); // no channel in three seconds: the socket keeps it
   }
   // back to the socket: the server is told (the channel may still look open to it); a frame lost on the
   // way shows as a seq gap, which asks for a keyframe
@@ -484,8 +485,8 @@ export function createViewer() {
   function setTransport(transport) {
     pref.setStr('transport', transport);
     store.set({ transport });
-    if (transport === 'websocket') closeRtc();
-    else maybeRtc(); // a channel already open stays
+    if (transport === 'webrtc') maybeRtc(); // a channel already open stays
+    else closeRtc();
   }
 
   // --- microphone -----------------------------------------------------------------------------

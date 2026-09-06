@@ -1,10 +1,12 @@
-// The video over a WebRTC data channel (unordered, no retransmits): a lost packet costs one frame instead
-// of stalling everything behind it, and UDP through ICE reaches a server across NAT. The page offers with
-// one channel, the server (ICE lite) answers with its addresses; frames above 16 kB come as numbered
-// fragments, reassembled here and handed to the same message handler as the socket's.
+// The video over a WebRTC data channel, unordered but reliable: a lost packet is retransmitted and holds
+// up only its own message, not the frames behind it, which is what a socket over TCP cannot do. Measured
+// against the socket it is even on a clean link and behind it under loss (see the README), so it is a
+// choice, not the default. The page offers one channel, the server (ICE lite) answers with its addresses;
+// frames above 16 kB come as numbered fragments, reassembled here and handed to the same message handler
+// as the socket's.
 export function openRtc({ iceServers, g, signal, onMessage, onOpen, onClose }) {
   const pc = new RTCPeerConnection({ iceServers });
-  const ch = pc.createDataChannel('video', { ordered: false, maxRetransmits: 0 });
+  const ch = pc.createDataChannel('video', { ordered: false });
   ch.binaryType = 'arraybuffer';
   const parts = new Map(); // frame id -> { got, chunks } while its fragments come in
   let incomplete = 0; // frames given up on: a fragment never came

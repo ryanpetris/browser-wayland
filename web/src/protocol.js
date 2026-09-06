@@ -7,7 +7,7 @@ export const ROLES = ['viewer', 'participant', 'controller'];
 // codec families in Hello bit / id order (id = index + 1; 0 is Auto), and the quality presets (id = index)
 export const CODEC_FAMILIES = ['h264', 'hevc', 'vp9', 'av1', 'vp8'];
 export const PRESETS = ['auto', 'low', 'medium', 'high', 'max'];
-// how the video travels: the WebRTC data channel when it opens, else the WebSocket
-export const TRANSPORTS = ['auto', 'webrtc', 'websocket'];
+// how the video travels; the socket carries it unless a viewer picks the WebRTC data channel
+export const TRANSPORTS = ['websocket', 'webrtc'];
 // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA
 export const BTN = [0x110, 0x112, 0x111, 0x113, 0x114];

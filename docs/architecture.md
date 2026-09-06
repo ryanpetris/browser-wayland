@@ -3,8 +3,9 @@
 browser-wayland is a headless Wayland compositor whose display is a browser tab. Clients render on
 the GPU as usual; the composited frame is hardware-encoded (VA-API through GStreamer) and streamed
 over a WebSocket; the browser decodes it with WebCodecs and paints it on a canvas. Mouse, keyboard
-and (optionally) audio travel the same socket, and the video moves to a WebRTC data channel (`bw-server`'s
-`rtc.rs`, str0m) when the page opens one. The compositor is also the window manager, and it
+and (optionally) audio travel the same socket; the video moves to a WebRTC data channel (`bw-server`'s
+`rtc.rs`, str0m) when a viewer picks that transport, which is what reaches a server across NAT through a
+TURN relay (the README compares the two under loss). The compositor is also the window manager, and it
 exposes what it knows and can do as an HTTP/WebSocket API (see [desktop-api.md](desktop-api.md)).
 
 Other documents: [protocol.md](protocol.md) (wire formats and HTTP API), [panels.md](panels.md)

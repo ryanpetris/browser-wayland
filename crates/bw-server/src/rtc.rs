@@ -1,6 +1,7 @@
 //! WebRTC data-channel transport for the video: the same messages the WebSocket carries, over a `video`
-//! data channel the browser opens (unordered, no retransmits), so a lost packet costs one frame instead
-//! of stalling everything after it, and the transport reports real loss and RTT. str0m does ICE (lite,
+//! data channel the browser opens (unordered, reliable), for viewers who need UDP to reach the desktop
+//! at all: through NAT, or through a TURN relay. It is a viewer's choice, not the default, because the
+//! socket carries the picture better under packet loss (measured in the README). str0m does ICE (lite,
 //! host candidates), DTLS and SCTP without I/O of its own; one hub task drives every session's peer
 //! connection over one UDP socket per local address (a received packet's destination must be one of the
 //! candidates, so a socket per address knows it). Signalling goes over the session's WebSocket (`RTC`
