@@ -106,11 +106,6 @@ export function AudioPanel({ viewer, hidden, onClose }) {
       {error && <p role="alert">{error}</p>}
       {playback && !ready && !error && <p>Loading visualiser…</p>}
       <div ref={canvas} className="w-full overflow-hidden" style={{ height: fullscreen ? 'calc(100vh - 160px)' : expanded ? '35vh' : '130px' }} aria-hidden="true" />
-      <p className="mt-2 text-zinc-400">Mixed playback at this viewer, before browser or system muting.
-        {' '}<a href="/assets/audiomotion-LICENSE.txt" target="_blank" rel="noreferrer" className="underline">audioMotion licence</a>
-        {' · '}<a href="/assets/audiomotion-source.js" download className="underline">audioMotion source</a>
-        {' · '}<a href="/assets/viewer-source.tar.gz" download className="underline">Corresponding viewer source</a>
-      </p>
     </section>
   );
 }

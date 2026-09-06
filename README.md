@@ -334,4 +334,4 @@ Certificate and tokens live in `$XDG_CONFIG_HOME/browser-wayland/`; delete them 
 The optional [session audio visualiser](docs/audio-visualiser.md) is enabled by
 default. `BW_VISUALISER=0 make` or Docker's `--build-arg BW_VISUALISER=0` excludes
 audioMotion and its AGPL dependency. Enabled viewers include licence and
-corresponding-source downloads in the audio panel; original code remains MIT.
+corresponding-source downloads in the About dialog; original code remains MIT.

@@ -45,7 +45,7 @@ with the full applicable notice; Docker and Arch install it under the package's
 licence directory. Package metadata for our original Rust code remains MIT.
 
 Enabled binaries serve the audioMotion licence and the distributed library
-source through links in the panel. They also serve a source archive containing
+source through links in the About dialog. They also serve a source archive containing
 the corresponding browser-wayland integration, build scripts and dependency
 lockfiles, and audioMotion source and licence. The archive is built from the
 checkout used to build the viewer. Other dependencies are resolved from the

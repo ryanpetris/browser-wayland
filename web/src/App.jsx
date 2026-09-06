@@ -8,6 +8,7 @@ import { Sidebar } from './components/Sidebar.jsx';
 import { StatusBar } from './components/StatusBar.jsx';
 import { TokenForm } from './components/TokenForm.jsx';
 import { Launcher, PowerMenu } from './components/Launcher.jsx';
+import { About } from './components/About.jsx';
 import { Settings } from './components/Settings.jsx';
 import { MixerPanel } from './components/MixerPanel.jsx';
 import { AudioPanel } from './components/AudioPanel.jsx';
@@ -55,6 +56,7 @@ export function App({ viewer }) {
         menu={menu} onMenu={m => setMenu(menu === m ? null : m)}
         keyboard={keyboard} onKeyboard={() => (keyboard ? focusKeyboard() : setKeyboard(true))}
       />
+      {menu === 'about' && !fullscreen && <About viewer={viewer} onClose={closeMenu} />}
       {menu === 'apps' && <Launcher viewer={viewer} onClose={closeMenu} />}
       {menu === 'power' && <PowerMenu viewer={viewer} onClose={closeMenu} />}
       {menu === 'settings' && !windowMode && !fullscreen && <Settings viewer={viewer} borders={borders} onBorders={setBorders} elements={elements} onElements={setElements} onClose={closeMenu} />}

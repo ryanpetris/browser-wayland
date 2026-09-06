@@ -1,4 +1,4 @@
-import { Expand, Eye, Hand, Keyboard, LayoutGrid, LayoutList, MousePointer2, PanelRight, Power, Settings } from 'lucide-react';
+import { Expand, Eye, Info, Hand, Keyboard, LayoutGrid, LayoutList, MousePointer2, PanelRight, Power, Settings } from 'lucide-react';
 import { useStore } from '../store.js';
 import { WINDOW } from '../api.js';
 import { IconButton, codecName } from './ui.jsx';
@@ -57,6 +57,7 @@ export function TopBar({ viewer, windowMode, sidebar, onSidebar, onFullscreen, m
             <span className="mx-1 h-5 w-px bg-zinc-800" />
           </>
         )}
+        <IconButton data-menu-trigger id="about-toggle" icon={Info} label="About / Licenses & source" active={menu === 'about'} aria-haspopup="dialog" aria-expanded={menu === 'about'} aria-controls="viewer-about" onClick={() => onMenu('about')} />
         <IconButton icon={Expand} label="Fullscreen (browser shortcuts go to the desktop)" onClick={onFullscreen} />
         {acts && <IconButton data-menu-trigger id="power-toggle" icon={Power} label="Quit browser-wayland" active={menu === 'power'} onClick={() => onMenu('power')} className="hover:text-rose-300" />}
       </div>

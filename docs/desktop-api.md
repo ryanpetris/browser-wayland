@@ -344,7 +344,7 @@ React and Tailwind, built by Vite into `web/dist` by `make web` and embedded (se
 read it with `useSyncExternalStore` and send actions back through the engine.
 
 - **Layout** (`App.jsx`): a top bar (name, the application menu, connection status, codec and size, the
-  toggles, fullscreen, the power menu),
+  toggles, About, fullscreen, the power menu),
   the stage (`Stage.jsx`: the canvas, centred and fitted to it, plus the overlays and the status banners), the
   side panel (`Sidebar.jsx`) and a status bar (`StatusBar.jsx`: fps, bandwidth, input-to-paint latency,
   loss counters, clipboard, pointer lock, audio). The controller's stage sizes the desktop's output; the

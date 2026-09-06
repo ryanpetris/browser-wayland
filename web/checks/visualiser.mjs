@@ -51,6 +51,30 @@ try {
   await page.waitForFunction(() => !!window.bw?.store);
   await page.evaluate(() => window.bw.store.set({ status: 'connected', role: 'viewer', audioAvailable: true, micAvailable: false }));
   assert.equal(chunks.length, 0, 'renderer must not load until opened');
+  const aboutButton = page.getByRole('button', { name: 'About / Licenses & source', exact: true });
+  await aboutButton.click();
+  const about = page.getByRole('dialog', { name: 'About browser-wayland' });
+  await about.waitFor();
+  assert.equal(await about.getByRole('link', { name: 'audioMotion source', exact: true }).count(), disabled ? 0 : 1);
+  for (const link of await about.locator('a[href^="/"]').all()) {
+    const response = await context.request.get(new URL(await link.getAttribute('href'), page.url()).href);
+    assert.equal(response.status(), 200, 'About download is served');
+  }
+  await about.focus();
+  await page.keyboard.press('Shift+Tab');
+  assert(await about.locator('a').last().evaluate(node => node === document.activeElement), 'About keeps keyboard focus inside');
+  assert.equal(await about.locator('a').last().evaluate(node => {
+    let escaped = false;
+    const listener = () => { escaped = true; };
+    document.addEventListener('paste', listener);
+    node.dispatchEvent(new ClipboardEvent('paste', { bubbles: true }));
+    document.removeEventListener('paste', listener);
+    return escaped;
+  }), false, 'About paste stays out of the remote clipboard');
+  await page.keyboard.press('Escape');
+  assert(await aboutButton.evaluate(node => node === document.activeElement), 'Escape restores About trigger focus');
+  assert.equal(chunks.length, 0, 'About does not load the visualiser');
+
   await page.getByRole('button', { name: 'Session audio mixer', exact: true }).click();
   await page.getByRole('region', { name: 'Session audio mixer', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Close mixer', exact: true }).click();

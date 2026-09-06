@@ -27,6 +27,7 @@ export default defineConfig({
         ? '\nOptional audioMotion-analyzer 4.5.4: AGPL-3.0-or-later. Source and a marked context-ownership modification are included in the viewer source download.\n\n' + readFileSync(new URL('node_modules/audiomotion-analyzer/LICENSE', import.meta.url), 'utf8')
         : '\nThis build excludes the optional audio renderer.\n');
       this.emitFile({ type: 'asset', fileName: 'THIRD_PARTY.txt', source: notice });
+      this.emitFile({ type: 'asset', fileName: 'assets/license-notices.txt', source: notice });
       if (!visualiser) return;
       this.emitFile({ type: 'asset', fileName: 'assets/viewer-source.tar.gz', source: execFileSync('tar', [
         '--owner=0', '--group=0', '--numeric-owner', '-czf', '-', 'Cargo.toml', 'Cargo.lock', 'LICENSE', 'Makefile', 'Dockerfile', 'README.md',
