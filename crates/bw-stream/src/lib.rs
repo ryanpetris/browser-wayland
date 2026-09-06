@@ -67,9 +67,11 @@ fn parse_tail(codec: Codec) -> &'static str {
     }
 }
 
-/// A VA encoder with its parser. `enc` is the element for this device.
+/// A VA encoder with its parser. `enc` is the element for this device. Keyframes come on request (a
+/// viewer joining, a gap in what one got), so the periodic one is pushed out as far as the property goes:
+/// its hundred-odd kilobytes every second are the burst a lossy link chokes on.
 fn hardware_tail(codec: Codec, enc: &str, bitrate_kbps: u32) -> String {
-    let common = format!("{enc} name=enc rate-control=cbr bitrate={bitrate_kbps} target-usage=7 ref-frames=1");
+    let common = format!("{enc} name=enc rate-control=cbr bitrate={bitrate_kbps} target-usage=7 ref-frames=1 key-int-max=1024");
     match codec {
         Codec::H264 => format!("{common} b-frames=0 ! video/x-h264,profile=high {}", parse_tail(codec)),
         Codec::Hevc => format!("{common} b-frames=0 ! video/x-h265,profile=main {}", parse_tail(codec)),
@@ -78,19 +80,19 @@ fn hardware_tail(codec: Codec, enc: &str, bitrate_kbps: u32) -> String {
     }
 }
 
-/// A CPU encoder (`--software-encoding`) with its parser, at its fastest low-latency settings. `enc` is
-/// the element `software_encoder` found.
+/// A CPU encoder (`--software-encoding`) with its parser, at its fastest low-latency settings and with its
+/// periodic keyframe pushed out of reach, as for the VA encoders. `enc` is the element `software_encoder` found.
 fn software_tail(codec: Codec, enc: &str, bitrate_kbps: u32) -> String {
     let bps = bitrate_kbps * 1000;
     let encoder = match (codec, enc) {
-        (Codec::Vp8, _) => format!("vp8enc name=enc deadline=1 cpu-used=8 end-usage=cbr target-bitrate={bps} lag-in-frames=0 threads=4"),
-        (Codec::Vp9, _) => format!("vp9enc name=enc deadline=1 cpu-used=8 end-usage=cbr target-bitrate={bps} lag-in-frames=0 row-mt=true threads=4"),
-        (Codec::H264, "x264enc") => format!("x264enc name=enc tune=zerolatency speed-preset=superfast bitrate={bitrate_kbps} bframes=0 ! video/x-h264,profile=main"),
-        (Codec::H264, _) => format!("openh264enc name=enc rate-control=bitrate bitrate={bps}"),
-        (Codec::Hevc, _) => format!("x265enc name=enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate_kbps} ! video/x-h265,profile=main"),
+        (Codec::Vp8, _) => format!("vp8enc name=enc deadline=1 cpu-used=8 end-usage=cbr target-bitrate={bps} lag-in-frames=0 threads=4 keyframe-max-dist=2147483647"),
+        (Codec::Vp9, _) => format!("vp9enc name=enc deadline=1 cpu-used=8 end-usage=cbr target-bitrate={bps} lag-in-frames=0 row-mt=true threads=4 keyframe-max-dist=2147483647"),
+        (Codec::H264, "x264enc") => format!("x264enc name=enc tune=zerolatency speed-preset=superfast bitrate={bitrate_kbps} bframes=0 key-int-max=2147483647 ! video/x-h264,profile=main"),
+        (Codec::H264, _) => format!("openh264enc name=enc rate-control=bitrate bitrate={bps} gop-size=0"),
+        (Codec::Hevc, _) => format!("x265enc name=enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate_kbps} key-int-max=2147483647 ! video/x-h265,profile=main"),
         // a two-frame mini-GOP: about six frames of delay instead of thirty-odd (the library insists on
         // some lookahead); keyframes on request
-        (Codec::Av1, _) => format!("svtav1enc name=enc preset=12 target-bitrate={bitrate_kbps} parameters-string=hierarchical-levels=1:force-key-frames=1"),
+        (Codec::Av1, _) => format!("svtav1enc name=enc preset=12 target-bitrate={bitrate_kbps} intra-period-length=2147483647 parameters-string=hierarchical-levels=1:force-key-frames=1"),
     };
     format!("{encoder} {}", parse_tail(codec))
 }
