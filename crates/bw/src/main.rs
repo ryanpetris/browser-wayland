@@ -92,10 +92,17 @@ fn load_module(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Clients that don't speak the Pulse protocol (ALSA through PipeWire's plugin, as Audacity's PortAudio
+/// does) get the server's defaults rather than `PULSE_SINK`/`PULSE_SOURCE`, so the defaults are ours.
+fn set_default(what: &str, name: &str) {
+    let _ = std::process::Command::new("pactl").args([what, name]).status();
+}
+
 impl AudioSink {
     fn create() -> Result<AudioSink> {
         let name = format!("browser-wayland-{}", std::process::id());
         let module = load_module(&["module-null-sink", &format!("sink_name={name}"), &format!("sink_properties=device.description={name}")])?;
+        set_default("set-default-sink", &name);
         Ok(AudioSink { name, module })
     }
 }
@@ -124,6 +131,7 @@ impl MicSource {
         let mut mic = MicSource { name: name.clone(), sink: sink.clone(), modules: vec![m1] };
         let m2 = load_module(&["module-remap-source", &format!("master={sink}.monitor"), &format!("source_name={name}"), &format!("source_properties=device.description={name}")])?;
         mic.modules.push(m2);
+        set_default("set-default-source", &name);
         Ok(mic)
     }
 }

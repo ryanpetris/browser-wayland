@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
-# browser-wayland with the default Xfce apps, the Xfce panel, Firefox and Chromium, on Arch Linux.
+# browser-wayland with the default Xfce apps, the Xfce panel, Firefox and Chromium, and applications for
+# what the desktop can do (guvcview for the webcam, Audacity, GIMP, mpv with VA-API decode, Ristretto,
+# pavucontrol), with nano
+# and a passwordless sudo for the `bw` user, on Arch Linux.
 #
 #   make docker-run          builds the image and runs it (the two commands below)
 #   docker build -t browser-wayland .
@@ -47,8 +50,9 @@ RUN pacman -Sy --noconfirm archlinux-keyring \
         gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-plugin-va \
         mesa vulkan-intel vulkan-radeon libva intel-media-driver libva-mesa-driver xorg-xwayland \
         mesa-utils mesa-demos vulkan-tools \
-        dbus pipewire pipewire-pulse wireplumber libpulse \
+        dbus pipewire pipewire-pulse pipewire-alsa wireplumber libpulse \
         xfce4 firefox chromium ttf-dejavu \
+        guvcview audacity gimp mpv ristretto pavucontrol nano sudo \
     && rm -rf /var/cache/pacman/pkg/*
 COPY --from=build /src/target/release/browser-wayland /usr/local/bin/
 # GTK hides menu icons unless told otherwise, and on Wayland it takes the title-bar buttons of
@@ -56,12 +60,18 @@ COPY --from=build /src/target/release/browser-wayland /usr/local/bin/
 # only Close. On a real Xfce session xfsettingsd provides both.
 RUN printf '[Settings]\ngtk-menu-images=1\n' > /etc/gtk-3.0/settings.ini \
     && printf "[org.gnome.desktop.wm.preferences]\nbutton-layout='menu:minimize,maximize,close'\n" > /usr/share/glib-2.0/schemas/50-browser-wayland.gschema.override \
-    && glib-compile-schemas /usr/share/glib-2.0/schemas
+    && glib-compile-schemas /usr/share/glib-2.0/schemas \
+    && install -d /etc/mpv && printf 'hwdec=auto-safe\n' > /etc/mpv/mpv.conf
 # Seed the default panel layout so a run with `--exec xfce4-panel` doesn't stop at the "first start" dialog.
 # The data dir exists (bw-owned) so a `-v` named volume mounted there is writable from the first run.
 # Chromium (its launcher reads ~/.config/chromium-flags.conf): Wayland when it can, its accessibility
-# tree for --elements, and no sandbox, since containers usually lack the user namespaces it needs.
+# tree for --elements, and no sandbox, since containers usually lack the user namespaces it needs. The
+# user has no password, so sudo works through a NOPASSWD rule. PipeWire's ALSA plugin is for Audacity,
+# whose PortAudio speaks ALSA: it lands on the server's default devices, which browser-wayland makes its
+# own. guvcview reads the webcam's V4L2 device itself (GNOME's Snapshot sees only PipeWire camera nodes,
+# which the loopback never becomes here).
 RUN useradd -m bw \
+    && printf 'bw ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/bw && chmod 440 /etc/sudoers.d/bw && visudo -cf /etc/sudoers.d/bw \
     && install -D /etc/xdg/xfce4/panel/default.xml /home/bw/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml \
     && install -d /home/bw/.config/browser-wayland \
     && printf -- '--ozone-platform-hint=auto\n--force-renderer-accessibility\n--no-sandbox\n' > /home/bw/.config/chromium-flags.conf \
@@ -76,6 +86,8 @@ exec dbus-run-session -- sh -c '
     until pactl info >/dev/null 2>&1; do sleep 0.2; done
     exec browser-wayland --elements "$@"' sh "$@"
 EOF
+# Programs launched from the desktop inherit the compositor's working directory: a terminal opens at home.
+WORKDIR /home/bw
 USER bw
 ENV XDG_RUNTIME_DIR=/tmp/runtime-bw HOME=/home/bw
 EXPOSE 8443

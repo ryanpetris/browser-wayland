@@ -117,8 +117,10 @@ gsettings set org.gnome.desktop.wm.preferences button-layout 'menu:minimize,maxi
 ```
 
 The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps,
-Firefox and Chromium, with PipeWire for audio and Mesa's OpenGL and Vulkan drivers for Intel and AMD
-(`glxgears`, `vkcube` and the info tools are included to check them), and the two GTK settings above.
+Firefox and Chromium, applications for what the desktop can do (guvcview for the webcam, Audacity, GIMP,
+mpv with VA-API decode, Ristretto, pavucontrol), nano and a passwordless sudo for the `bw` user, with PipeWire for audio and
+Mesa's OpenGL and Vulkan drivers for Intel and AMD (`glxgears`, `vkcube` and the info tools are included
+to check them), and the two GTK settings above. Programs launched from the desktop start in the home folder.
 The desktop starts empty; the viewer's menu launches the applications, and `--exec xfce4-panel` after
 the image name adds the panel. `make docker-run` builds the image and runs it; the details are
 in the Dockerfile's header.
