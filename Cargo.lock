@@ -416,96 +416,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "elsewhere"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "elsewhere-compositor",
- "elsewhere-core",
- "elsewhere-server",
- "elsewhere-stream",
- "clap",
- "pipewire",
- "serde_json",
- "signal-hook",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
-
-[[package]]
-name = "elsewhere-compositor"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "elsewhere-core",
- "fontdb",
- "smithay",
- "tokio",
- "tracing",
- "xcursor",
-]
-
-[[package]]
-name = "elsewhere-core"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "memmap2",
- "schemars",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "elsewhere-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "axum-server",
- "base64 0.22.1",
- "elsewhere-core",
- "calloop",
- "futures-util",
- "if-addrs",
- "libc",
- "png",
- "rcgen",
- "rmcp",
- "rustls",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "str0m",
- "tokio",
- "tokio-util",
- "tracing",
- "zbus",
-]
-
-[[package]]
-name = "elsewhere-stream"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "elsewhere-core",
- "gstreamer",
- "gstreamer-allocators",
- "gstreamer-app",
- "gstreamer-video",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "bytemuck"
@@ -997,6 +911,92 @@ name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
+
+[[package]]
+name = "elsewhere"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "elsewhere-compositor",
+ "elsewhere-core",
+ "elsewhere-server",
+ "elsewhere-stream",
+ "pipewire",
+ "serde_json",
+ "signal-hook",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "elsewhere-compositor"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "elsewhere-core",
+ "fontdb",
+ "smithay",
+ "tokio",
+ "tracing",
+ "xcursor",
+]
+
+[[package]]
+name = "elsewhere-core"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "memmap2",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "elsewhere-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-server",
+ "base64 0.22.1",
+ "calloop",
+ "elsewhere-core",
+ "futures-util",
+ "if-addrs",
+ "libc",
+ "png",
+ "rcgen",
+ "rmcp",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "str0m",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "zbus",
+]
+
+[[package]]
+name = "elsewhere-stream"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "elsewhere-core",
+ "gstreamer",
+ "gstreamer-allocators",
+ "gstreamer-app",
+ "gstreamer-video",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "encoding_rs"
