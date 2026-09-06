@@ -74,7 +74,7 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 tokio::spawn(async move {
                     let saved = taken || app.rescue(&batch).await.unwrap_or(false);
                     let word = match (taken, saved) {
-                        (true, _) => protocol::success(&format!("Delivered to {}", target.map_or("the desktop".to_string(), |id| apps::display_name(&id)))),
+                        (true, _) => protocol::success(&format!("Copied to {}", target.map_or("the desktop".to_string(), |id| apps::display_name(&id)))),
                         (false, true) => protocol::notice("no application took the files; they are in the desktop's transfer folder"),
                         (false, false) => protocol::notice("no application took the files, and they could not be saved to the transfer folder"),
                     };
