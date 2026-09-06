@@ -68,6 +68,7 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 msg
             }
             Event::DragEnded { taken } => {
+                app.drop_ended(taken);
                 // the controller dragged; it alone hears how it went
                 if let Some(s) = v.controller.and_then(|c| v.sessions.get(&c)) {
                     let _ = s.events.try_send(protocol::notice(if taken { "the application took the files" } else { "no application took the files; they are in the desktop's transfer folder" }));

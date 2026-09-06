@@ -170,6 +170,13 @@ upload is complete (a taken name gets ` (2)` before its extension; the reply car
 `GET /api/files` lists the folder's files (no subfolders, hidden entries or symlinks), `GET
 /api/files/{name}` streams one back as an attachment (a symlink is not followed), `DELETE` removes one.
 A name is a single visible entry of the folder: anything with a `/` or starting with a `.` is `404`.
+Files an application on the desktop is to take, a drag's or a paste's, are not uploaded there but staged:
+`PUT /api/drop/{name}` writes into the batch under way, a randomly named directory under
+`$XDG_CACHE_HOME/browser-wayland/drops` (`~/.cache/…`) opened by the first file and closed by the drop
+(`Drag` `drop`) or the paste (`POST /api/clipboard/files` with `"staged": true`). The desktop's word on
+the drop (`DragEnded`) settles the batch: taken, it is left as it is, moved out or copied from; refused,
+or a `cancel` with files staged, its files go to the transfer folder. Nothing but the sweep removes. An hourly sweep removes batches older than a day; instances share the
+directory, batch names are random, and a batch already gone is no error to either.
 Each upload writes its own `.part` file and claims the final name with a hard link, so two uploads of the
 same name can't collide. Listing and downloading work with the view-only token; uploads and
 deletions need the control token. There is no size limit beyond the disk.
@@ -181,14 +188,13 @@ tab opens and after an upload.
 
 Dragging local files over the stage is carried on as a drag on the desktop (`Drag` message; `State::drag`
 in `clipboard.rs`, `ServerDndGrabHandler` in `handlers.rs`). `dragenter` starts a compositor-owned drag
-(`start_dnd`) offering `text/uri-list` to copy or to move (Thunar takes the move, so the file leaves the
-transfer folder for the folder shown, and a drop on that folder itself, where the upload put it, changes
-nothing; Nautilus copies, as GTK 4 prefers when both are offered, and so does an application that only
-copies, leaving the file in the transfer folder too), from a synthetic left-button press made
+(`start_dnd`) offering `text/uri-list` to copy or to move (Thunar takes the move, so the staged file
+leaves for the folder shown; Nautilus copies, as GTK 4 prefers when both are offered, and so does an
+application that only copies, leaving the staged file to the sweep), from a synthetic left-button press made
 over nothing so no client sees a press without its release; `dragover` is ordinary pointer motion, which
 the drag grab turns into `wl_data_device` enter/motion for the application under the pointer; `dragleave`
 lets go over nothing (`cancel`). The browser gives file contents only on `drop`, so the files are
-uploaded then (the drag holds still; the page shows the upload) and `drop` names them: the compositor
+uploaded then, staged (the drag holds still; the page shows the upload), and `drop` names them: the compositor
 leaves and re-enters the target with a fresh offer whose list it can read now (Thunar reads it during
 the drag to decide, once per offer, and refuses without it; Nautilus preloads it and keeps what it read;
 a request before the drop gets EOF at once, because GTK 3 never asks again if the pointer leaves while a
@@ -246,8 +252,8 @@ Files: a file manager's copy offers `text/uri-list` and `x-special/gnome-copied-
 with a `copy` first line) besides the paths as text; the compositor reads the URI list then, the page
 shows "N files copied" with a download button, and `GET /api/clipboard/files/{index}` streams the
 `index`th file of the list currently on the clipboard (only that list: the route can't read anything
-else). The other way, files pasted into the page go to the transfer folder first, then `POST
-/api/clipboard/files` makes them the desktop clipboard as a URI list offered under both mimes (the
+else). The other way, files pasted into the page are staged first (`PUT /api/drop/{name}`), then `POST
+/api/clipboard/files` with `"staged": true` makes them the desktop clipboard as a URI list offered under both mimes (the
 gnome one rewritten the way file managers write it: `copy`, then one URI per line, LF only, no trailing
 newline; Nautilus refuses a CR or an empty line), and the paste chord follows through the API; Thunar
 and Nautilus paste them as copies.

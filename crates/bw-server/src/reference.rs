@@ -19,6 +19,7 @@ const ROUTES: &str = "\
 | `PUT /api/files/{name}` | the file's bytes | saved in the folder under `name`, or `name (2)` if taken; `201` with `{\"name\"}` |
 | `GET /api/files/{name}` | | the file, as an attachment; `404` |
 | `DELETE /api/files/{name}` | | `204`; `404` |
+| `PUT /api/drop/{name}` | the file's bytes | staged for the drag or paste under way, for the application that takes it (the page's business; the transfer folder is for uploads); `201` with `{\"name\": \"…\"}` |
 | `GET /api/notifications` | | JSON array of **Notification**: what applications reported and the viewers show |
 | `POST /api/notifications/{id}` | `{\"action\": \"default\" \\| \"<key>\"}`, or `{}` to dismiss | click, invoke an action of, or dismiss a notification; `202`, `404` |
 | `GET /api/notifications/{id}/icon` | | the notification's picture (the application's, else its launcher's); `404` none |

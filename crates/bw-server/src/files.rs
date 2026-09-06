@@ -1,6 +1,12 @@
 //! File transfer: a folder (the XDG download directory unless `--files-dir` says otherwise) that files
 //! dropped on the page land in and that the page lists and downloads from. Names are plain file names in
 //! that folder; a name in use gets " (2)" before its extension.
+//!
+//! Files an application on the desktop is to take, a drag's or a paste's, where the target folder is
+//! picked in Wayland, are staged instead: each batch in a directory of its own, randomly named, under
+//! the cache directory. A file manager moves or copies them from there; what is left is swept after a
+//! day (another instance may be sweeping too, so a batch already gone is no error), and a batch nobody
+//! took goes to the transfer folder, where the page says it is.
 
 use std::{
     path::{Path, PathBuf},
@@ -33,6 +39,12 @@ pub fn default_dir() -> PathBuf {
         .and_then(|s| s.lines().find_map(|l| l.strip_prefix("XDG_DOWNLOAD_DIR=")).map(|v| v.trim().trim_matches('"').replace("$HOME", &home)))
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(&home).join("Downloads"))
+}
+
+/// `$XDG_CACHE_HOME/browser-wayland/drops`, else `~/.cache/browser-wayland/drops`.
+pub fn drops_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    std::env::var("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|_| Path::new(&home).join(".cache")).join("browser-wayland/drops")
 }
 
 /// A name is one visible entry of the folder, nothing else (hidden names include our `.part` files).
@@ -76,13 +88,24 @@ impl App {
         .map_err(|e| ApiError::Internal(e.to_string()))?
     }
 
-    /// Write an upload into the folder under `name`, or the first `name (n)` that is free, through a
-    /// `.part` file of its own so a half upload never looks complete and two uploads never meet: the
-    /// final name is claimed with a hard link, which fails if it exists. Returns the name it got.
+    /// Write an upload into the transfer folder (see `store_into`).
     pub async fn store_file(&self, name: &str, body: Body) -> Result<String, ApiError> {
+        self.store_into(&self.files_dir.clone(), name, body).await
+    }
+
+    /// Write an upload into the batch a drag or a paste is staging, opened for its first file.
+    pub async fn stage_file(&self, name: &str, body: Body) -> Result<String, ApiError> {
+        let dir = self.staging.lock().unwrap().get_or_insert_with(|| self.drops_dir.join(crate::random_hex(16))).clone();
+        self.store_into(&dir, name, body).await
+    }
+
+    /// Write an upload into `dir` under `name`, or the first `name (n)` that is free, through a `.part`
+    /// file of its own so a half upload never looks complete and two uploads never meet: the final name
+    /// is claimed with a hard link, which fails if it exists. Returns the name it got.
+    async fn store_into(&self, dir: &Path, name: &str, body: Body) -> Result<String, ApiError> {
         let name = safe(name)?;
-        tokio::fs::create_dir_all(&self.files_dir).await.map_err(|e| ApiError::Internal(e.to_string()))?;
-        let tmp = self.files_dir.join(format!(".upload-{}-{}.part", std::process::id(), UPLOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        tokio::fs::create_dir_all(dir).await.map_err(|e| ApiError::Internal(e.to_string()))?;
+        let tmp = dir.join(format!(".upload-{}-{}.part", std::process::id(), UPLOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
         let written = async {
             let mut file = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).await?;
             let mut stream = body.into_data_stream();
@@ -91,7 +114,7 @@ impl App {
             }
             file.flush().await?;
             for candidate in candidates(name) {
-                match tokio::fs::hard_link(&tmp, self.files_dir.join(&candidate)).await {
+                match tokio::fs::hard_link(&tmp, dir.join(&candidate)).await {
                     Ok(()) => return Ok(candidate),
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                     Err(e) => return Err(e),
@@ -109,30 +132,67 @@ impl App {
         stream_file(&self.files_dir.join(safe(name)?)).await
     }
 
-    /// Files of the folder as the desktop clipboard's URI list (a file manager's copy).
-    pub fn set_clipboard_files(&self, names: &[String]) -> Result<(), ApiError> {
-        self.set_clipboard(crate::api::URI_LIST, self.uri_list(names)?.into())
+    /// Files of the transfer folder, or of the batch a paste staged, as the desktop clipboard's URI list
+    /// (a file manager's copy); `404` when nothing is staged.
+    pub fn set_clipboard_files(&self, names: &[String], staged: bool) -> Result<(), ApiError> {
+        let dir = if staged { self.staging.lock().unwrap().take().ok_or(ApiError::NoSuchFile)? } else { self.files_dir.clone() };
+        self.set_clipboard(crate::api::URI_LIST, uri_list(&dir, names)?.into())
     }
 
-    /// A `text/uri-list` naming files of the transfer folder.
-    fn uri_list(&self, names: &[String]) -> Result<Vec<u8>, ApiError> {
-        let mut list = String::new();
-        for name in names {
-            let path = self.files_dir.join(safe(name)?);
-            list += &format!("file://{}\r\n", percent_path(&path));
-        }
-        Ok(list.into_bytes())
-    }
-
-    /// The browser's drag as a compositor command; a drop names files of the transfer folder (a name that
-    /// isn't a plain file name cancels instead, so the desktop lets go).
+    /// The browser's drag as a compositor command. A drop names the files of the batch it staged and
+    /// drops their URIs; the batch waits for the desktop's word (`drop_ended`). Nothing staged, or a name
+    /// that isn't a plain file name, cancels instead, so the desktop lets go; a cancel with files staged
+    /// (a drag whose upload half failed) sends them to the transfer folder.
     pub fn drag_command(&self, msg: crate::protocol::DragMsg) -> bw_core::Command {
         use crate::protocol::DragMsg;
         bw_core::Command::Drag(match msg {
             DragMsg::Start => bw_core::Drag::Start,
-            DragMsg::Drop { names } => self.uri_list(&names).map_or(bw_core::Drag::Cancel, bw_core::Drag::Drop),
-            DragMsg::Cancel => bw_core::Drag::Cancel,
+            DragMsg::Drop { names } => match self.staging.lock().unwrap().take() {
+                Some(dir) => match uri_list(&dir, &names) {
+                    Ok(list) => {
+                        *self.dropped.lock().unwrap() = Some(dir);
+                        bw_core::Drag::Drop(list)
+                    }
+                    Err(_) => {
+                        self.rescue(dir);
+                        bw_core::Drag::Cancel
+                    }
+                },
+                None => bw_core::Drag::Cancel,
+            },
+            DragMsg::Cancel => {
+                if let Some(dir) = self.staging.lock().unwrap().take() {
+                    self.rescue(dir);
+                }
+                bw_core::Drag::Cancel
+            }
         })
+    }
+
+    /// The desktop's word on the drop: a refused batch goes to the transfer folder, where the page says it
+    /// is; a taken one, its files moved out or copied, is the sweep's.
+    pub fn drop_ended(&self, taken: bool) {
+        if let Some(dir) = self.dropped.lock().unwrap().take()
+            && !taken
+        {
+            self.rescue(dir);
+        }
+    }
+
+    /// Staged files nobody took go to the transfer folder, off the async threads (a copy when the cache
+    /// is on another filesystem); one that is gone already is no loss, and the directory is the sweep's.
+    fn rescue(&self, dir: PathBuf) {
+        let files_dir = self.files_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = std::fs::create_dir_all(&files_dir);
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Some(free) = candidates(&name).map(|c| files_dir.join(c)).find(|p| !p.exists()) else { continue };
+                if std::fs::rename(entry.path(), &free).is_err() && std::fs::copy(entry.path(), &free).is_ok() {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        });
     }
 
     /// The `index`th `file://` URI of the list on the desktop clipboard, streamed: its name, size and body.
@@ -150,6 +210,33 @@ impl App {
 
     pub async fn delete_file(&self, name: &str) -> Result<(), ApiError> {
         tokio::fs::remove_file(self.files_dir.join(safe(name)?)).await.map_err(|_| ApiError::NoSuchFile)
+    }
+}
+
+/// A `text/uri-list` naming files of `dir`.
+fn uri_list(dir: &Path, names: &[String]) -> Result<Vec<u8>, ApiError> {
+    let mut list = String::new();
+    for name in names {
+        list += &format!("file://{}\r\n", percent_path(&dir.join(safe(name)?)));
+    }
+    Ok(list.into_bytes())
+}
+
+/// Every hour, staged batches older than a day go. Another instance may be sweeping the same directory,
+/// so a batch already gone is no error.
+pub async fn sweep(app: std::sync::Arc<App>) {
+    loop {
+        let dir = app.drops_dir.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(24 * 3600);
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                if entry.metadata().is_ok_and(|m| m.is_dir() && m.modified().is_ok_and(|t| t < old)) {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
+        })
+        .await;
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
     }
 }
 

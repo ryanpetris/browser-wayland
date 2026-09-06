@@ -59,7 +59,7 @@ pub const NOTIFY: u8 = 0x8E;
 /// optional: this session's choice, applied live. Any session.
 pub const STREAM: u8 = 0x8F;
 /// `[DRAG][JSON]`: the browser drags local files over the desktop: `{"op": "start"}` where the pointer is,
-/// `{"op": "drop", "names": [...]}` with the files' names in the transfer folder (uploaded first), or
+/// `{"op": "drop", "names": [...]}` with the files' names as staged (`PUT /api/drop/{name}` first), or
 /// `{"op": "cancel"}`. Controlling session only.
 pub const DRAG: u8 = 0x90;
 /// `[INPUT][JSON]`: one input action as `POST /api/input` takes it (`{"type": "text", "text": …}`,

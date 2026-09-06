@@ -32,7 +32,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use bw_core::{Bytes, Codec, Command, ControlMsg, Event, FrameSink, InputMsg, OutputGeometry, StreamControl, StreamMsg, WindowInfo};
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager};
@@ -118,6 +118,12 @@ pub struct App {
     next_notification: std::sync::atomic::AtomicU32,
     notify_bus: std::sync::OnceLock<zbus::Connection>,
     files_dir: PathBuf,
+    /// Where a drag's or a paste's files wait for the application that takes them (`files.rs`).
+    pub drops_dir: PathBuf,
+    /// The batch a drag or a paste is staging its files in, opened by the first file and closed by the drop.
+    pub staging: Mutex<Option<PathBuf>>,
+    /// The dropped batch, until the desktop says whether an application took it.
+    pub dropped: Mutex<Option<PathBuf>>,
     elements: bool,
     version: &'static str,
     tls: bool,
@@ -199,6 +205,9 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         next_notification: std::sync::atomic::AtomicU32::new(1),
         notify_bus: std::sync::OnceLock::new(),
         files_dir: cfg.files_dir,
+        drops_dir: files::drops_dir(),
+        staging: Mutex::default(),
+        dropped: Mutex::default(),
         elements: cfg.elements,
         version: cfg.version,
         tls: cfg.tls,
@@ -207,6 +216,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
     tokio::spawn(ws::distribute_audio(app.clone(), audio_rx));
     tokio::spawn(ws::forward_events(app.clone(), events_rx));
     tokio::spawn(notify::serve(app.clone()));
+    tokio::spawn(files::sweep(app.clone()));
 
     let router = Router::new()
         .route("/", get(index))
@@ -228,6 +238,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
                 .route("/api/windows/{id}/icon", get(api_window_icon))
                 .route("/api/files", get(api_files))
                 .route("/api/files/{name}", get(api_file).put(api_put_file).delete(api_delete_file))
+                .route("/api/drop/{name}", put(api_stage_file))
                 .route("/api/notifications", get(api_notifications))
                 .route("/api/notifications/{id}", post(api_notification_action))
                 .route("/api/notifications/{id}/icon", get(api_notification_icon))
@@ -370,7 +381,19 @@ async fn api_put_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<Str
     if let Err(e) = writable(key) {
         return e.into_response();
     }
-    match app.store_file(&name, req.into_body()).await {
+    stored(app.store_file(&name, req.into_body()).await)
+}
+
+/// A file of the drag or paste under way, staged for the application that will take it.
+async fn api_stage_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>, req: Request) -> Response {
+    if let Err(e) = writable(key) {
+        return e.into_response();
+    }
+    stored(app.stage_file(&name, req.into_body()).await)
+}
+
+fn stored(result: Result<String, api::ApiError>) -> Response {
+    match result {
         Ok(name) => (StatusCode::CREATED, NO_STORE, Json(serde_json::json!({ "name": name }))).into_response(),
         Err(e) => e.into_response(),
     }
@@ -482,7 +505,8 @@ async fn api_set_clipboard(Extension(key): Extension<Key>, State(app): State<Arc
 /// manager's copy would; `202`.
 async fn api_clipboard_files(Extension(key): Extension<Key>, State(app): State<Arc<App>>, Json(msg): Json<serde_json::Value>) -> Response {
     let names: Vec<String> = msg.get("names").and_then(|n| n.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    match writable(key).and_then(|()| app.set_clipboard_files(&names)) {
+    let staged = msg.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
+    match writable(key).and_then(|()| app.set_clipboard_files(&names, staged)) {
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e) => e.into_response(),
     }
@@ -592,7 +616,7 @@ fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
     fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?.write_all(data)
 }
 
-fn random_hex(n: usize) -> String {
+pub(crate) fn random_hex(n: usize) -> String {
     use io::Read;
     let mut buf = vec![0u8; n];
     fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf)).expect("/dev/urandom");

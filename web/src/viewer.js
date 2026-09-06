@@ -688,15 +688,18 @@ export function createViewer() {
   }
 
   // --- files ---------------------------------------------------------------------------------
-  // Files dropped anywhere on the page go to the desktop's transfer folder, one after the other.
-  async function uploadFiles(list) {
+  // Files dropped anywhere on the page go to the desktop's transfer folder, one after the other. A drag
+  // onto the desktop or a paste into an application there stages them instead (`staged`): the application
+  // picks the folder, and the drop or the paste says how it went.
+  async function uploadFiles(list, staged = false) {
     const files = [...list], saved = [];
     for (const [index, file] of files.entries()) {
       store.set({ upload: { name: file.name, index: index + 1, count: files.length } });
-      try { saved.push((await uploadFile(file)).name); } catch {}
+      try { saved.push((await uploadFile(file, staged)).name); } catch {}
     }
-    store.set({ upload: null, filesRev: state().filesRev + 1 });
-    notice(saved.length ? `${saved.length} file${saved.length === 1 ? '' : 's'} saved to the desktop's transfer folder` : 'upload failed');
+    store.set({ upload: null, filesRev: state().filesRev + (staged ? 0 : 1) });
+    if (!staged) notice(saved.length ? `${saved.length} file${saved.length === 1 ? '' : 's'} saved to the desktop's transfer folder` : 'upload failed');
+    else if (saved.length < files.length) notice('upload failed');
     return saved; // the names they got there
   }
   document.addEventListener('dragover', e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
@@ -721,7 +724,7 @@ export function createViewer() {
     dragging = 'dropping';
     onPointerMove(e);
     const files = e.dataTransfer.files;
-    const names = await uploadFiles(files);
+    const names = await uploadFiles(files, true);
     drag(names.length === files.length ? { op: 'drop', names } : { op: 'cancel' });
     dragging = false;
   }
@@ -791,12 +794,12 @@ export function createViewer() {
     if (image || files.length) {
       // The user's chord is dropped (its modifier may go up before the upload is done); once the picture, or
       // the files, are on the desktop clipboard the same chord is pressed through the API, and not at all
-      // if the upload failed. Files go to the transfer folder first and the clipboard then names them there.
+      // if the upload failed. Files are staged first and the clipboard then names them there.
       const chord = pendingPaste === KEYCODES.Insert ? 'shift+Insert' : 'ctrl+v';
       swallowKeyup = pendingPaste; pendingPaste = null; clearTimeout(pasteTimer);
       const put = image
         ? api('/api/clipboard', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: image, signal: AbortSignal.timeout(5000) })
-        : uploadFiles(files).then(names => (names.length === files.length ? clipboardFiles(names) : { ok: false })); // a file that didn't land isn't pasted, and the notice says what did
+        : uploadFiles(files, true).then(names => (names.length === files.length ? clipboardFiles(names, true) : { ok: false })); // a file that didn't land isn't pasted, and the notice says what did
       put.then(r => { if (r.ok) return api('/api/input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'key', keys: chord }) }); }).catch(() => {});
       return;
     }
