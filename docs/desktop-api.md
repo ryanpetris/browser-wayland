@@ -37,7 +37,9 @@ toplevel data or the X11 surface, geometry from the space (or the saved position
 window), states from the acked xdg state or the X11 flags, `focused` from `State::active`, the pid from
 the client's socket credentials or `_NET_WM_PID`, `icon` from the name the client set through
 xdg-toplevel-icon (its picture, or the pixels it set instead, or its launcher's icon by app id, is at
-`GET /api/windows/{id}/icon`), `content` from content-type-v1 (`photo`, `video`, `game`, else `null`),
+`GET /api/windows/{id}/icon`; the icon global is created but not offered for now, since Smithay 0.7.0
+removes the wrong shm destruction hook and kills a client that destroys its icon before the buffer, as
+Chromium 152 does, so icons come from launchers until the release with the upstream fix), `content` from content-type-v1 (`photo`, `video`, `game`, else `null`),
 `updated_ms` from a per-window `LastCommit` cell set
 in the commit handler (also for minimized windows and for a window whose popup committed). `windows()`
 walks the space bottom to top, skipping X11 override-redirect surfaces, then the minimized list.

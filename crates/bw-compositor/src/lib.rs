@@ -379,7 +379,15 @@ impl State {
             alpha_modifier_state: AlphaModifierState::new::<State>(&dh),
             xdg_activation_state: XdgActivationState::new::<State>(&dh),
             xdg_foreign_state: XdgForeignState::new::<State>(&dh),
-            xdg_toplevel_icon_state: XdgToplevelIconManager::new::<State>(&dh),
+            xdg_toplevel_icon_state: {
+                // Not offered for now: Smithay 0.7.0 removes the wrong shm destruction hook (its
+                // remove_destruction_hook drops the hook whose id differs), so an icon destroyed before
+                // its buffer, as Chromium does, has an error posted on a dead object and the client is
+                // killed without a word. Fixed upstream; the global comes back with the release that has it.
+                let icons = XdgToplevelIconManager::new::<State>(&dh);
+                dh.remove_global::<State>(icons.global());
+                icons
+            },
             fifo_state: FifoManagerState::new::<State>(&dh),
             commit_timing_state: CommitTimingManagerState::new::<State>(&dh),
             content_type_state: ContentTypeState::new::<State>(&dh),
