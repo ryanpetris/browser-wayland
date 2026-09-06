@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use bw_core::{ControlMsg, ControlOp, Event, Snapshot, SnapshotError, WindowInfo};
+use bw_core::{ControlMsg, ControlOp, Event, Snapshot, SnapshotError, SnapshotSizing, WindowInfo};
 use smithay::{
     backend::{
         allocator::Fourcc,
@@ -204,22 +204,24 @@ impl State {
     }
 
     /// One window (its xdg geometry, popups included, transparent where it doesn't paint) or the whole
-    /// output, at `scale` × the output scale. Renders offscreen; the stream is untouched.
-    pub fn snapshot(&mut self, id: Option<u64>, scale: f64) -> Result<Snapshot, SnapshotError> {
+    /// output, sized in image pixels. Renders offscreen; the stream is untouched.
+    pub fn snapshot(&mut self, id: Option<u64>, sizing: SnapshotSizing) -> Result<Snapshot, SnapshotError> {
         let result = match id {
             Some(id) => {
                 let window = self.window_by_id(id).ok_or(SnapshotError::NoSuchWindow)?;
-                let scale = scale * self.geometry.scale;
                 let geo = window.geometry();
-                let size = geo.size.to_f64().to_physical(scale).to_i32_round();
+                if geo.size.w <= 0 || geo.size.h <= 0 { return Err(SnapshotError::Unavailable("window has no capture dimensions yet")); }
+                let (width, height, ratio) = sizing.resolve(geo.size.w as f64 * self.geometry.scale, geo.size.h as f64 * self.geometry.scale).map_err(SnapshotError::InvalidSize)?;
+                let scale = ratio * self.geometry.scale;
+                let size = Size::from((width, height));
                 let loc = smithay::utils::Point::<i32, smithay::utils::Logical>::from((-geo.loc.x, -geo.loc.y)).to_f64().to_physical(scale).to_i32_round();
                 let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = window.render_elements(&mut self.gpu.renderer, loc, Scale::from(scale), 1.0);
                 readback(&mut self.gpu.renderer, &elements, size, scale, [0.0; 4])
             }
             None => {
-                // the mode is the stream's size, so scale 1 gives exactly what the viewer sees
-                let mode = self.output.current_mode().map(|m| m.size).unwrap_or_default();
-                let size = Size::from(((mode.w as f64 * scale).round() as i32, (mode.h as f64 * scale).round() as i32));
+                let mode = self.output.current_mode().map(|m| m.size).ok_or(SnapshotError::Unavailable("output has no active mode"))?;
+                let (width, height, scale) = sizing.resolve(mode.w as f64, mode.h as f64).map_err(SnapshotError::InvalidSize)?;
+                let size = Size::from((width, height));
                 let elements = self.output_elements(scale * self.geometry.scale);
                 readback(&mut self.gpu.renderer, &elements, size, scale * self.geometry.scale, crate::render::CLEAR)
             }

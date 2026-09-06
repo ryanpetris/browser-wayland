@@ -19,8 +19,12 @@ export const WINDOW = new URLSearchParams(location.search).get('window');
 
 /// fetch() with the bearer token.
 export const api = (path, init = {}) => fetch(path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${TOKEN}` } });
-export const snapshotUrl = (id, scale = 1) => `${id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`}?scale=${scale}`;
-export const snapshot = async (id, scale = 1) => (await api(snapshotUrl(id, scale))).blob();
+export const snapshotUrl = (id, sizing = {}) => `${id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`}?${new URLSearchParams(typeof sizing === 'number' ? { scale: sizing } : sizing)}`;
+export const snapshot = async (id, sizing = {}) => {
+  const response = await api(snapshotUrl(id, sizing));
+  if (!response.ok) throw new Error(await response.text());
+  return response.blob();
+};
 export const elementsOf = async id => (await api(`/api/windows/${id}/elements`)).json();
 export const applications = async () => (await api('/api/applications')).json();
 export const control = body => api('/api/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -64,8 +68,8 @@ export const notificationIcon = id => api(`/api/notifications/${id}/icon`).then(
 // The server renders one snapshot at a time (429 otherwise): thumbnails are fetched one by one, and
 // one nobody wants any more by its turn (`wanted()` false) is skipped.
 let queue = Promise.resolve();
-export const queuedSnapshot = (id, scale, wanted = () => true) => {
-  const run = () => (wanted() ? snapshot(id, scale) : null);
+export const queuedSnapshot = (id, sizing, wanted = () => true) => {
+  const run = () => (wanted() ? snapshot(id, sizing) : null);
   return (queue = queue.then(run, run));
 };
 

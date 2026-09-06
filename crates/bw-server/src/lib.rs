@@ -118,7 +118,7 @@ pub struct App {
     cam_dead: std::sync::atomic::AtomicBool,
     /// Event senders of the window-stream sessions (cursor, clipboard, window list go to them too).
     window_viewers: Mutex<HashMap<u64, mpsc::Sender<Bytes>>>,
-    snapshot_lock: tokio::sync::Semaphore,
+    snapshot_lock: Arc<tokio::sync::Semaphore>,
     /// Open desktop notifications by id (`notify.rs`), the next id, and the bus we serve them on.
     notifications: Mutex<HashMap<u32, notify::Open>>,
     next_notification: std::sync::atomic::AtomicU32,
@@ -209,7 +209,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         rtc,
         cam_dead: Default::default(),
         window_viewers: Mutex::default(),
-        snapshot_lock: tokio::sync::Semaphore::new(1),
+        snapshot_lock: Arc::new(tokio::sync::Semaphore::new(1)),
         notifications: Mutex::default(),
         next_notification: std::sync::atomic::AtomicU32::new(1),
         notify_bus: std::sync::OnceLock::new(),
@@ -255,7 +255,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
                 .route("/api/clipboard", get(api_clipboard).put(api_set_clipboard))
                 .route("/api/clipboard/files", post(api_clipboard_files))
                 .route("/api/clipboard/files/{index}", get(api_clipboard_file))
-                .nest_service("/mcp", mcp_service(app.clone()))
+                .nest("/mcp", Router::new().fallback_service(mcp_service(app.clone())).layer(middleware::from_fn(mcp::validate_capture_body)))
                 .layer(middleware::from_fn_with_state(app.clone(), bearer)),
         )
         .route("/skill/SKILL.md", get(|| async { markdown(mcp::SKILL) }))
@@ -370,10 +370,6 @@ async fn api_windows(State(app): State<Arc<App>>) -> Response {
     (NO_STORE, Json(app.windows())).into_response()
 }
 
-fn scale_of(q: &HashMap<String, String>) -> f64 {
-    q.get("scale").and_then(|s| s.parse().ok()).unwrap_or(1.0)
-}
-
 fn png(result: Result<Vec<u8>, ApiError>) -> Response {
     match result {
         Ok(bytes) => ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "no-store")], bytes).into_response(),
@@ -381,12 +377,12 @@ fn png(result: Result<Vec<u8>, ApiError>) -> Response {
     }
 }
 
-async fn api_window_snapshot(UrlPath(id): UrlPath<u64>, Query(q): Query<HashMap<String, String>>, State(app): State<Arc<App>>) -> Response {
-    png(app.snapshot(Some(id), scale_of(&q)).await)
+async fn api_window_snapshot(UrlPath(id): UrlPath<u64>, Query(sizing): Query<bw_core::SnapshotSizing>, State(app): State<Arc<App>>) -> Response {
+    png(app.snapshot(Some(id), sizing).await)
 }
 
-async fn api_screenshot(Query(q): Query<HashMap<String, String>>, State(app): State<Arc<App>>) -> Response {
-    png(app.snapshot(None, scale_of(&q)).await)
+async fn api_screenshot(Query(sizing): Query<bw_core::SnapshotSizing>, State(app): State<Arc<App>>) -> Response {
+    png(app.snapshot(None, sizing).await)
 }
 
 async fn api_applications(State(app): State<Arc<App>>) -> Response {

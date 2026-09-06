@@ -17,9 +17,9 @@ of a window, and a small desktop UI in the viewer built on the same data. Wire f
 | Several viewers | Each session has its own encoder (codec and size of its own); one controller at a time drives input and sizes the output, the first control-token session or whoever took control last; the rest watch letterboxed. |
 | "Focused" | The compositor's intent: the window `focus_window` last activated (or that was just mapped), not the client-acknowledged xdg state, which lags a round trip and is wrong for a hung client. |
 | Update timestamps | Whole-second resolution. It is part of the diffed list, so finer resolution would turn a 60 fps client into sixty lists a second. |
-| Snapshot content | The window's xdg geometry (shadows clipped), popups included, minimized windows included, rendered offscreen at `scale` × output scale. The full screenshot builds the output's elements itself (`output_elements`) at the same kind of scale. |
+| Snapshot content | The window's xdg geometry (shadows clipped), popups included, minimized windows included, rendered offscreen with uniform scaling to the requested image dimensions. The full screenshot builds the output's elements itself (`output_elements`). |
 | Snapshot format | PNG, straight alpha, encoded on the server's blocking pool; the compositor only renders and reads back. JPEG/WebP later if size matters. |
-| Concurrency | One snapshot in flight; more get `429`. A queued request can't be cancelled once it is on the compositor's channel. |
+| Concurrency | One capture or PNG encode in flight; more get `429`. The slot remains held through queued capture and blocking encoding even if the caller cancels. |
 | Elements | Behind `--elements`; read live from AT-SPI per request, never cached; the compositor is not involved beyond exporting the geometry offset, the open popups and its own decorations. |
 
 ## One implementation, several fronts
@@ -29,6 +29,61 @@ each returning a typed result or an `ApiError` (disabled, not found, busy, unava
 routes in `lib.rs` parse and serialize; the MCP tools in `mcp.rs` do the same for an agent; both sit
 behind one bearer middleware. Nothing that talks to the compositor lives in a handler, so the two
 fronts cannot drift. See [mcp.md](mcp.md).
+
+## Screenshot sizing
+
+HTTP `/api/screenshot.png`, `/api/windows/{id}/snapshot.png`, and MCP `screenshot`
+and `snapshot` share one optional sizing contract. Without sizing, captures use
+native dimensions. Supply at most one of `width`, `height`, or `percentage`.
+Width and height are whole output-image pixels from 1 through 16384, independent
+of compositor logical coordinates. The other dimension follows the source aspect
+ratio. `percentage=50` halves native width and height; percentages must be finite,
+greater than zero, and at most 200. Every sizing form is limited to twice the native
+width and height.
+
+Dimensions round to the nearest integer, with half pixels rounded up and a minimum
+of one pixel per side. A result may not exceed 16384 pixels per side or 67,108,864 pixels
+in total. Values whose scale cannot be represented are rejected. Source geometry and compositor scale are resolved on the compositor
+thread before rendering or allocating capture buffers. Rounding, including the
+one-pixel minimum, can change the integer aspect ratio of very small images.
+Unknown fields, malformed values, repeated query fields, multiple sizing inputs, and out-of-range
+sizes return HTTP 400 or an MCP error. Authentication and PNG output are unchanged.
+
+The deprecated `scale` alias remains a multiplier: `scale=0.5` is equivalent to
+`percentage=50`, not `percentage=0.5`. It must be finite, greater than zero, and at
+most 2, and counts toward mutual exclusion. Invalid values are rejected rather
+than clamped. MCP's former automatic 1600-pixel fit is replaced by native sizing;
+callers wanting a bounded preview should explicitly request width or height.
+The browser snapshot helpers accept a sizing object, or a legacy numeric multiplier.
+
+List thumbnails use the same endpoint and sizing implementation as full-size
+captures. Their activity and visibility scheduling is covered separately by #39.
+Run `node web/checks/screenshot-sizing.mjs` from the repository root in the Docker rig after building the release
+binary to check both transports and record dimensions, PNG bytes, and debug-level
+capture and encoding timings.
+
+### Sizing measurements
+
+One software-rendered Docker run with two Foot windows produced the following
+scale-1 results. Capture time includes compositor dispatch, rendering and readback;
+encoding time includes blocking-pool dispatch. Times are the median of the HTTP and
+MCP samples at each size, not a throughput benchmark.
+
+| Target | Requested size | PNG dimensions | PNG bytes | Capture ms | Encode ms |
+|---|---|---|---:|---:|---:|
+| Desktop | Native | 1000×610 | 35087 | 3.812 | 0.678 |
+| Desktop | Width 64, list preview | 64×39 | 933 | 2.670 | 0.037 |
+| Desktop | Width 320, grid preview | 320×195 | 6717 | 2.133 | 0.129 |
+| Landscape window | Native | 636×351 | 10380 | 1.762 | 0.503 |
+| Landscape window | Width 64 | 64×35 | 448 | 0.787 | 0.064 |
+| Landscape window | Width 320 | 320×177 | 3587 | 0.831 | 0.271 |
+| Portrait window | Native | 300×598 | 11209 | 1.290 | 0.248 |
+| Portrait window | Width 64 | 64×128 | 1376 | 0.954 | 0.073 |
+| Portrait window | Width 320 | 320×638 | 13007 | 1.391 | 0.255 |
+
+The run checked 63 target/size combinations over both HTTP and MCP, including
+compositor scales 1, 1.5 and 2, portrait output, and 1×1 results. Preview dimensions
+use the same capture path; no grid UI or new thumbnail scheduler is implied.
 
 ## Window list
 

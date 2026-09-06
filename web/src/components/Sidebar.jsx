@@ -83,7 +83,7 @@ function WindowRow({ viewer, w, acts }) {
       onClick={() => acts && viewer.activate(w.id)}
       className={`group relative flex cursor-pointer items-center gap-2.5 border-b border-zinc-800/70 px-2.5 py-2 transition-colors hover:bg-zinc-800/60 ${w.focused ? 'bg-indigo-500/10' : ''} ${w.minimized ? 'opacity-60' : ''}`}
     >
-      <Thumb id={w.id} updated={w.updated_ms} />
+      <Thumb viewer={viewer} id={w.id} updated={w.updated_ms} width={w.w} height={w.h} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="size-2 shrink-0 rounded-full" style={{ background: windowColor(w) }} />
@@ -106,7 +106,7 @@ function WindowRow({ viewer, w, acts }) {
         <Action icon={Camera} label="Snapshot (PNG)" onClick={e => {
           e.stopPropagation(); e.currentTarget.blur();
           const tab = window.open('', '_blank'); // opened now, inside the click, so popup blockers allow it
-          snapshot(w.id, 1).then(b => { tab.location = URL.createObjectURL(b); }).catch(() => tab.close());
+          snapshot(w.id).then(b => { tab.location = URL.createObjectURL(b); }).catch(() => tab.close());
         }} />
         {acts && <Action icon={w.maximized ? Minimize2 : Maximize2} label={w.maximized ? 'Restore' : 'Maximize'} onClick={e => act(w.maximized ? 'unmaximize' : 'maximize', e)} />}
         {acts && <Action icon={w.minimized ? ChevronUp : ChevronDown} label={w.minimized ? 'Restore' : 'Minimize'} onClick={e => act(w.minimized ? 'activate' : 'minimize', e)} />}
@@ -165,19 +165,23 @@ function Action({ icon: Icon, label, onClick, className = '' }) {
 // A window's thumbnail, refetched when its content changed (updated_ms has whole-second resolution, so a
 // busy window costs at most one render per second). <img> can't send the bearer header, so the PNG comes
 // through fetch() and a blob URL; the old picture stays until the new one is in.
-function Thumb({ id, updated }) {
+function Thumb({ viewer, id, updated, width, height }) {
+  const scale = useStore(viewer.store, s => s.stream?.scale ?? 1);
   const [src, setSrc] = useState('');
   const url = useRef('');
   useEffect(() => {
     let live = true;
-    queuedSnapshot(id, 0.12, () => live).then(b => {
+    const axis = width / height > 64 / 40 ? 'width' : 'height';
+    const pixels = Math.ceil((axis === 'width' ? 64 : 40) * devicePixelRatio);
+    const native = Math.max(1, Math.floor((axis === 'width' ? width : height) * scale));
+    queuedSnapshot(id, { [axis]: Math.min(pixels, native) }, () => live).then(b => {
       if (!live || !b) return;
       if (url.current) URL.revokeObjectURL(url.current);
       url.current = URL.createObjectURL(b);
       setSrc(url.current);
     }).catch(() => {});
     return () => { live = false; };
-  }, [id, updated]);
+  }, [id, updated, width, height, scale]);
   useEffect(() => () => { if (url.current) URL.revokeObjectURL(url.current); }, []);
   return (
     <div className="h-10 w-16 shrink-0 overflow-hidden rounded bg-black/60 ring-1 ring-zinc-800">

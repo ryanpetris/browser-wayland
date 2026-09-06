@@ -127,7 +127,7 @@ impl State {
             Command::RequestFullFrame => self.force_full_frame = true,
             Command::ReleasePointerLock => self.release_pointer_lock(),
             Command::Control(msg) => self.control(msg),
-            Command::Snapshot { id, scale, reply } => (reply.0)(self.snapshot(id, scale)),
+            Command::Snapshot { id, sizing, reply } => (reply.0)(self.snapshot(id, sizing)),
             Command::WindowIcon { id, reply } => (reply.0)(self.window_icon(id)),
             Command::WindowStream { key, window, sink: Some(sink) } => self.start_window_stream(key, window, sink),
             Command::WindowStream { key, sink: None, .. } => self.stop_window_stream(key),

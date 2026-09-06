@@ -2,6 +2,8 @@
 //! Nothing here depends on Smithay or GStreamer.
 
 pub mod audio;
+pub mod snapshot;
+pub use snapshot::SnapshotSizing;
 
 use std::{any::Any, os::fd::OwnedFd, time::Duration};
 
@@ -58,8 +60,7 @@ pub enum Command {
     /// coordinates against the live geometry, keys through the keymap) so a whole click lands as one unit.
     Input(InputMsg),
     /// Render one window (or the whole output) to pixels and hand them to `reply`.
-    /// `scale` is relative to the output scale and only applies to windows.
-    Snapshot { id: Option<u64>, scale: f64, reply: SnapshotReply },
+    Snapshot { id: Option<u64>, sizing: SnapshotSizing, reply: SnapshotReply },
     /// The icon a window's client set as pixels (xdg-toplevel-icon), the largest; `NoSuchWindow` when it set none.
     WindowIcon { id: u64, reply: SnapshotReply },
     /// Encode one window into its own stream through `sink` (`None` stops the stream). `key` names
@@ -77,6 +78,8 @@ pub struct Snapshot {
 
 #[derive(Debug)]
 pub enum SnapshotError {
+    Unavailable(&'static str),
+    InvalidSize(&'static str),
     NoSuchWindow,
     /// A GL step failed or the size is out of range; the compositor logged it.
     Render(String),

@@ -22,6 +22,43 @@ use crate::{App, Key, api::{self, ApiError}};
 pub const SKILL: &str = include_str!("../../../skills/browser-wayland/SKILL.md");
 pub const REFERENCE: &str = include_str!("../../../skills/browser-wayland/reference.md");
 
+// rmcp stores tool arguments in a JSON map, which otherwise discards repeated keys.
+fn duplicate_arguments<T: serde::de::DeserializeOwned>(raw: &str) -> bool {
+    serde_json::from_str::<T>(raw).is_err()
+        && serde_json::from_str::<serde_json::Value>(raw).is_ok_and(|value| serde_json::from_value::<T>(value).is_ok())
+}
+
+// MCP uses single requests with object parameters; revisit this guard if rmcp adds batches.
+pub async fn validate_capture_body(request: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if request.method() != axum::http::Method::POST { return next.run(request).await; }
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, 4 << 20).await {
+        Ok(bytes) => bytes,
+        Err(_) => return ApiError::TooLarge.into_response(),
+    };
+    #[derive(Deserialize)]
+    struct Call { method: Option<String>, params: Option<Args> }
+    #[derive(Deserialize)]
+    struct Args { name: Option<String>, arguments: Option<Box<serde_json::value::RawValue>> }
+    let call = match serde_json::from_slice::<Call>(&bytes) {
+        Ok(call) => call,
+        Err(_) => return ApiError::InvalidSize("duplicate or malformed MCP request fields").into_response(),
+    };
+    if let Call { method, params: Some(args) } = call
+        && method.as_deref() == Some("tools/call")
+        && let Some(raw) = args.arguments
+    {
+        let duplicate = match args.name.as_deref() {
+            Some("screenshot") => duplicate_arguments::<ScreenshotArgs>(raw.get()),
+            Some("snapshot") => duplicate_arguments::<SnapshotArgs>(raw.get()),
+            _ => false,
+        };
+        if duplicate { return ApiError::InvalidSize("duplicate screenshot sizing arguments").into_response(); }
+    }
+    next.run(axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes))).await
+}
+
 #[derive(Clone)]
 pub struct Mcp {
     app: Arc<App>,
@@ -34,19 +71,28 @@ pub struct WindowArg {
     pub window: u64,
 }
 
-#[derive(Deserialize, JsonSchema)]
-pub struct ScreenshotArgs {
-    /// 0.05..=2 relative to the output scale; default fits the long side in about 1600 px.
-    pub scale: Option<f64>,
-}
+type ScreenshotArgs = bw_core::SnapshotSizing;
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SnapshotArgs {
     /// Window id from `windows`.
     pub window: u64,
-    /// 0.05..=2 relative to the output scale; default fits the long side in about 1600 px.
-    #[serde(default)]
-    pub scale: Option<f64>,
+    #[serde(flatten)]
+    pub sizing: bw_core::SnapshotSizing,
+}
+
+#[cfg(test)]
+mod sizing_tests {
+    use super::*;
+
+    #[test]
+    fn window_arguments_reject_unknown_and_repeated_sizing() {
+        assert!(serde_json::from_str::<SnapshotArgs>(r#"{"window":1,"width":64}"#).is_ok());
+        for raw in [r#"{"window":1,"widht":64}"#, r#"{"window":1,"width":32,"width":64}"#, r#"{"window":1,"percentage":null,"percentage":50}"#] {
+            assert!(serde_json::from_str::<SnapshotArgs>(raw).is_err(), "{raw}");
+        }
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -186,8 +232,8 @@ impl Mcp {
         done(self.acting(parts).and_then(|()| self.app.input(msg)))
     }
 
-    async fn png(&self, id: Option<u64>, scale: f64) -> ToolResult {
-        match self.app.snapshot(id, scale).await {
+    async fn png(&self, id: Option<u64>, sizing: bw_core::SnapshotSizing) -> ToolResult {
+        match self.app.snapshot(id, sizing).await {
             Ok(png) => Ok(CallToolResult::success(vec![ContentBlock::image(base64::engine::general_purpose::STANDARD.encode(png), "image/png")])),
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())])),
         }
@@ -209,16 +255,14 @@ impl Mcp {
         }
     }
 
-    #[tool(description = "PNG of the whole output (panels included, pointer excluded), scaled to fit about 1600 px unless `scale` is given.")]
-    async fn screenshot(&self, Parameters(ScreenshotArgs { scale }): Parameters<ScreenshotArgs>) -> ToolResult {
-        let scale = scale.unwrap_or_else(|| self.app.fit_scale(None, 1600.0));
-        self.png(None, scale).await
+    #[tool(description = "PNG of the whole output (panels included, pointer excluded), native size by default. Supply at most one of width, height, percentage, or deprecated scale.")]
+    async fn screenshot(&self, Parameters(sizing): Parameters<ScreenshotArgs>) -> ToolResult {
+        self.png(None, sizing).await
     }
 
-    #[tool(description = "PNG of one window's own buffers (works for covered and minimized windows), popups included.")]
-    async fn snapshot(&self, Parameters(SnapshotArgs { window, scale }): Parameters<SnapshotArgs>) -> ToolResult {
-        let scale = scale.unwrap_or_else(|| self.app.fit_scale(Some(window), 1600.0));
-        self.png(Some(window), scale).await
+    #[tool(description = "PNG of one window's own buffers (works for covered and minimized windows), popups included. Native size by default; supply at most one of width, height, percentage, or deprecated scale.")]
+    async fn snapshot(&self, Parameters(SnapshotArgs { window, sizing }): Parameters<SnapshotArgs>) -> ToolResult {
+        self.png(Some(window), sizing).await
     }
 
     #[tool(description = "Change a window's state: activate (raise, focus, restore), close, minimize, unminimize, maximize, unmaximize, fullscreen, unfullscreen. Fire-and-forget; check `windows` afterwards.")]

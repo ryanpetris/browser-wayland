@@ -24,8 +24,8 @@ const ROUTES: &str = "\
 | `POST /api/notifications/{id}` | `{\"action\": \"default\" \\| \"<key>\"}`, or `{}` to dismiss | click, invoke an action of, or dismiss a notification; `202`, `404` |
 | `GET /api/notifications/{id}/icon` | | the notification's picture (the application's, else its launcher's); `404` none |
 | `GET /api/windows/{id}/elements` | | **Elements**; `501` without `--elements`, `503` tree unreadable, `404` unknown window |
-| `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
-| `GET /api/screenshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the whole output; `429`, `500`, `503` as for a window |
+| `GET /api/windows/{id}/snapshot.png` | one optional `width`, `height`, `percentage`, or legacy `scale`; default native | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
+| `GET /api/screenshot.png` | same sizing as window snapshots; default native | PNG of the whole output; `429`, `500`, `503` as for a window |
 | `POST /api/control` | **Control** | `202`; fire-and-forget; `404` unknown application (`launch`); `503` compositor gone |
 | `POST /api/input` | **Input** | `202`, with `{\"warning\": …}` when a click aims past the desktop's edge at an X11 window (Xwayland pins it to the edge); `404` unknown window; `503` compositor gone |
 | `GET /api/clipboard` | | what an application last copied: `text/plain`, `image/png`, or `text/uri-list` (files copied in a file manager); `204` before any |

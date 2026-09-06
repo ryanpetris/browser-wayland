@@ -129,7 +129,7 @@ curl -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
      https://host:8443/api/control -d '{"id":3,"op":"minimize"}'
 curl -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
      https://host:8443/api/control -d '{"op":"spawn","cmd":"firefox"}'
-curl -o w.png -H "Authorization: Bearer $T" 'https://host:8443/api/windows/3/snapshot.png?scale=0.5'
+curl -o w.png -H "Authorization: Bearer $T" 'https://host:8443/api/windows/3/snapshot.png?percentage=50'
 curl -o screen.png -H "Authorization: Bearer $T" https://host:8443/api/screenshot.png
 curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements      # needs --elements
 ```
@@ -139,8 +139,8 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `GET /api/windows` | JSON array of window objects (the list the viewer was last sent; `[]` before any). |
 | `GET /api/codecs` | JSON array of `{"codec", "hardware"}`: what this server encodes, in the order Auto prefers. |
 | `POST /api/control` | Body: a control message. `202 Accepted`; fire-and-forget. |
-| `GET /api/windows/{id}/snapshot.png?scale=` | PNG of that window. `scale` 0.05–2, relative to the output scale, default 1. `404` unknown id, `429` another snapshot is in flight, `500` the render failed (logged), `503` the compositor didn't answer within 2 s. |
-| `GET /api/screenshot.png?scale=` | PNG of the whole output (layers included, cursor excluded); `scale` as for a window; `429`, `500`, `503` as for a window. |
+| `GET /api/windows/{id}/snapshot.png` | PNG of that window. Optional `width`, `height`, or `percentage`, default native dimensions; [sizing limits and legacy scale](desktop-api.md#screenshot-sizing). `400` invalid sizing. `404` unknown id, `429` another snapshot is in flight, `500` the render failed (logged), `503` the compositor didn't answer within 2 s. |
+| `GET /api/screenshot.png` | PNG of the whole output (layers included, cursor excluded); sizing as for a window; `400`, `429`, `500`, `503` as for a window. |
 | `POST /api/input` | Body: an input message (below). `202`, with `{"warning": …}` when a click aims past the desktop's edge at an X11 window; `404` unknown window; `503` compositor gone. |
 | `GET /api/files` | The transfer folder's files (`name`, `size`, `modified_ms`), newest first. |
 | `PUT /api/files/{name}` | The body is saved in the folder under `name` (streamed; a taken name gets ` (2)` before its extension). `201` with `{"name": "…"}`. |
@@ -258,7 +258,7 @@ is the entry's icon as SVG or PNG, from the icon themes (hicolor first) or `pixm
 ## Browser console
 
 `window.bw()` returns viewer statistics. `bw.windows()`, `bw.activate(id)`, `bw.control({...})`,
-`bw.spawn(cmd)`, `bw.launch(app)`, `bw.quit()`, `bw.snapshot(id, scale)` (a `Blob`) and `bw.elements(id)` wrap the
+`bw.spawn(cmd)`, `bw.launch(app)`, `bw.quit()`, `bw.snapshot(id, sizing)` (a `Blob`) and `bw.elements(id)` wrap the
 same messages and routes.
 
 The Docker rig can run `node web/checks/rtc-peer.mjs` for peer disposal and signaling callbacks,

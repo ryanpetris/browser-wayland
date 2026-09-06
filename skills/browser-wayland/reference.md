@@ -27,8 +27,8 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `POST /api/notifications/{id}` | `{"action": "default" \| "<key>"}`, or `{}` to dismiss | click, invoke an action of, or dismiss a notification; `202`, `404` |
 | `GET /api/notifications/{id}/icon` | | the notification's picture (the application's, else its launcher's); `404` none |
 | `GET /api/windows/{id}/elements` | | **Elements**; `501` without `--elements`, `503` tree unreadable, `404` unknown window |
-| `GET /api/windows/{id}/snapshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
-| `GET /api/screenshot.png?scale=` | `scale` 0.05–2, default 1 | PNG of the whole output; `429`, `500`, `503` as for a window |
+| `GET /api/windows/{id}/snapshot.png` | one optional `width`, `height`, `percentage`, or legacy `scale`; default native | PNG of the window; `404`, `429` another snapshot in flight, `500` render failed, `503` |
+| `GET /api/screenshot.png` | same sizing as window snapshots; default native | PNG of the whole output; `429`, `500`, `503` as for a window |
 | `POST /api/control` | **Control** | `202`; fire-and-forget; `404` unknown application (`launch`); `503` compositor gone |
 | `POST /api/input` | **Input** | `202`, with `{"warning": …}` when a click aims past the desktop's edge at an X11 window (Xwayland pins it to the edge); `404` unknown window; `503` compositor gone |
 | `GET /api/clipboard` | | what an application last copied: `text/plain`, `image/png`, or `text/uri-list` (files copied in a file manager); `204` before any |
@@ -1111,14 +1111,39 @@ Resize a floating window's geometry to w h (logical px).
 
 ### `screenshot`
 
-PNG of the whole output (panels included, pointer excluded), scaled to fit about 1600 px unless `scale` is given.
+PNG of the whole output (panels included, pointer excluded), native size by default. Supply at most one of width, height, percentage, or deprecated scale.
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
   "properties": {
+    "height": {
+      "description": "Output height in whole pixels, 1..=16384 and at most twice the native height. Width follows the source aspect ratio.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "percentage": {
+      "description": "Percentage of native dimensions, greater than zero and at most 200.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
     "scale": {
-      "description": "0.05..=2 relative to the output scale; default fits the long side in about 1600 px.",
+      "description": "Deprecated multiplier alias for percentage / 100, greater than zero and at most 2.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "width": {
+      "description": "Output width in whole pixels, 1..=16384 and at most twice the native width. Height follows the source aspect ratio.",
       "format": "double",
       "type": [
         "number",
@@ -1157,15 +1182,39 @@ Scroll the wheel under the pointer by lines; positive dy scrolls down.
 
 ### `snapshot`
 
-PNG of one window's own buffers (works for covered and minimized windows), popups included.
+PNG of one window's own buffers (works for covered and minimized windows), popups included. Native size by default; supply at most one of width, height, percentage, or deprecated scale.
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
   "properties": {
+    "height": {
+      "description": "Output height in whole pixels, 1..=16384 and at most twice the native height. Width follows the source aspect ratio.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "percentage": {
+      "description": "Percentage of native dimensions, greater than zero and at most 200.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
     "scale": {
-      "default": null,
-      "description": "0.05..=2 relative to the output scale; default fits the long side in about 1600 px.",
+      "description": "Deprecated multiplier alias for percentage / 100, greater than zero and at most 2.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "width": {
+      "description": "Output width in whole pixels, 1..=16384 and at most twice the native width. Height follows the source aspect ratio.",
       "format": "double",
       "type": [
         "number",

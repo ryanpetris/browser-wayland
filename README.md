@@ -256,7 +256,7 @@ curl -s -H "Authorization: Bearer $T" http://host:8443/api/windows | jq        #
 curl -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
      http://host:8443/api/control -d '{"id":3,"op":"minimize"}'                # act on a window
 curl -X POST ... /api/control -d '{"op":"spawn","cmd":"firefox"}'             # start a program
-curl -o w.png -H "Authorization: Bearer $T" 'http://host:8443/api/windows/3/snapshot.png?scale=0.5'
+curl -o w.png -H "Authorization: Bearer $T" 'http://host:8443/api/windows/3/snapshot.png?percentage=50'
 curl -o screen.png -H "Authorization: Bearer $T" http://host:8443/api/screenshot.png
 curl -s -H "Authorization: Bearer $T" http://host:8443/api/windows/3/elements | jq   # with --elements
 curl -X POST ... /api/input -d '{"type":"click","window":3,"x":549,"y":47}'  # click an element
@@ -273,8 +273,9 @@ application draws its own), its stacking index `z` (`null` while minimized), `ma
 with `sh -c` in the same environment as `--exec`), `launch` (`app`, an id from `GET /api/applications`,
 the installed `.desktop` launchers, whose icons are at `/api/applications/{id}/icon`) and `quit`, which
 ends browser-wayland. Requests are fire-and-forget; unknown ids are ignored.
-Snapshots are lossless PNGs of a window's own buffers, so they include covered and minimized windows;
-`scale` (0.05 to 2) is relative to the output scale.
+Snapshots are lossless PNGs of a window's own buffers, so they include covered and minimized windows.
+Omitted sizing returns native dimensions. Supply one of `width`, `height`, or
+`percentage`; see [sizing limits and migration](docs/desktop-api.md#screenshot-sizing).
 
 With `--elements`, `/api/windows/{id}/elements` lists a window's UI elements (buttons, links, text fields,
 tabs, menu items, …) with role, name and rectangle relative to the window, so a script or an agent can

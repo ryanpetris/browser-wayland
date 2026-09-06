@@ -25,6 +25,7 @@ use crate::{App, apps, elements::Page};
 
 #[derive(Debug)]
 pub enum ApiError {
+    InvalidSize(&'static str),
     /// The feature is switched off (`--elements`).
     Disabled(&'static str),
     /// The presented token isn't the current one (rotation).
@@ -50,6 +51,7 @@ pub enum ApiError {
 impl ApiError {
     pub fn status(&self) -> StatusCode {
         match self {
+            ApiError::InvalidSize(_) => StatusCode::BAD_REQUEST,
             ApiError::Disabled(_) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
             ApiError::Forbidden => StatusCode::FORBIDDEN,
@@ -65,6 +67,7 @@ impl ApiError {
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ApiError::InvalidSize(why) => f.write_str(why),
             ApiError::Disabled(what) => f.write_str(what),
             ApiError::Unauthorized => f.write_str("not the current token"),
             ApiError::Forbidden => f.write_str("read-only token"),
@@ -112,35 +115,34 @@ impl App {
         }
     }
 
-    /// PNG of one window (`scale` 0.05..=2 relative to the output scale) or, with `None`, of the whole output.
-    pub async fn snapshot(&self, id: Option<u64>, scale: f64) -> Result<Vec<u8>, ApiError> {
+    /// PNG of one window or, with `None`, the whole output. Omitted sizing is native.
+    pub async fn snapshot(&self, id: Option<u64>, sizing: bw_core::SnapshotSizing) -> Result<Vec<u8>, ApiError> {
+        sizing.validate().map_err(ApiError::InvalidSize)?;
         // One at a time: the compositor renders these on its own thread and a queued request can't be cancelled.
-        let Ok(_busy) = self.snapshot_lock.try_acquire() else { return Err(ApiError::Busy) };
-        let scale = scale.clamp(0.05, 2.0);
-        let (tx, rx) = tokio::sync::oneshot::channel::<Result<Snapshot, SnapshotError>>();
+        let Ok(busy) = self.snapshot_lock.clone().try_acquire_owned() else { return Err(ApiError::Busy) };
+        let (tx, rx) = tokio::sync::oneshot::channel::<(Result<Snapshot, SnapshotError>, tokio::sync::OwnedSemaphorePermit)>();
         let reply = SnapshotReply(Box::new(move |s| {
-            let _ = tx.send(s);
+            let _ = tx.send((s, busy));
         }));
-        self.send(Command::Snapshot { id, scale, reply })?;
-        let snap = match tokio::time::timeout(Duration::from_secs(2), rx).await {
-            Ok(Ok(Ok(s))) => s,
-            Ok(Ok(Err(SnapshotError::NoSuchWindow))) => return Err(ApiError::NotFound),
-            Ok(Ok(Err(SnapshotError::Render(e)))) => return Err(ApiError::Internal(e)),
+        let started = std::time::Instant::now();
+        self.send(Command::Snapshot { id, sizing, reply })?;
+        let (result, _busy) = match tokio::time::timeout(Duration::from_secs(2), rx).await {
+            Ok(Ok(result)) => result,
             _ => return Err(ApiError::Unavailable("the compositor didn't answer".into())),
         };
-        encode_png(snap).await
-    }
-
-    /// The snapshot scale that fits a window's (or, with `None`, the output's) long side in `px` device pixels; at most 1.
-    pub fn fit_scale(&self, id: Option<u64>, px: f64) -> f64 {
-        let long_side = match id {
-            Some(id) => self.window(id).map(|(w, scale)| w.w.max(w.h) as f64 * scale).ok(),
-            None => Some({
-                let out = self.viewers.lock().unwrap().output;
-                out.width_px.max(out.height_px) as f64
-            }),
+        let snap = match result {
+            Ok(s) => s,
+            Err(SnapshotError::Unavailable(why)) => return Err(ApiError::Unavailable(why.into())),
+            Err(SnapshotError::InvalidSize(why)) => return Err(ApiError::InvalidSize(why)),
+            Err(SnapshotError::NoSuchWindow) => return Err(ApiError::NotFound),
+            Err(SnapshotError::Render(e)) => return Err(ApiError::Internal(e)),
         };
-        long_side.map_or(1.0, |side| (px / side.max(1.0)).min(1.0))
+        let capture_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let (width, height) = (snap.width, snap.height);
+        let encoding = std::time::Instant::now();
+        let png = encode_png_with_permit(snap, Some(_busy)).await?;
+        tracing::debug!(?id, width, height, bytes = png.len(), capture_ms, encode_ms = encoding.elapsed().as_secs_f64() * 1000.0, "snapshot completed");
+        Ok(png)
     }
 
     /// What was last put on the clipboard, by an application, the browser or the API: its mime and bytes.
@@ -217,6 +219,8 @@ impl App {
         self.send(Command::WindowIcon { id, reply })?;
         match tokio::time::timeout(Duration::from_secs(2), rx).await {
             Ok(Ok(Ok(snap))) => Ok((encode_png(snap).await?, "image/png")),
+            Ok(Ok(Err(SnapshotError::Unavailable(why)))) => Err(ApiError::Unavailable(why.into())),
+            Ok(Ok(Err(SnapshotError::InvalidSize(why)))) => Err(ApiError::InvalidSize(why)),
             Ok(Ok(Err(SnapshotError::NoSuchWindow))) => read_icon(move || apps::launcher_icon(&app_id)).await?.ok_or(ApiError::NotFound),
             Ok(Ok(Err(SnapshotError::Render(e)))) => Err(ApiError::Internal(e)),
             _ => Err(ApiError::Unavailable("the compositor didn't answer".into())),
@@ -249,7 +253,12 @@ async fn read_icon(find: impl FnOnce() -> Option<(std::path::PathBuf, &'static s
 
 /// Straight-alpha RGBA rows to PNG, on the blocking pool.
 pub(crate) async fn encode_png(snap: Snapshot) -> Result<Vec<u8>, ApiError> {
+    encode_png_with_permit(snap, None).await
+}
+
+async fn encode_png_with_permit(snap: Snapshot, busy: Option<tokio::sync::OwnedSemaphorePermit>) -> Result<Vec<u8>, ApiError> {
     let png = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+        let _busy = busy;
         let mut out = Vec::new();
         let mut enc = png::Encoder::new(&mut out, snap.width, snap.height);
         enc.set_color(png::ColorType::Rgba);
@@ -262,5 +271,29 @@ pub(crate) async fn encode_png(snap: Snapshot) -> Result<Vec<u8>, ApiError> {
         Ok(Ok(bytes)) => Ok(bytes),
         Ok(Err(e)) => Err(ApiError::Internal(format!("png: {e}"))),
         Err(e) => Err(ApiError::Internal(format!("png: {e}"))),
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_encoding_keeps_capture_slot_until_blocking_work_finishes() {
+        tokio::runtime::Builder::new_current_thread().enable_all().max_blocking_threads(1).build().unwrap().block_on(async {
+            let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let (release, blocked) = std::sync::mpsc::channel();
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || { started.send(()).unwrap(); blocked.recv().unwrap(); });
+            ready.await.unwrap();
+            let encoding = encode_png_with_permit(Snapshot { width: 1, height: 1, rgba: vec![0; 4] }, Some(permit));
+            assert!(tokio::time::timeout(Duration::from_millis(10), encoding).await.is_err());
+            let held = semaphore.try_acquire().is_err();
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            assert!(held, "cancelled request released its slot while PNG work was queued");
+            let _released = tokio::time::timeout(Duration::from_secs(2), semaphore.acquire()).await.unwrap().unwrap();
+        });
     }
 }

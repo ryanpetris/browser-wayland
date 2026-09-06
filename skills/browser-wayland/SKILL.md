@@ -39,8 +39,9 @@ curl -s -H "$H" https://host:8443/api/windows | jq
    correct rectangles too.
 5. **Take a snapshot when you need to see** (`GET /api/windows/{id}/snapshot.png`, tool `snapshot`;
    `/api/screenshot.png`, tool `screenshot`). Window snapshots are lossless PNGs of the window's own
-   buffers, so they work for covered and minimized windows; `scale` shrinks either kind (0.5 is usually
-   plenty for reading a layout). Prefer elements for finding things and snapshots for confirming.
+   buffers, so they work for covered and minimized windows; `percentage=50` halves either kind; `width` or `height` requests image pixels.
+   Omitted sizing returns native dimensions. Request a preview such as `percentage=25`
+   when full detail is unnecessary. Supply only one sizing parameter. Prefer elements for finding things and snapshots for confirming.
 
 ## Input details
 
@@ -82,11 +83,12 @@ curl -s -H "$H" https://host:8443/api/windows | jq
 
 | Status | Meaning | What to do |
 |---|---|---|
+| 400 | invalid screenshot sizing | supply one positive width, height or percentage within the documented limits |
 | 401 | missing or wrong bearer token | check `Authorization: Bearer` |
 | 403 | the token is the view-only one (`read-only token`) | it can list windows, read elements, take snapshots and read the clipboard, nothing else; ask for the control token |
 | 404 | no such window | the window closed; list again |
 | 429 | another snapshot is in flight | one at a time; retry after it returns |
-| 500 | the snapshot render failed, or the requested size is out of range (the body says which) | a retry only helps the former; lower `scale` for the latter |
+| 500 | the snapshot render failed | retry after checking the error |
 | 501 | the server runs without `--elements` | use snapshots instead |
 | 503 | the compositor or the accessibility bus didn't answer | retry once; if the body says there is no D-Bus session, elements are not available on this server |
 | 400, 415, 422 | the body wasn't JSON, lacked `Content-Type: application/json`, or had the wrong shape (plain-text message) | see `reference.md` for the shape |
