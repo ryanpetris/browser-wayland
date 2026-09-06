@@ -49,11 +49,18 @@ export const windowIcon = (id, key) => {
   return windowIcons.get(key);
 };
 
-// The transfer folder: list, upload (the final name comes back), download through a blob (no token in URLs), delete.
+// File requests carry this client's directory; bearer tokens stay out of URLs.
 const ok = r => (r.ok ? r : Promise.reject(new Error(`HTTP ${r.status}`)));
-export const files = async () => ok(await api('/api/files')).json();
-export const uploadFile = async (file, batch) => ok(await api(`/api/${batch ? `drop/${batch}` : 'files'}/${encodeURIComponent(file.name)}`, { method: 'PUT', body: file })).json();
-export const deleteFile = async name => ok(await api(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' }));
+const fileResult = async r => {
+  if (r.ok) return r.status === 204 ? null : r.json();
+  const body = await r.json().catch(() => ({}));
+  throw Object.assign(new Error(body.error || `HTTP ${r.status}`), { code: body.code, status: r.status });
+};
+const fileUrl = (name, path) => `/api/files/${encodeURIComponent(name)}?${new URLSearchParams({ path })}`;
+export const files = async (query, signal) => fileResult(await api(`/api/files?${new URLSearchParams(query)}`, { signal }));
+export const uploadFile = async (file, batch, path, signal) => fileResult(await api(batch ? `/api/drop/${batch}/${encodeURIComponent(file.name)}` : fileUrl(file.name, path), { method: 'PUT', body: file, signal }));
+export const deleteFile = async (name, path) => fileResult(await api(fileUrl(name, path), { method: 'DELETE' }));
+export const manageFile = async action => fileResult(await api('/api/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) }));
 // Saved under the name the server serves it as (a clipboard file may have changed since its name was shown).
 const download = async (path, name) => {
   const r = ok(await api(path));
@@ -62,7 +69,7 @@ const download = async (path, name) => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 };
-export const downloadFile = name => download(`/api/files/${encodeURIComponent(name)}`, name);
+export const downloadFile = (name, path) => download(fileUrl(name, path), name);
 
 // Files on the clipboard: put files of the transfer folder, or of a staged batch, there; fetch the i-th file copied in the desktop.
 export const clipboardFiles = (names, batch) => api('/api/clipboard/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names, batch }) });

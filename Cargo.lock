@@ -477,6 +477,7 @@ dependencies = [
  "calloop",
  "futures-util",
  "if-addrs",
+ "libc",
  "png",
  "rcgen",
  "rmcp",

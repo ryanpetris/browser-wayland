@@ -41,6 +41,8 @@ pub const MIXER_LEVELS: u8 = 0x10;
 pub const MIXER_ERROR: u8 = 0x11;
 /// `[SESSION][u64 id]`: this desktop connection, for conditional presentation handoff.
 pub const SESSION: u8 = 0x12;
+/// `[FILE_RESULT][JSON]`: a staged batch rescued to the transfer folder, with saved paths and failures.
+pub const FILE_RESULT: u8 = 0x13;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;

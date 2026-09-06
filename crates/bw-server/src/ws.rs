@@ -85,12 +85,8 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 let events = v.controller.and_then(|c| v.sessions.get(&c)).map(|s| s.events.clone());
                 let app = app.clone();
                 tokio::spawn(async move {
-                    let saved = taken || app.rescue(&batch).await.unwrap_or(false);
-                    let word = match (taken, saved) {
-                        (true, _) => protocol::success(&format!("Copied to {}", target.map_or("the desktop".to_string(), |id| apps::display_name(&id)))),
-                        (false, true) => protocol::notice("no application took the files; they are in the desktop's transfer folder"),
-                        (false, false) => protocol::notice("no application took the files, and they could not be saved to the transfer folder"),
-                    };
+                    if !taken { let _ = app.rescue(&batch).await; return; }
+                    let word = protocol::success(&format!("Copied to {}", target.map_or("the desktop".to_string(), |id| apps::display_name(&id))));
                     if let Some(events) = events {
                         let _ = events.try_send(word);
                     }
@@ -708,7 +704,7 @@ impl App {
             }
             ClientMsg::Control(m) if key == Key::Control => self.command_for(m).ok(),
             ClientMsg::SetClipboard(text) if key == Key::Control => Some(Command::SetClipboard { mime: api::TEXT.into(), data: text.into() }),
-            ClientMsg::Drag(d) if controls => Some(self.drag_command(d)),
+            ClientMsg::Drag(d) if controls => Some(self.drag_command(d, &v)),
             ClientMsg::Input(m) if controls => Some(Command::Input(m)),
             ClientMsg::Mixer(command) => { self.mixer_message(&mut v, id, command); None },
             ClientMsg::Mic(packet) if controls => {

@@ -300,8 +300,9 @@ impl Mcp {
         json(self.app.applications().await)
     }
 
-    #[tool(description = "The files in the desktop's transfer folder (what was dropped on the page, and what the desktop put there for download): name, size, modified_ms. GET /api/files/{name} downloads one.")]
-    async fn files(&self) -> ToolResult {
+    #[tool(description = "Control token required. The visible regular files in the desktop's transfer folder: name, size, modified_ms. GET /api/files/{name} downloads one.")]
+    async fn files(&self, Extension(parts): Extension<Parts>) -> ToolResult {
+        if let Err(e) = self.acting(&parts) { return done(Err(e)); }
         match self.app.files().await {
             Ok(list) => json(list),
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())])),
@@ -349,9 +350,10 @@ impl Mcp {
         self.input(&parts, InputMsg::Key { keys })
     }
 
-    #[tool(description = "The last text a desktop application copied to the clipboard (empty if none yet). An image says so; copied files are their file:// URIs; GET /api/clipboard returns the bytes.")]
-    fn clipboard_read(&self) -> ToolResult {
+    #[tool(description = "The last text a desktop application copied to the clipboard (empty if none yet). An image says so; copied files require a control token and are their file:// URIs; GET /api/clipboard returns the bytes.")]
+    fn clipboard_read(&self, Extension(parts): Extension<Parts>) -> ToolResult {
         let text = match self.app.clipboard() {
+            Some((mime, _)) if mime == api::URI_LIST && self.acting(&parts).is_err() => return done(Err(ApiError::Forbidden)),
             Some((mime, data)) if mime == api::PNG => format!("[{} bytes of {mime}; GET /api/clipboard returns them]", data.len()),
             Some((_, data)) => String::from_utf8_lossy(&data).into_owned(),
             None => String::new(),

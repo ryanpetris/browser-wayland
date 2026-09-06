@@ -18,10 +18,11 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `GET /api/applications` | | JSON array of **Application**: the installed launchers, for `launch` |
 | `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
 | `GET /api/windows/{id}/icon` | | the window's icon (its own, else its launcher's), SVG or PNG; `404` none |
-| `GET /api/files` | | JSON array of **File**: the transfer folder (dropped files, downloads), newest first |
-| `PUT /api/files/{name}` | the file's bytes | saved in the folder under `name`, or `name (2)` if taken; `201` with `{"name"}` |
-| `GET /api/files/{name}` | | the file, as an attachment; `404` |
-| `DELETE /api/files/{name}` | | `204`; `404` |
+| `GET /api/files` | optional **FileQuery** query | control token; pathless: legacy **File** array; with path: **FileListing** |
+| `PUT /api/files/{name}` | bytes; optional `path` query | control token; streaming upload with collision suffix; `201` **SavedFile** |
+| `GET /api/files/{name}` | optional `path` query | control token; regular file attachment |
+| `DELETE /api/files/{name}` | optional `path` query | control token; nonrecursive unlink; `204` |
+| `POST /api/files` | **FileAction** | control token; mkdir or rename without replacement; `201` **SavedFile** |
 | `PUT /api/drop/{batch}/{name}` | the file's bytes | staged in batch `batch` (a random id of the page's) for a drag or a paste onto the desktop, where the application picks the folder; the transfer folder is for uploads; `201` with `{"name": "…"}` |
 | `GET /api/notifications` | | JSON array of **Notification**: what applications reported and the viewers show |
 | `POST /api/notifications/{id}` | `{"action": "default" \| "<key>"}`, or `{}` to dismiss | click, invoke an action of, or dismiss a notification; `202`, `404` |
@@ -31,10 +32,10 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `GET /api/screenshot.png` | same sizing as window snapshots; default native | PNG of the whole output; `429`, `500`, `503` as for a window |
 | `POST /api/control` | **Control** | `202`; fire-and-forget; `404` unknown application (`launch`); `503` compositor gone |
 | `POST /api/input` | **Input** | `202`, with `{"warning": …}` when a click aims past the desktop's edge at an X11 window (Xwayland pins it to the edge); `404` unknown window; `503` compositor gone |
-| `GET /api/clipboard` | | what an application last copied: `text/plain`, `image/png`, or `text/uri-list` (files copied in a file manager); `204` before any |
+| `GET /api/clipboard` | | what an application last copied: `text/plain`, `image/png`, or `text/uri-list` (control token required for file lists); `204` before any |
 | `PUT /api/clipboard` | UTF-8 text body, a PNG with `Content-Type: image/png`, or `file://` URIs with `text/uri-list` | becomes the desktop clipboard; `202`; `413` over 1 MiB (text) or 16 MiB (PNG) |
 | `POST /api/clipboard/files` | `{"names": [...]}` from the transfer folder, or with `"batch"` from that staged batch | those files become the desktop clipboard, as a file manager's copy; `202` |
-| `GET /api/clipboard/files/{index}` | | the `index`th file on the desktop clipboard (a file manager's copy), as an attachment; `404` |
+| `GET /api/clipboard/files/{index}` | | control token; the `index`th file on the desktop clipboard, as an attachment; `404` |
 | `POST /api/token/rotate` | | `{"token": …, "viewer_token": …}`: new tokens replace both at once (files, viewers, API); the server prints the new URLs |
 | `POST /mcp` | MCP Streamable HTTP | the tools below |
 | `GET /skill/SKILL.md`, `GET /skill/reference.md` | no token needed | this documentation |
@@ -337,6 +338,241 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
     "name",
     "size",
     "modified_ms"
+  ]
+}
+```
+
+## FileQuery
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FileQuery",
+  "description": "Browser paths are absolute UTF-8 paths or the exact @home / @transfer shortcuts.",
+  "type": "object",
+  "properties": {
+    "desc": {
+      "type": "boolean",
+      "default": false
+    },
+    "hidden": {
+      "type": "boolean",
+      "default": false
+    },
+    "limit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint",
+      "minimum": 0
+    },
+    "offset": {
+      "type": "integer",
+      "format": "uint",
+      "default": 0,
+      "minimum": 0
+    },
+    "path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sort": {
+      "$ref": "#/$defs/FileSort"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "FileSort": {
+      "type": "string",
+      "enum": [
+        "name",
+        "size",
+        "modified"
+      ]
+    }
+  }
+}
+```
+
+## FileListing
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FileListing",
+  "type": "object",
+  "properties": {
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FileEntry"
+      }
+    },
+    "limit": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "offset": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "omitted": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "path": {
+      "type": "string"
+    },
+    "total": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "path",
+    "entries",
+    "total",
+    "offset",
+    "limit",
+    "omitted"
+  ],
+  "$defs": {
+    "EntryKind": {
+      "type": "string",
+      "enum": [
+        "directory",
+        "file",
+        "symlink",
+        "other"
+      ]
+    },
+    "FileEntry": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EntryKind"
+        },
+        "modified_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "target_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntryKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "size",
+        "modified_ms"
+      ]
+    }
+  }
+}
+```
+
+## FileAction
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FileAction",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "op": {
+          "type": "string",
+          "const": "mkdir"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "path",
+        "name"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "new_name": {
+          "type": "string"
+        },
+        "op": {
+          "type": "string",
+          "const": "rename"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "path",
+        "name",
+        "new_name"
+      ]
+    }
+  ]
+}
+```
+
+## SavedFile
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SavedFile",
+  "type": "object",
+  "properties": {
+    "directory": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "path",
+    "directory"
   ]
 }
 ```
@@ -904,7 +1140,7 @@ Move the pointer there and click. With `window`, x y are relative to that window
 
 ### `clipboard_read`
 
-The last text a desktop application copied to the clipboard (empty if none yet). An image says so; copied files are their file:// URIs; GET /api/clipboard returns the bytes.
+The last text a desktop application copied to the clipboard (empty if none yet). An image says so; copied files require a control token and are their file:// URIs; GET /api/clipboard returns the bytes.
 
 ```json
 {
@@ -957,7 +1193,7 @@ The UI elements of a window (buttons, links, text fields, menu items, tabs, ...)
 
 ### `files`
 
-The files in the desktop's transfer folder (what was dropped on the page, and what the desktop put there for download): name, size, modified_ms. GET /api/files/{name} downloads one.
+Control token required. The visible regular files in the desktop's transfer folder: name, size, modified_ms. GET /api/files/{name} downloads one.
 
 ```json
 {

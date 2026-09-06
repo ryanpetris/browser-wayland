@@ -84,6 +84,7 @@ function Notice({ viewer }) {
   return (
     <div className={`pointer-events-none absolute bottom-3 left-1/2 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-lg border bg-zinc-900/95 px-3 py-2 text-xs shadow-lg ${good ? 'border-emerald-500/40 text-emerald-100' : 'border-amber-500/40 text-amber-100'}`}>
       {good ? <CheckCircle2 className="size-4 shrink-0 text-emerald-400" /> : <TriangleAlert className="size-4 shrink-0 text-amber-400" />} {notice.text}
+      {notice.path && <button className="pointer-events-auto shrink-0 rounded bg-zinc-700 px-2 py-1" onClick={() => viewer.openFiles(notice.path)}>Open folder</button>}
     </div>
   );
 }

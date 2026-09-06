@@ -33,7 +33,7 @@ const wait = async fn => {
   }
   throw new Error('timed out');
 };
-let browser;
+let browser, inputClient, inputLog;
 try {
   await wait(async () => {
     try {
@@ -235,7 +235,8 @@ try {
   });
   console.log('Chromium pointer lock', await frame.evaluate(() => window.lockResult));
   await frame.evaluate(() => document.exitPointerLock());
-  await frame.evaluate(cmd => bw.spawn(cmd), 'stdbuf -oL wev > ' + root + '/wev.log');
+  inputLog = await open(root + '/wev.log', 'w');
+  inputClient = spawn('stdbuf', ['-oL', 'wev'], { env: { ...process.env, XDG_RUNTIME_DIR: root + '/runtime', WAYLAND_DISPLAY: 'wayland-pip-probe' }, stdio: ['ignore', inputLog.fd, inputLog.fd] });
   await frame.waitForFunction(() => bw.store.get().windows.some(w => w.app_id === 'wev'));
   await frame.evaluate(() => {
     const w = bw.store.get().windows.find(w => w.app_id === 'wev');
@@ -269,11 +270,12 @@ try {
   });
   await frame.waitForFunction(() => !bw.store.get().upload);
   await frame.waitForTimeout(500);
-  await frame.waitForFunction(() => bw.store.get().notice?.text.includes('transfer folder'));
+  await frame.waitForFunction(() => bw.store.get().notice?.path?.endsWith('/Downloads') && bw.store.get().notice.text.includes('pip-drop.txt'));
   console.log('PiP unclaimed drop saved to transfer folder');
 
-  await page.evaluate(() => bw.pip.close());
+  await frame.getByRole('button', { name: 'Open folder', exact: true }).click();
   await page.waitForFunction(() => window.bw?.store.get().role === 'controller');
+  await page.locator('[data-file-name="pip-drop.txt"]').waitFor();
   const viewerToken = (await readFile(root + '/config/browser-wayland/viewer-token', 'utf8')).trim();
   const readOnly = await context.newPage();
   await readOnly.goto(origin + '/#token=' + viewerToken);
@@ -418,6 +420,8 @@ try {
 
 
 } finally {
+  inputClient?.kill('SIGTERM');
+  await inputLog?.close();
   await browser?.close();
   server.kill('SIGTERM');
   await new Promise(r => server.exitCode != null ? r() : server.once('exit', r));

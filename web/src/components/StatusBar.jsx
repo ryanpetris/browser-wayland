@@ -78,7 +78,7 @@ export function StatusBar({ viewer, audioPanel, onAudioPanel, mixerPanel, onMixe
         <button type="button" onClick={() => viewer.retryRtc()} disabled={recovery.state !== 'waiting'} className={`shrink-0 text-indigo-300 hover:text-indigo-200 ${recovery.state === 'waiting' ? '' : 'invisible'}`}>Retry now</button>
       </span>
       <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-4 gap-y-1">
-        {clipboardFiles.length > 0 ? (
+        {clipboardFiles.length > 0 && ['controller', 'participant'].includes(role) ? (
           <button type="button" onClick={async () => { for (const [i, n] of clipboardFiles.entries()) await downloadClipboardFile(i, n).catch(() => {}); }} title={`Download the copied files: ${clipboardFiles.join(', ')}`} className="flex max-w-48 items-center gap-1 truncate text-indigo-300 hover:text-indigo-200">
             <Download className="size-3 shrink-0" /><span className="truncate">{clipboardText} copied</span>
           </button>

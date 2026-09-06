@@ -245,7 +245,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
                 .route("/api/screenshot.png", get(api_screenshot))
                 .route("/api/windows/{id}/elements", get(api_window_elements))
                 .route("/api/windows/{id}/icon", get(api_window_icon))
-                .route("/api/files", get(api_files))
+                .route("/api/files", get(api_files).post(api_manage_file))
                 .route("/api/files/{name}", get(api_file).put(api_put_file).delete(api_delete_file))
                 .route("/api/drop/{batch}/{name}", put(api_stage_file))
                 .route("/api/notifications", get(api_notifications))
@@ -403,19 +403,24 @@ async fn api_window_icon(UrlPath(id): UrlPath<u64>, State(app): State<Arc<App>>)
     }
 }
 
-async fn api_files(State(app): State<Arc<App>>) -> Response {
-    match app.files().await {
-        Ok(list) => (NO_STORE, Json(list)).into_response(),
-        Err(e) => e.into_response(),
+async fn api_files(Extension(key): Extension<Key>, State(app): State<Arc<App>>, Query(query): Query<files::FileQuery>) -> Response {
+    if let Err(e) = writable(key) { return e.into_response(); }
+    if query.path.is_some() {
+        return match app.browse_files(query).await { Ok(list) => (NO_STORE, Json(list)).into_response(), Err(e) => e.into_response() };
     }
+    match app.files().await { Ok(list) => (NO_STORE, Json(list)).into_response(), Err(e) => e.into_response() }
 }
 
-/// The body is streamed to the folder; `201` with `{"name": …}`, the name it got.
-async fn api_put_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>, req: Request) -> Response {
-    if let Err(e) = writable(key) {
-        return e.into_response();
+async fn api_manage_file(Extension(key): Extension<Key>, State(app): State<Arc<App>>, Json(action): Json<files::FileAction>) -> Response {
+    if let Err(e) = writable(key) { return e.into_response(); }
+    match app.manage_file(action).await { Ok(saved) => (StatusCode::CREATED, NO_STORE, Json(saved)).into_response(), Err(e) => e.into_response() }
+}
+
+async fn api_put_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>, Query(query): Query<files::FileQuery>, req: Request) -> Response {
+    if let Err(e) = writable(key) { return e.into_response(); }
+    match app.upload_file(query.path.as_deref(), &name, req.into_body()).await {
+        Ok(saved) => (StatusCode::CREATED, NO_STORE, Json(saved)).into_response(), Err(e) => e.into_response()
     }
-    stored(app.store_file(&name, req.into_body()).await)
 }
 
 /// A file of a drag or a paste, staged in its batch for the application that will take it.
@@ -434,29 +439,31 @@ fn stored(result: Result<String, api::ApiError>) -> Response {
 }
 
 /// A file for the browser to save under `name`, streamed.
-fn attachment(name: &str, len: u64, body: axum::body::Body) -> Response {
-    (
+fn attachment(name: &str, len: Option<u64>, body: axum::body::Body) -> Response {
+    let mut response = (
         NO_STORE,
         [
             (header::CONTENT_TYPE, "application/octet-stream".to_string()),
-            (header::CONTENT_LENGTH, len.to_string()),
             (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", name.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect::<String>(), files::percent(name))),
         ],
         body,
     )
-        .into_response()
+        .into_response();
+    if let Some(len) = len { response.headers_mut().insert(header::CONTENT_LENGTH, len.into()); }
+    response
 }
 
-async fn api_file(UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>) -> Response {
-    match app.open_file(&name).await {
+async fn api_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>, Query(query): Query<files::FileQuery>) -> Response {
+    if let Err(e) = writable(key) { return e.into_response(); }
+    match app.download_file(query.path.as_deref(), &name).await {
         Ok((len, body)) => attachment(&name, len, body),
         Err(e) => e.into_response(),
     }
 }
 
-async fn api_delete_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>) -> Response {
+async fn api_delete_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>, Query(query): Query<files::FileQuery>) -> Response {
     match writable(key) {
-        Ok(()) => match app.delete_file(&name).await {
+        Ok(()) => match app.remove_file(query.path.as_deref(), &name).await {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
             Err(e) => e.into_response(),
         },
@@ -511,8 +518,9 @@ async fn api_token_rotate(headers: HeaderMap, State(app): State<Arc<App>>) -> Re
 }
 
 /// What a desktop application last copied: text, a PNG or a file list (its Content-Type says which), or 204 if nothing yet.
-async fn api_clipboard(State(app): State<Arc<App>>) -> Response {
+async fn api_clipboard(Extension(key): Extension<Key>, State(app): State<Arc<App>>) -> Response {
     match app.clipboard() {
+        Some((mime, _)) if mime == api::URI_LIST && key != Key::Control => ApiError::Forbidden.into_response(),
         Some((mime, data)) => (NO_STORE, [(header::CONTENT_TYPE, match mime.as_str() { api::PNG | api::URI_LIST => mime.clone(), _ => "text/plain; charset=utf-8".into() })], data).into_response(),
         None => (StatusCode::NO_CONTENT, NO_STORE).into_response(),
     }
@@ -548,7 +556,8 @@ async fn api_clipboard_files(Extension(key): Extension<Key>, State(app): State<A
 
 /// The `index`th file of the URI list on the desktop clipboard, as an attachment; `404` if the clipboard
 /// holds no such list or entry.
-async fn api_clipboard_file(UrlPath(index): UrlPath<usize>, State(app): State<Arc<App>>) -> Response {
+async fn api_clipboard_file(Extension(key): Extension<Key>, UrlPath(index): UrlPath<usize>, State(app): State<Arc<App>>) -> Response {
+    if let Err(e) = writable(key) { return e.into_response(); }
     match app.clipboard_file(index).await {
         Ok((name, len, body)) => attachment(&name, len, body),
         Err(e) => e.into_response(),

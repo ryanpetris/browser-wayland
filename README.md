@@ -209,16 +209,22 @@ in the environment forces llvmpipe.
 
 ## Files
 
-Drop a file on the page and it lands in the desktop's Downloads folder (`--files-dir` for another);
-the Files tab of the side panel lists that folder, with download and delete, and an Upload button for
-browsers without drag and drop. The same folder is `GET`, `PUT` and `DELETE /api/files/{name}` on the API.
+The Files tab browses the remote filesystem with the server process's Unix permissions. It starts in
+Downloads (`--files-dir` selects another transfer folder). Each viewer chooses its own directory.
+Upload and page drops outside the desktop use that directory; navigation during a batch cannot change
+its destination. Browse folders, download files, create directories, rename entries, and confirm file
+deletion. Home, transfer-folder shortcuts, breadcrumbs, sorting, and hidden files are available.
+Listings load on navigation, Refresh, and this viewer's own changes to the displayed directory.
+Reopening the panel or changes from another viewer do not refresh it. File access requires a control
+token, including the API; read-only viewers have no Files tab or file download controls.
 Drag a file over the desktop itself and the application under the pointer sees a drag coming; let go and,
 once the file is uploaded, it is dropped there as a `file://` URI, to copy or to move. Since the
 application picks the folder, such a file is not uploaded to Downloads but staged under the cache
 directory (`~/.cache/browser-wayland/drops`, a folder with a random name per drop): Thunar moves it out into
 the folder shown, Nautilus copies, an editor opens it where it is, and whatever is left there is swept after
 a day (an editor still showing the file loses it then).
-A drop no application took goes to the transfer folder. Files copied in a file manager inside the desktop
+A drop no application took is copied to the transfer folder. The result shows saved names and offers
+Open folder without changing the selected directory. Files copied in a file manager inside the desktop
 show up in the status bar with a download button, and files copied on your machine paste into the
 desktop's file manager, staged the same way.
 

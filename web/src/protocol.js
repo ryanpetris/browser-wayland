@@ -1,5 +1,5 @@
 // Wire format, mirrored in crates/bw-server/src/protocol.rs (little-endian, byte 0 = type).
-export const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05, WINDOWS = 0x06, CLIPBOARD = 0x07, ROLE = 0x08, NOTICE = 0x09, CLIPBOARD_DATA = 0x0a, NOTIFICATIONS = 0x0b, STREAM_STATE = 0x0c, RTC = 0x0d, FRAGMENT = 0x0e, MIXER_STATE = 0x0f, MIXER_LEVELS = 0x10, MIXER_ERROR = 0x11, SESSION = 0x12;
+export const CONFIG = 0x01, VIDEO = 0x02, CURSOR = 0x03, POINTER_LOCK = 0x04, AUDIO = 0x05, WINDOWS = 0x06, CLIPBOARD = 0x07, ROLE = 0x08, NOTICE = 0x09, CLIPBOARD_DATA = 0x0a, NOTIFICATIONS = 0x0b, STREAM_STATE = 0x0c, RTC = 0x0d, FRAGMENT = 0x0e, MIXER_STATE = 0x0f, MIXER_LEVELS = 0x10, MIXER_ERROR = 0x11, SESSION = 0x12, FILE_RESULT = 0x13;
 export const AUTH = 0x80, HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION_REL = 0x84, BUTTON = 0x85, AXIS = 0x86, KEY = 0x87,
   REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A, CONTROL = 0x8B, SET_CLIPBOARD = 0x8C, TAKE_CONTROL = 0x8D, NOTIFY = 0x8E, STREAM = 0x8F, DRAG = 0x90, INPUT = 0x91, TOUCH = 0x92, MIC = 0x93, CAM = 0x94, RTC_CLIENT = 0x95, REPORT = 0x96, MIXER_CLIENT = 0x97, HANDOFF = 0x98;
 // ROLE payload: what this session may do, then what the desktop takes: bit 0 the microphone, bit 1 the webcam, bit 2 session playback available

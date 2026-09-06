@@ -1,17 +1,21 @@
 // The side panel: the window list (with actions and a command box), the transfer folder, or the statistics.
 import { useEffect, useRef, useState } from 'react';
-import { PictureInPicture2, Camera, ChevronDown, ChevronUp, Download, ExternalLink, Maximize2, Minimize2, Play, RefreshCw, Trash2, Upload, X } from 'lucide-react';
+import { PictureInPicture2, Camera, ChevronDown, ChevronUp, ExternalLink, Maximize2, Minimize2, Play, X } from 'lucide-react';
 import { useStore } from '../store.js';
-import { deleteFile, downloadFile, files, queueSnapshot, snapshot, windowIcon } from '../api.js';
+import { queueSnapshot, snapshot, windowIcon } from '../api.js';
+import { FilesPanel } from './FilesPanel.jsx';
 import { thumbnailScheduler } from '../thumbnails.js';
 import { codecName, windowColor } from './ui.jsx';
 
 // The two panels stay mounted (hidden) so the window list keeps its thumbnails across toggles.
 export function Sidebar({ viewer, tab, onTab, hidden }) {
+  const role = useStore(viewer.store, s => s.role);
+  const acts = ['controller', 'participant'].includes(role);
+  if (!acts && tab === 'files') tab = 'windows';
   return (
     <aside hidden={hidden} className="absolute inset-y-0 right-0 z-10 flex w-full max-w-sm shrink-0 flex-col border-l border-zinc-800 bg-zinc-900 md:static md:w-80 md:max-w-none">
       <nav className="flex shrink-0 border-b border-zinc-800 text-sm">
-        {[['windows', 'Windows'], ['files', 'Files'], ['stats', 'Statistics']].map(([t, label]) => (
+        {[['windows', 'Windows'], ['files', 'Files'], ['stats', 'Statistics']].filter(([t]) => t !== 'files' || acts).map(([t, label]) => (
           <button
             key={t}
             type="button"
@@ -23,7 +27,7 @@ export function Sidebar({ viewer, tab, onTab, hidden }) {
         ))}
       </nav>
       <div data-window-list hidden={tab !== 'windows'} className="min-h-0 flex-1 overflow-y-auto"><WindowList viewer={viewer} active={!hidden && tab === 'windows'} /></div>
-      <div hidden={tab !== 'files'} className="min-h-0 flex-1 overflow-y-auto"><FilesPanel viewer={viewer} open={tab === 'files'} /></div>
+      <div hidden={tab !== 'files'} className="min-h-0 flex-1 overflow-y-auto"><FilesPanel viewer={viewer} open={!hidden && tab === 'files' && acts} /></div>
       <div hidden={tab !== 'stats'} className="min-h-0 flex-1 overflow-y-auto"><StatsPanel viewer={viewer} /></div>
     </aside>
   );
@@ -127,44 +131,6 @@ function WindowRow({ viewer, w, acts, eligible, dpr }) {
         {acts && <Action icon={w.minimized ? ChevronUp : ChevronDown} label={w.minimized ? 'Restore' : 'Minimize'} onClick={e => act(w.minimized ? 'activate' : 'minimize', e)} />}
         {acts && <Action icon={X} label="Close" onClick={e => act('close', e)} className="hover:text-rose-300" />}
       </div>
-    </div>
-  );
-}
-
-// The desktop's transfer folder: what was dropped on the page and what the desktop put there. Listed
-// when the tab opens and after an upload; download goes through fetch and a blob (no token in URLs).
-function FilesPanel({ viewer, open }) {
-  const role = useStore(viewer.store, s => s.role);
-  const rev = useStore(viewer.store, s => s.filesRev);
-  const upload = useStore(viewer.store, s => s.upload);
-  const [list, setList] = useState([]);
-  const acts = role && role !== 'viewer';
-  const refresh = () => files().then(setList).catch(() => {});
-  useEffect(() => { if (open) refresh(); }, [open, rev]);
-  const size = n => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`);
-  return (
-    <div className="flex flex-col">
-      <div className="flex items-center gap-2 border-b border-zinc-800 px-2.5 py-2 text-xs text-zinc-500">
-        {upload ? <span className="truncate">Uploading {upload.name} ({upload.index}/{upload.count})…</span> : <span className="truncate">Drop files on the page to send them to the desktop.</span>}
-        <Action icon={RefreshCw} label="Refresh" className="ml-auto shrink-0" onClick={refresh} />
-        {acts && (
-          <label className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-zinc-800 px-2 py-1 text-zinc-200 hover:bg-zinc-700">
-            <Upload className="size-3.5" /> Upload
-            <input type="file" multiple className="hidden" onChange={e => { viewer.uploadFiles(e.target.files); e.target.value = ''; }} />
-          </label>
-        )}
-      </div>
-      {list.length === 0 && <div className="px-2.5 py-3 text-xs text-zinc-600">The folder is empty.</div>}
-      {list.map(f => (
-        <div key={f.name} className="group flex items-center gap-2 border-b border-zinc-800/70 px-2.5 py-2">
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm text-zinc-300" title={f.name}>{f.name}</div>
-            <div className="text-[11px] text-zinc-500">{size(f.size)} · {new Date(f.modified_ms).toLocaleString()}</div>
-          </div>
-          <Action icon={Download} label="Download" onClick={() => downloadFile(f.name)} />
-          {acts && <Action icon={Trash2} label="Delete" className="hover:text-rose-300" onClick={() => deleteFile(f.name).then(refresh, refresh)} />}
-        </div>
-      ))}
     </div>
   );
 }

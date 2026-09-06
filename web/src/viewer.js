@@ -8,7 +8,7 @@ import { createStore } from './store.js';
 import { startMic, stopMic } from './mic.js';
 import { startCam, stopCam } from './cam.js';
 import { openRtc, pageEndpoint, RTC_TIMING } from './rtc.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, PRESET_IDS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT, SESSION, HANDOFF } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, PRESET_IDS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT, SESSION, HANDOFF, FILE_RESULT } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 const qualityName = name => PRESETS.includes(name) ? name : 'max';
@@ -49,7 +49,9 @@ export function createViewer() {
     camAvailable: false, // the desktop takes one (--webcam)
     codecs: [], // what the server encodes, in Auto's order: [{ codec, hardware }]
     decodable: [], // codec families this browser decodes at all
-    filesRev: 0, // bumps when an upload finished, so the Files tab refreshes
+    filesPath: '@transfer', // Navigation belongs to this viewer.
+    filesChange: null,
+    filesOpen: 0,
     locked: false,
     elements: null, // the focused window's elements: {id, status, page}
     elementsOn: false,
@@ -63,6 +65,7 @@ export function createViewer() {
   let quitting = false; // this page asked the desktop to shut down: the socket's end is not a failure
   let playbackEnabled = !PIP;
   let noticeTimer;
+  const dropBatches = new Map();
   let mixerSubscribed = false, mixerTimer = 0;
   const mixerVolumes = new Map();
   let ws, decoder, stream = null, awaitingKey = true;
@@ -422,6 +425,18 @@ export function createViewer() {
       case MIXER_ERROR:
         store.set({ mixerError: new TextDecoder().decode(new Uint8Array(buf, 1)) });
         break;
+      case FILE_RESULT: {
+        const result = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
+        if (!dropBatches.has(result.batch)) break;
+        const batch = dropBatches.get(result.batch);
+        result.failed = result.error ? batch.total : Math.min(batch.total, result.failed + batch.failed);
+        dropBatches.delete(result.batch);
+        const saved = result.saved;
+        const path = saved[0]?.directory;
+        if (saved.length) store.set({ filesChange: { directories: [...new Set(saved.map(f => f.directory))] } });
+        notice([saved.length && `No application took the files. Saved ${saved.map(f => f.name).join(', ')} to ${[...new Set(saved.map(f => f.directory))].join(', ')}`, result.failed && `${result.failed} file${result.failed === 1 ? '' : 's'} could not be saved`].filter(Boolean).join('. '), result.failed ? 'warning' : 'success', path);
+        break;
+      }
       case NOTICE:
         notice(new TextDecoder().decode(new Uint8Array(buf, 2)), dv.getUint8(1) ? 'success' : 'warning');
         break;
@@ -507,10 +522,10 @@ export function createViewer() {
   }, 1000);
 
   /// A line over the stage for a few seconds: a warning, or good news.
-  function notice(text, kind = 'warning') {
-    store.set({ notice: { text, kind } });
+  function notice(text, kind = 'warning', path) {
+    store.set({ notice: { text, kind, path } });
     clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => store.set({ notice: null }), 6000);
+    noticeTimer = setTimeout(() => store.set({ notice: null }), path ? 30000 : 10000);
   }
 
   // --- pointer lock -----------------------------------------------------------------
@@ -689,6 +704,7 @@ export function createViewer() {
     if (disposed) return;
     viewer.pip?.dispose();
     disposed = true;
+    uploadAbort?.abort();
     micStop(); camStop(); stopPlayback(); cancelMixerVolumes();
     clearTimeout(reconnectTimer); clearInterval(statsTimer);
     closeRtc(false);
@@ -855,19 +871,28 @@ export function createViewer() {
   }
 
   // --- files ---------------------------------------------------------------------------------
-  // Files dropped anywhere on the page go to the desktop's transfer folder, one after the other. A drag
-  // onto the desktop or a paste into an application there stages them instead, in a batch named here
-  // (`batch`): the application picks the folder, and the drop or the paste says how it went.
-  async function uploadFiles(list, batch) {
-    const files = [...list], saved = [];
-    for (const [index, file] of files.entries()) {
-      store.set({ upload: { name: file.name, index: index + 1, count: files.length } });
-      try { saved.push((await uploadFile(file, batch)).name); } catch {}
-    }
-    store.set({ upload: null, filesRev: state().filesRev + (batch ? 0 : 1) });
-    if (!batch) notice(saved.length ? `${saved.length} file${saved.length === 1 ? '' : 's'} saved to the desktop's transfer folder` : 'upload failed');
-    else if (saved.length < files.length) notice('upload failed');
-    return saved; // the names they got there
+  // Capture the directory before queuing any part of a batch. Desktop transfers use cache staging.
+  let uploadQueue = Promise.resolve(), uploadAbort;
+  function uploadFiles(list, batch) {
+    const files = [...list], path = state().filesPath;
+    const run = async () => {
+      if (disposed || !['controller', 'participant'].includes(state().role)) return [];
+      const saved = [], failures = [];
+      uploadAbort = new AbortController();
+      for (const [index, file] of files.entries()) {
+        if (uploadAbort.signal.aborted) break;
+        store.set({ upload: { name: file.name, index: index + 1, count: files.length, path: batch ? 'desktop staging' : path } });
+        try { saved.push(await uploadFile(file, batch, path, uploadAbort.signal)); }
+        catch (e) { failures.push(`${file.name}: ${e.message}`); }
+      }
+      store.set({ upload: null });
+      if (!disposed && !batch) {
+        if (saved.length) store.set({ filesChange: { directories: [...new Set(saved.map(f => f.directory))], requested: path } });
+        notice([saved.length && `Saved ${saved.map(f => f.name).join(', ')} to ${[...new Set(saved.map(f => f.directory))].join(', ')}`, failures.join('; '), saved.length + failures.length < files.length && 'Upload cancelled'].filter(Boolean).join('. '), saved.length === files.length ? 'success' : 'warning');
+      } else if (!disposed && saved.length < files.length) notice('Some files could not be uploaded.');
+      return saved.map(f => f.name);
+    };
+    return uploadQueue = uploadQueue.then(run, run);
   }
   document.addEventListener('dragover', e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
   // Over the stage, a controller's drag is carried on as a drag on the desktop: the application under the
@@ -892,15 +917,18 @@ export function createViewer() {
     onPointerMove(e);
     const files = e.dataTransfer.files;
     const batch = crypto.randomUUID();
+    dropBatches.set(batch, { total: files.length, failed: 0 });
+    if (dropBatches.size > 100) dropBatches.delete(dropBatches.keys().next().value);
     const names = await uploadFiles(files, batch);
+    dropBatches.set(batch, { total: files.length, failed: files.length - names.length });
     drag(names.length === files.length ? { op: 'drop', batch, names } : { op: 'cancel', batch });
-    if (names.length !== files.length) notice('upload failed; the files that did upload are in the transfer folder');
+    if (names.length !== files.length) notice(names.length ? 'Some uploads failed. Saving the staged files to the transfer folder…' : 'No files were uploaded.');
     dragging = false;
   }
   document.addEventListener('drop', e => {
     if (!e.dataTransfer?.files.length) return;
     e.preventDefault();
-    if (state().role !== 'viewer') uploadFiles(e.dataTransfer.files);
+    if (['controller', 'participant'].includes(state().role)) uploadFiles(e.dataTransfer.files);
     else notice('a view-only session cannot send files');
   });
 
@@ -924,6 +952,7 @@ export function createViewer() {
     const gen = ++clipboardGen;
     pendingClipboard = null;
     if (mime === 'text/uri-list') {
+      if (!['controller', 'participant'].includes(state().role)) { store.set({ clipboardText: '', clipboardFiles: [] }); return; }
       store.set({ clipboardText: 'files', clipboardFiles: [] }); // the old buttons go now, in case the list can't be fetched
       const name = s => { try { return decodeURIComponent(s); } catch { return s; } }; // a name that isn't UTF-8 stays escaped
       api('/api/clipboard').then(r => r.text()).then(list => {
@@ -1100,6 +1129,11 @@ export function createViewer() {
     setChoice,
     setTransport,
     uploadFiles,
+    cancelUpload: () => uploadAbort?.abort(),
+    openFiles(path) {
+      if (PIP && window.parent.bwOpenFiles) return window.parent.bwOpenFiles(path);
+      store.set({ filesPath: path, filesOpen: state().filesOpen + 1 });
+    },
     // a click ('default'), an action key, or nothing to dismiss; a session that can't act only hides it for itself
     notify(id, action) {
       if (state().role === 'viewer') store.set({ notifications: state().notifications.filter(n => n.id !== id) });

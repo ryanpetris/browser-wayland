@@ -30,6 +30,8 @@ export function App({ viewer }) {
   const [borders, setBorders] = usePref('borders', false);
   const [elements, setElements] = usePref('elements', false);
   const [tab, setTab] = useState('windows');
+  const filesOpen = useStore(viewer.store, s => s.filesOpen);
+  useEffect(() => { if (filesOpen) { setSidebar(true); setTab('files'); } }, [filesOpen]);
   const [menu, setMenu] = useState(null); // One top-bar menu at a time.
   const closeMenu = event => {
     setMenu(null);

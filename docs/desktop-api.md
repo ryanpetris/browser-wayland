@@ -248,35 +248,68 @@ the mechanism.
 
 ## Files
 
-`files.rs`. A transfer folder, the XDG download directory (`XDG_DOWNLOAD_DIR` in `user-dirs.dirs`, else
-`~/Downloads`) unless `--files-dir` names another, is the meeting point between the browser's machine and
-the desktop. `PUT /api/files/{name}` streams the body into it through a `.part` file renamed when the
-upload is complete (a taken name gets ` (2)` before its extension; the reply carries the name it got);
-`GET /api/files` lists the folder's files (no subfolders, hidden entries or symlinks), `GET
-/api/files/{name}` streams one back as an attachment (a symlink is not followed), `DELETE` removes one.
-A name is a single visible entry of the folder: anything with a `/` or starting with a `.` is `404`.
-Files an application on the desktop is to take, a drag's or a paste's, are not uploaded there but staged:
-`PUT /api/drop/{batch}/{name}` writes into batch `batch`, a directory under
-`$XDG_CACHE_HOME/browser-wayland/drops` (`~/.cache/…`) named by the page with a random id it then
-carries in the drop (`Drag` `drop`) or the paste (`POST /api/clipboard/files` with `"batch"`), so no
-state waits on the server between the uploads and their use. The desktop's word on the drop (`DragEnded`)
-settles a drag's batch: taken, it is left as it is, moved out or copied from; refused, or a `cancel`
-naming the batch, its files go to the transfer folder (claimed with hard links, so nothing there is
-replaced; a copy through a `.part` file across filesystems), and the page hears how a refused drop went
-once they are there. A drop still settling when the drag is cancelled or a new one starts ends first,
-and is reported.
-A paste's batch is the sweep's whether pasted or not. Nothing else removes: an hourly sweep removes
-batches older than a day; instances share the directory, batch names are random, and a batch already
-gone is no error to either. An application that opened a dropped file where it is (an editor) loses it
-then.
-Each upload writes its own `.part` file and claims the final name with a hard link, so two uploads of the
-same name can't collide. Listing and downloading work with the view-only token; uploads and
-deletions need the control token. There is no size limit beyond the disk.
+`files.rs` implements operations on explicit paths. The server has no selected-directory state.
+`--files-dir` chooses the initial transfer folder, otherwise the XDG download directory or `~/Downloads`.
+It is not an access boundary: the process's Unix permissions determine access to the remote filesystem,
+including mounted volumes in a container. `/proc` must be mounted for descriptor-based operations.
 
-The page uploads whatever is dropped on it (any part of the page, one file after another, with progress
-in the Files tab and a notice at the end) or picked with the Upload button, and its Files tab lists the
-folder with download (fetch and a blob, so no token is in a URL) and delete; the list refreshes when the
-tab opens and after an upload.
+Every file endpoint, including clipboard file lists/downloads and equivalent MCP tools, requires a control
+token. Participants may use files without taking desktop control. Restricting pathless transfer-folder
+listing and download for view-only tokens is an intentional authorization change.
+
+`GET /api/files?path=…` returns `FileListing`: the resolved absolute path, entries, total, offset, limit,
+and the count of omitted non-UTF-8 names. Paths are absolute UTF-8 strings, percent-encoded once as query
+parameters; `@home` and `@transfer` are exact shortcuts. Entry names are separately encoded path
+segments, may be hidden, and cannot be empty, `.` or `..`, contain `/`, or contain NUL. Non-UTF-8 names
+are omitted instead of being changed lossily. Symlinks are marked separately: entering a directory
+link resolves its destination, and downloading a link follows it only when the opened object is a
+regular file. Broken links can be renamed or unlinked. Devices, sockets and FIFOs are never streamed.
+
+Listings sort folders first, then `sort=name|size|modified`; name order is UTF-8 byte order, with optional `desc=true` and `hidden=true`.
+`offset` and `limit` paginate each independent listing, default 100 entries and at most 500. Concurrent
+filesystem changes can shift pages. Enumeration and sorting run on blocking workers; the UI renders
+one page. Reserved `.upload-*.part` entries are omitted even when hidden files are shown.
+
+`GET`, `PUT`, and `DELETE /api/files/{name}?path=…` download, upload, or unlink the named entry.
+`POST /api/files` takes `{"op":"mkdir","path":…, "name":…}` or
+`{"op":"rename","path":…, "name":…, "new_name":…}`. Rename stays within its directory and never
+replaces an existing entry. Delete is nonrecursive and refuses directories. Rename and unlink act on
+the named directory entry without following its final symlink. Concurrent external replacement can
+change which entry that name denotes. There is no recursive transfer, search, preview, or remote copy/move.
+
+Successful uploads and management return `SavedFile` with `name`, `path`, and `directory`. File errors
+carry `error` text and a `code`, including `missing`, `permission_denied`, `exists`, `not_directory`,
+`invalid_path`, and `unsupported_type`. A filesystem lacking hard links or atomic no-replace rename
+returns `unsupported_operation`; collision protection is never replaced with a racy existence check.
+Downloads and uploads stream. Normal nonempty file downloads stop at their size when opened. Empty
+or virtual procfs/sysfs files stream to EOF without Content-Length because their reported size may
+not describe their contents. Uploads hold an opened directory,
+write a temporary file with mode `0666` filtered by the process umask, then publish the opened inode under the first free name, adding ` (2)`
+before the extension on collisions. Failure/cancellation cleans up its temporary entry. A renamed
+destination remains anchored and its current path is reported; a removed destination fails. Only the
+`@transfer` shortcut, pathless uploads, and staging intentionally create their destination directory.
+An explicitly selected absolute path is never recreated.
+
+Without `path`, GET retains the legacy newest-first array of visible regular transfer files, download
+rejects symlinks, and upload/delete retain visible-name validation. Upload replies add the saved path
+and directory to the existing name. Staging keeps its stricter batch/name validation and name-only reply.
+
+Each viewer starts with `@transfer` and keeps its navigation in client state. The first visible Files
+panel fetches a listing; navigation, sorting, pagination, hidden-file changes and Refresh request new
+listings. Reopening or focusing it does not. Successful local operations refresh only their affected
+current directory. Stale responses are cancelled. Every queued upload batch captures its directory
+before any asynchronous work and reports final saved names, destination and partial failures.
+
+Desktop drops and pastes retain `PUT /api/drop/{batch}/{name}` cache staging, carried through the drag
+or clipboard operation by a client-generated batch ID. The Wayland recipient chooses its destination.
+Unclaimed drops and cancelled partial batches link validated regular files to the transfer folder,
+copying through a temporary file across filesystems. Publication is collision-safe. `FILE_RESULT` reports saved paths and failures to control-token
+sessions; only the client remembering that batch displays the result and offers Open folder. This
+operation result is not a directory update subscription. Staged sources remain for the hourly sweep,
+which removes batches older than a day. No navigation or unrelated refresh follows a late result.
+
+Run `node web/checks/file-browser.mjs` in the Docker rig after building the viewer and release binary to
+check two viewers, authorization, navigation and upload races, special files, pagination and actions.
 
 Dragging local files over the stage is carried on as a drag on the desktop (`Drag` message; `State::drag`
 in `clipboard.rs`; the source is `FileSource` there, the outcome comes to `DndGrabHandler` in `handlers.rs`).

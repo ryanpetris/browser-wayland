@@ -45,6 +45,7 @@ export function createPip(viewer) {
       win.onpagehide = () => { if (owned === entry) close(); };
       // The child's compact-mode detection reads this before its module evaluates.
       win.bwReturn = () => { window.focus(); close(); };
+      win.bwOpenFiles = path => { window.focus(); close(); viewer.openFiles(path); };
       win.document.title = 'browser-wayland';
       win.document.body.style.cssText = 'margin:0;height:100vh;background:#09090b';
       const frame = entry.frame = win.document.createElement('iframe');

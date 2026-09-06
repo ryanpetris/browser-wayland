@@ -271,3 +271,8 @@ The Docker rig can run `node web/checks/rtc-peer.mjs` for peer disposal and sign
 `node web/checks/rtc-recovery.mjs` exercises real channels, fallback, retry and cancellation;
 run that check with NET_ADMIN inside Docker so it can temporarily block its test server's UDP port.
 It removes its dedicated firewall chain on exit.
+
+`FILE_RESULT` (`0x13`) carries UTF-8 JSON `{batch, saved, failed, error}` after an unclaimed or
+cancelled desktop drop is rescued. `saved` contains `{name,path,directory}` objects. Control-token
+sessions receive it; the originating client matches its batch ID and offers navigation explicitly.
+It carries an operation result, not a directory subscription.

@@ -187,7 +187,7 @@ try {
     console.log('Firefox Wayland client receives button and axis');
     await js(
         'const el=document.querySelector("canvas"),data=new DataTransfer();data.items.add(new File(["firefox drop"],"firefox-drop.txt"));for(const type of ["dragenter","dragover","drop"])el.dispatchEvent(new DragEvent(type,{dataTransfer:data,bubbles:true,cancelable:true,clientX:100,clientY:100}))');
-    await wait(() => js('return bw.store.get().notice?.text.includes("transfer folder")'));
+    await wait(() => js('return bw.store.get().notice?.path?.endsWith("/Downloads") && bw.store.get().notice.text.includes("firefox-drop.txt")'));
     console.log('Firefox unclaimed file drop');
     console.log(
         'Firefox pointer lock',
