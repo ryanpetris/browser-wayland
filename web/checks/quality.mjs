@@ -93,7 +93,7 @@ try {
     assert.equal(await select.inputValue(), 'max');
     assert((await select.locator('option:checked').textContent()).includes('up to 25 Mbit/s'));
     assert((await page.getByTitle('Current encoder target; actual network throughput depends on scene activity').textContent()).startsWith('Target '));
-    await page.getByTitle('Measured video throughput', { exact: true }).waitFor();
+    await page.getByTitle(/^Measured video throughput:/).waitFor();
     await page.getByTitle('Video codec', { exact: true }).selectOption('auto');
     await page.waitForFunction(() => bw.store.get().streamState.auto_codec);
     await page.evaluate(() => bw.setChoice({ quality: 'low' }));

@@ -61,7 +61,7 @@ export function StatusBar({ viewer, audioPanel, onAudioPanel, mixerPanel, onMixe
   return (
     <footer className="flex min-h-7 shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-zinc-800 bg-zinc-900 px-3 py-0.5 font-mono text-[11px] text-zinc-500">
       <span className="flex w-[10ch] shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap" title={`${s.fps} fps`}><Activity className="size-3" /> {s.fps} fps</span>
-      <span className="w-[17ch] shrink-0 truncate" title="Measured video throughput" aria-label={`Measured video throughput: ${s.mbps.toFixed(1)} Mbit/s`}>{s.mbps.toFixed(1)} Mbit/s</span>
+      <span className="w-[17ch] shrink-0 truncate" title={`Measured video throughput: ${s.mbps.toFixed(1)} Mbit/s`}>{s.mbps.toFixed(1)} Mbit/s</span>
       <span className="hidden w-[10ch] shrink-0 truncate sm:inline" title={`Input to the next painted frame: ${s.latencyMs.toFixed(0)} ms`}>{s.latencyMs.toFixed(0)} ms</span>
       <span className={`hidden w-[20ch] shrink-0 truncate sm:inline ${bad ? 'text-amber-400' : ''}`} title={`lost ${s.lost} · dropped ${s.dropped} · decode errors ${s.decodeErrors}`}>{s.lost} · {s.dropped} · {s.decodeErrors}</span>
       <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-4 gap-y-1">
