@@ -97,8 +97,8 @@ tones and lifecycles, and native/Pulse mpv playback with saved device choices ac
 The browser check's fake capture source is a test WAV;
 production capture still requires browser consent.
 
-The native device prototype is checked on PipeWire 1.4.2 / WirePlumber 0.5.8 and PipeWire 1.6.8 /
-WirePlumber 0.5.17. Direct GStreamer device publication is unsuitable for idle startup; native virtual
+Lifecycle and isolation checks pass on PipeWire 1.4.2 with WirePlumber 0.5.6 and 0.5.8, and on PipeWire
+1.6.8 with WirePlumber 0.5.17. Direct GStreamer device publication is unsuitable for idle startup; native virtual
 nodes keep device lifetime independent of browser capture and application streams.
 
 References: [PipeWire configuration](https://docs.pipewire.org/page_daemon.html),
