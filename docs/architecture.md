@@ -5,7 +5,10 @@ the GPU as usual; the composited frame is hardware-encoded (VA-API through GStre
 over a WebSocket; the browser decodes it with WebCodecs and paints it on a canvas. Mouse, keyboard
 and (optionally) audio travel the same socket; the video moves to a WebRTC data channel (`bw-server`'s
 `rtc.rs`, str0m) when a viewer picks that transport, which is what reaches a server across NAT through a
-TURN relay (the README compares the two under loss). The compositor is also the window manager, and it
+TURN relay (the README compares the two under loss). The shared viewer engine keeps the transport
+preference separate from the active path. One socket-scoped RTC attempt owns its callbacks and timeout;
+one retry timer handles all fallback causes. Closing the socket or viewer cancels both. Server close
+messages carry the attempt generation, and socket teardown releases the entire session. The compositor is also the window manager, and it
 exposes what it knows and can do as an HTTP/WebSocket API (see [desktop-api.md](desktop-api.md)).
 
 Other documents: [protocol.md](protocol.md) (wire formats and HTTP API), [panels.md](panels.md)

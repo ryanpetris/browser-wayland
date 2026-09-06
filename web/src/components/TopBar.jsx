@@ -10,6 +10,7 @@ const STATUS = {
   retrying: ['bg-amber-400 animate-pulse', 'Reconnecting…'],
   unauthorized: ['bg-rose-400', 'Not authorized'],
   gone: ['bg-zinc-500', 'Window closed'],
+  closed: ['bg-zinc-500', 'Viewer closed'],
   quit: ['bg-zinc-500', 'Shut down'],
 };
 

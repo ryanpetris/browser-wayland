@@ -160,10 +160,17 @@ TCP retransmits a lost packet and the picture barely notices; the channel's SCTP
 least before it retransmits (sctp-proto's minimum RTO), its send buffer fills, and a keyframe behind it
 is a stall of seconds. So a channel that loses or holds up
 frames (half a second and more) in three of ten seconds, or holds one frame for three seconds, is given up:
-the video goes back to the socket, the Transport select says so, and picking the channel again tries
-again. What the channel offers is smoother pacing on a clean link (the socket's frames bunch behind
+the video returns to the socket and recovery starts, with WebRTC still selected. What the channel offers is smoother pacing on a clean link (the socket's frames bunch behind
 TCP's acknowledgements; Firefox showed a 58 ms longest gap on the socket against 23 ms on the channel)
 and a path through a TURN relay when direct UDP is blocked.
+
+The selected transport stays WebRTC during fallback. Socket video continues while a fresh channel
+connects. Failed attempts retry with jittered exponential delays of about 1 to 30 seconds; ten seconds
+without channel loss or stalls resets the backoff. Each attempt has a ten-second total budget.
+The status bar shows the actual path and recovery state, with Retry now while waiting. Statistics
+also shows the reason, retry count and next attempt. Selecting WebSocket cancels recovery. A server
+or browser without WebRTC support stays on the socket without retrying, preserving the preference.
+Quality selection and its adaptive ceiling are independent of transport recovery.
 
 The server listens on UDP on the listen port's number (`--rtc-port` for another; Docker needs `-p
 8443:8443/udp`) on every local address. In Docker's bridge network the container's own address is not

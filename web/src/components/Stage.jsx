@@ -116,8 +116,8 @@ function Banner({ viewer }) {
   return (
     <div className={`absolute ${card}`}>
       <MonitorX className="size-6 text-zinc-500" />
-      <div className="text-sm text-zinc-200">{reason || 'Window closed'}</div>
-      <div className="text-xs text-zinc-500">This tab showed one window; it is gone.</div>
+      <div className="text-sm text-zinc-200">{status === 'closed' ? 'Viewer closed' : reason || 'Window closed'}</div>
+      <div className="text-xs text-zinc-500">{status === 'closed' ? 'Reload this page to reconnect.' : 'This tab showed one window; it is gone.'}</div>
     </div>
   );
 }

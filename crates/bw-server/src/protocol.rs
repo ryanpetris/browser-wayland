@@ -320,7 +320,7 @@ pub enum ClientMsg {
     Mixer(Result<bw_core::audio::Command, &'static str>),
     Mic(Bytes),
     Cam(Bytes),
-    /// `{"offer": "<sdp>"}` or `{"close": true}` (see `RTC_CLIENT`).
+    /// `{"offer": "<sdp>", "g": 1}` or `{"close": true, "g": 1}` (see `RTC_CLIENT`).
     Rtc(serde_json::Value),
     /// The page's second of video (see `REPORT`).
     Report { delay_ms: u16, dropped: u16 },

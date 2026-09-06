@@ -6,7 +6,7 @@ import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, clipboar
 import { createStore } from './store.js';
 import { startMic, stopMic } from './mic.js';
 import { startCam, stopCam } from './cam.js';
-import { openRtc } from './rtc.js';
+import { openRtc, RTC_TIMING } from './rtc.js';
 import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, PRESET_IDS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
@@ -14,7 +14,7 @@ const qualityName = name => PRESETS.includes(name) ? name : 'max';
 
 export function createViewer() {
   const store = createStore({
-    // 'no-token' | 'connecting' | 'connected' | 'retrying' | 'unauthorized' | 'gone'
+    // 'no-token' | 'connecting' | 'connected' | 'retrying' | 'unauthorized' | 'gone' | 'quit' | 'closed'
     status: TOKEN ? 'connecting' : 'no-token',
     reason: '',
     // 'controller' drives the desktop and sizes it; 'participant' (a control token) watches and may take
@@ -42,6 +42,7 @@ export function createViewer() {
     transport: pref.getStr('transport') === 'webrtc' ? 'webrtc' : 'websocket', // this viewer's pick
     rtcAvailable: false, // the server does WebRTC (it sent ICE servers)
     videoVia: 'websocket', // where the video comes from now
+    rtcRecovery: { state: 'unavailable', reason: 'Waiting for desktop connection', retries: 0, nextAt: 0 },
     cam: false, // the local webcam is going to the desktop
     camAvailable: false, // the desktop takes one (--webcam)
     codecs: [], // what the server encodes, in Auto's order: [{ codec, hardware }]
@@ -62,6 +63,7 @@ export function createViewer() {
   let mixerSubscribed = false, mixerTimer = 0;
   const mixerVolumes = new Map();
   let ws, decoder, stream = null, awaitingKey = true;
+  let disposed = false, reconnectTimer;
   let frames = 0, received = 0, windowFrames = 0, windowBytes = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [], keyframes = 0, decodeErrors = 0, dropped = 0;
   let videoSeq = -1, audioSeq = -1, lost = 0, dropNext = false; // seq: last message seen per stream; lost: gaps in either
   let pendingFrame = null, rafId = 0;
@@ -147,26 +149,33 @@ export function createViewer() {
 
   // --- connection -----------------------------------------------------------------
   function connect() {
+    if (disposed) return;
+    clearTimeout(reconnectTimer);
     if (!TOKEN) { store.set({ status: 'no-token' }); return; }
     audioSeq = -1; // the server kept counting while we were away
     connects++;
-    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${WINDOW ? '/window/' + WINDOW : ''}`);
+    const socket = ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${WINDOW ? '/window/' + WINDOW : ''}`);
     ws.binaryType = 'arraybuffer';
     ws.onopen = async () => {
+      if (disposed || ws !== socket) return;
       const t = new TextEncoder().encode(TOKEN);
       send(AUTH, t.length, dv => new Uint8Array(dv.buffer, 1).set(t));
-      await sendHello();
+      await sendHello(socket);
+      if (disposed || ws !== socket || socket.readyState !== WebSocket.OPEN) return;
       if (mixerSubscribed) sendText(MIXER_CLIENT, JSON.stringify({ op: 'subscribe', enabled: true }));
       if (!WINDOW) sendResize(); // a window stream is the window's size
       else if (document.hasFocus()) sendControl({ id: +WINDOW, op: 'activate' }); // a popup is focused before its script runs
     };
-    ws.onmessage = e => onMessage(e.data);
+    ws.onmessage = e => { if (!disposed && ws === socket) onMessage(e.data); };
     ws.onclose = e => {
+      if (disposed || ws !== socket) return;
       closes.push(`${e.code}:${e.reason}`);
       cancelMixerVolumes();
       store.set({ mixer: { available: false, generation: '', nodes: [], routing: false, error: 'Desktop disconnected.' }, mixerLevels: {}, mixerError: '' });
       micStop(); camStop(); // nobody hears or sees them now, and the role is whatever the next connection says
-      clearTimeout(rtcTimer); rtc?.close(); rtc = null; // the next connection offers again
+      closeRtc(false);
+      iceServers = [];
+      recovery('unavailable', 'WebSocket disconnected');
       store.set({ role: null, playback: null, audioAvailable: false, micAvailable: false, camAvailable: false, rtcAvailable: false, videoVia: 'websocket' });
       if (e.code === 4001) {
         stream = null;
@@ -178,7 +187,7 @@ export function createViewer() {
       if (e.code === 4003) { store.set({ status: 'gone', reason: e.reason }); return; } // the window is gone
       if (quitting) { store.set({ status: 'quit', stream: null }); return; } // we asked for this
       store.set({ status: 'retrying' });
-      setTimeout(connect, 1000);
+      reconnectTimer = setTimeout(() => { if (ws === socket) connect(); }, 1000);
     };
   }
   function forgetToken() { try { sessionStorage.removeItem('bw.token'); } catch {} }
@@ -244,7 +253,7 @@ export function createViewer() {
 
   // Which codec families this browser decodes, in hardware and at all (bit0 H.264, bit1 HEVC, bit2 VP9,
   // bit3 AV1, bit4 VP8), and this viewer's codec and quality choice (codec 0 = Auto; quality uses PRESET_IDS).
-  async function sendHello() {
+  async function sendHello(socket) {
     const probes = ['avc1.640028', 'hev1.1.6.L120.90', 'vp09.00.40.08', 'av01.0.09M.08', 'vp8'];
     let hw = 0, sw = 0;
     for (const [i, codec] of probes.entries()) {
@@ -252,6 +261,7 @@ export function createViewer() {
       if (await ok('prefer-hardware')) hw |= 1 << i;
       if (await ok('no-preference')) sw |= 1 << i;
     }
+    if (disposed || ws !== socket || socket.readyState !== WebSocket.OPEN) return;
     store.set({ decodable: CODEC_FAMILIES.filter((_, i) => sw & (1 << i)) });
     const { codec, quality } = state().choice;
     send(HELLO, 4, dv => { dv.setUint8(1, hw); dv.setUint8(2, sw); dv.setUint8(3, CODEC_FAMILIES.indexOf(codec) + 1); dv.setUint8(4, PRESET_IDS[quality]); });
@@ -330,6 +340,7 @@ export function createViewer() {
         fitCanvas();
         resync();
         store.set({ stream, status: 'connected' });
+        if (state().transport === 'webrtc') maybeRtc();
         fetchElements(); // the scale may have changed
         break;
       case CURSOR: {
@@ -377,8 +388,9 @@ export function createViewer() {
       case RTC: {
         const v = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
         if (v.ice_servers) { iceServers = v.ice_servers; store.set({ rtcAvailable: true }); maybeRtc(); }
+        if (v.keyframe && v.g === rtcGen) awaitingKey = true;
         if (v.answer && v.g === rtcGen) rtc?.answer(v.answer); // an answer to an attempt since given up is no use
-        if (v.close && rtc && v.g === rtcGen) { closeRtc(); store.set({ transport: 'websocket' }); notice('The data channel stalled; the video is back on the socket.'); }
+        if (v.close && rtc && v.g === rtcGen) failRtc(v.reason || 'Server queue stalled');
         break;
       }
       case STREAM_STATE:
@@ -428,18 +440,18 @@ export function createViewer() {
         if (!decoder) return;
         received++;
         const key = (dv.getUint8(1) & 1) !== 0, seq = dv.getUint16(2, true), pts = Number(dv.getBigUint64(4, true)), now = performance.now();
+        // Both paths share a sequence; late and duplicate frames cannot update the path baselines.
+        if (videoSeq >= 0 && ((videoSeq - seq) & 0xffff) < 0x8000) return;
         delaySec = Math.min(delaySec, now - pts / 1000); // how late the frame is against its stamp; the second's least is what the link added
         if (lastPts && pts - lastPts < 100e3 && now - lastArrival > 500) freezes++; // frames made together arriving apart: the link held them
         lastArrival = now; lastPts = pts;
-        // A frame from behind is nothing new: the other pipe delivering late at a transport switch.
-        if (videoSeq >= 0 && seq !== videoSeq && ((videoSeq - seq) & 0xffff) < 0x8000) return;
         if (key) { keyframes++; sinceKey = 0; } else sinceKey++;
         // A gap in seq means the server dropped frames for us; a delta after a gap can't be decoded.
         const gap = videoSeq >= 0 ? (seq - videoSeq - 1) & 0xffff : 0;
         videoSeq = seq;
         if (!awaitingKey) { lost += gap; videoLost += gap; } // while we wait for a keyframe we asked for, the skipped deltas are expected
         if (!key && (gap || awaitingKey || decoder.decodeQueueSize > 4)) {
-          dropped++;
+          if (!awaitingKey) dropped++;
           if (!awaitingKey) { awaitingKey = true; send(REQUEST_KEYFRAME, 0); }
           return;
         }
@@ -457,12 +469,12 @@ export function createViewer() {
 
   // frame rate, bandwidth (video + audio) and timings over the last second
   let rtcStats = null, rtcStatsPending = false; // the channel's numbers as of the last second, fetched off the tick
-  setInterval(() => {
+  const statsTimer = setInterval(() => {
     const s = state();
     if (s.statsOn && rtc && !rtcStatsPending) {
       const mine = rtc;
-      rtcStatsPending = true;
-      mine.stats().then(st => { if (rtc === mine) rtcStats = st; }).catch(() => {}).finally(() => { rtcStatsPending = false; });
+      rtcStatsPending = mine;
+      mine.stats().then(st => { if (rtc === mine) rtcStats = st; }).catch(() => {}).finally(() => { if (rtcStatsPending === mine) rtcStatsPending = false; });
     } else if (!rtc) rtcStats = null;
     const timings = s.statsOn ? { decode: [pct(stage_.decode, .5), pct(stage_.decode, .95)], paint: [pct(stage_.paint, .5), pct(stage_.paint, .95)], interval: [pct(stage_.interval, .5), pct(stage_.interval, .95)] } : null;
     stage_.decode.length = stage_.paint.length = stage_.interval.length = 0;
@@ -475,18 +487,18 @@ export function createViewer() {
       if (delayBase.length > 10) delayBase.shift();
       const late = Math.min(65535, Math.round(delaySec - Math.min(...delayBase)));
       send(REPORT, 4, dv => { dv.setUint16(1, late, true); dv.setUint16(3, Math.min(65535, dropped - lastDropped), true); });
+      lastDropped = dropped;
     }
-    lastDropped = dropped; delaySec = Infinity;
+    delaySec = Infinity;
     // a channel that loses or holds up frames in three of ten seconds gives the video back to the socket
     const lostNow = videoLost + freezes + (rtc?.incomplete() ?? 0);
-    lossy.push(s.videoVia === 'webrtc' && lostNow > lastLost);
+    const badTick = s.videoVia === 'webrtc' && lostNow > lastLost;
+    lossy.push(badTick);
+    if (badTick) qualifyHealthyRtc();
     if (lossy.length > 10) lossy.shift();
     lastLost = lostNow;
     if (lossy.filter(Boolean).length >= 3) {
-      lossy = [];
-      closeRtc();
-      store.set({ transport: 'websocket' });
-      notice('The data channel kept stalling; the video is back on the socket.');
+      failRtc('Repeated frame loss or stalls');
     }
   }, 1000);
 
@@ -578,49 +590,103 @@ export function createViewer() {
   }
 
   // --- WebRTC transport ------------------------------------------------------------------------
-  // The data channel is opened when the viewer picks it: measured against the socket it is even on a
-  // clean link and behind it under packet loss, so the socket keeps the video unless it is picked (see
-  // the README). The video moves to the channel when it opens and comes back to the socket when it
-  // closes, when it loses or holds up frames in three of ten seconds, or when the server gives it up
-  // (a frame three seconds at the front of its queue); the pick goes back with it. A pick that hasn't opened three seconds after
-  // the offer goes back too.
+  // Socket video continues between channel attempts. Failures preserve the selected transport;
+  // only a sustained healthy channel resets the retry backoff. Each attempt belongs to one socket.
   let rtc = null, iceServers = [], rtcTimer, rtcGen = 0;
-  function maybeRtc() {
-    if (rtc || state().transport !== 'webrtc' || !state().rtcAvailable || ws?.readyState !== WebSocket.OPEN) return;
-    const mine = (rtc = openRtc({
-      iceServers,
-      g: ++rtcGen,
-      signal: o => {
-        sendText(RTC_CLIENT, JSON.stringify(o));
-        clearTimeout(rtcTimer); // the channel has three seconds from the offer, however long gathering took
-        rtcTimer = setTimeout(() => {
-          if (rtc === mine && state().videoVia !== 'webrtc') {
-            closeRtc();
-            store.set({ transport: 'websocket' }); // it didn't open: the select says so, and picking it again tries again
-          }
-        }, 3000);
-      },
-      onMessage,
-      onOpen: () => { if (rtc === mine) { clearTimeout(rtcTimer); store.set({ videoVia: 'webrtc' }); delayBase = []; } }, // a new path, a new lateness baseline
-      onClose: () => { if (rtc === mine) { closeRtc(); store.set({ transport: 'websocket' }); notice('The data channel closed; the video is back on the socket.'); } },
-    }));
+  let rtcAttempt = null, retryTimer, healthyTimer, retryFailures = 0, rtcRetries = 0;
+  function recovery(status, reason = '', nextAt = 0) {
+    store.set({ rtcRecovery: { state: status, reason, retries: rtcRetries, nextAt } });
   }
-  // back to the socket: the server is told (the channel may still look open to it); a frame lost on the
-  // way shows as a seq gap, which asks for a keyframe
-  function closeRtc() {
-    clearTimeout(rtcTimer);
-    if (!rtc) return;
-    rtc.close();
-    rtc = null;
-    if (ws?.readyState === WebSocket.OPEN) sendText(RTC_CLIENT, '{"close":true}');
+  function resetPath() {
+    lossy = []; delayBase = []; delaySec = Infinity;
+    lastPts = 0; lastArrival = 0; lastLost = videoLost + freezes;
+  }
+  function clearPeerStats() {
+    rtcStats = null; rtcStatsPending = false;
+    store.set({ stats: { ...state().stats, rtc: null } });
+  }
+  function maybeRtc(retrying = false) {
+    if ((!retrying && retryTimer) || disposed || rtcAttempt || state().transport !== 'webrtc' || ws?.readyState !== WebSocket.OPEN) return;
+    if (!state().rtcAvailable || typeof RTCPeerConnection !== 'function') {
+      recovery('unavailable', state().rtcAvailable ? 'Browser does not support WebRTC' : 'Server WebRTC unavailable');
+      return;
+    }
+    clearTimeout(retryTimer); retryTimer = null;
+    const attempt = rtcAttempt = { socket: ws, g: ++rtcGen };
+    const current = () => !disposed && rtcAttempt === attempt && ws === attempt.socket && ws.readyState === WebSocket.OPEN;
+    if (retrying) rtcRetries++;
+    clearPeerStats();
+    recovery(retrying ? 'retrying' : 'connecting');
+    rtcTimer = setTimeout(() => { if (current()) failRtc('Connection attempt timed out'); }, RTC_TIMING.attempt);
+    try {
+      rtc = openRtc({
+        iceServers, g: attempt.g,
+        signal: o => { if (current()) sendText(RTC_CLIENT, JSON.stringify(o)); },
+        onMessage: buf => { if (current()) onMessage(buf); },
+        onOpen: () => {
+          if (!current()) return;
+          clearTimeout(rtcTimer);
+          resetPath();
+          store.set({ videoVia: 'webrtc' });
+          recovery('active');
+          qualifyHealthyRtc();
+        },
+        onClose: reason => { if (current()) failRtc(reason); },
+      });
+    } catch {
+      if (current()) failRtc('Peer creation failed');
+    }
+  }
+  function qualifyHealthyRtc() {
+    clearTimeout(healthyTimer);
+    const attempt = rtcAttempt;
+    healthyTimer = setTimeout(() => {
+      if (rtcAttempt === attempt && attempt?.socket === ws && state().videoVia === 'webrtc') retryFailures = 0;
+    }, RTC_TIMING.healthy);
+  }
+  function closeRtc(notify = true) {
+    clearTimeout(rtcTimer); clearTimeout(retryTimer); clearTimeout(healthyTimer);
+    retryTimer = null;
+    const attempt = rtcAttempt, peer = rtc, changedPath = state().videoVia === 'webrtc';
+    rtcAttempt = null; rtc = null;
+    peer?.close();
+    if (notify && attempt && ws === attempt.socket && ws.readyState === WebSocket.OPEN) {
+      sendText(RTC_CLIENT, JSON.stringify({ close: true, g: attempt.g }));
+    }
     store.set({ videoVia: 'websocket' });
-    lossy = []; delayBase = []; // this channel's record and path go with it
+    clearPeerStats();
+    if (changedPath) resetPath();
+  }
+  function failRtc(reason) {
+    if (!rtcAttempt) return;
+    const socket = ws;
+    closeRtc();
+    if (disposed || state().transport !== 'webrtc' || socket?.readyState !== WebSocket.OPEN) return;
+    const delay = Math.min(RTC_TIMING.retryMax, RTC_TIMING.retry * 2 ** Math.min(retryFailures++, 5)) * (0.8 + Math.random() * 0.2);
+    recovery('waiting', reason, Date.now() + delay);
+    retryTimer = setTimeout(() => { retryTimer = null; if (ws === socket) maybeRtc(true); }, delay);
+  }
+  function retryRtc() {
+    if (state().rtcRecovery.state !== 'waiting') return;
+    if (ws?.readyState !== WebSocket.OPEN) { recovery('waiting', 'Waiting for WebSocket connection', state().rtcRecovery.nextAt); return; }
+    maybeRtc(true);
   }
   function setTransport(transport) {
+    transport = transport === 'webrtc' ? 'webrtc' : 'websocket';
     pref.setStr('transport', transport);
     store.set({ transport });
     if (transport === 'webrtc') maybeRtc();
-    else closeRtc();
+    else { closeRtc(); recovery('idle'); }
+  }
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    micStop(); camStop(); stopPlayback(); cancelMixerVolumes();
+    clearTimeout(reconnectTimer); clearInterval(statsTimer);
+    closeRtc(false);
+    ws?.close();
+    store.set({ status: 'closed', role: null, stream: null });
+    recovery('unavailable', 'Viewer closed');
   }
 
   // --- microphone -----------------------------------------------------------------------------
@@ -968,7 +1034,8 @@ export function createViewer() {
   // --- the canvas -------------------------------------------------------------------------------
   let attached = false;
   function attach(el) {
-    if (attached || !el) return;
+    if (!el) { if (attached) dispose(); return; }
+    if (attached) return;
     attached = true;
     canvas = el;
     const byType = (mouse, touch) => e => (e.pointerType === 'touch' ? touch : mouse)(e);
@@ -989,6 +1056,8 @@ export function createViewer() {
     store,
     resumeAudio,
     attach,
+    dispose,
+    retryRtc,
     setStage,
     fullscreen,
     isFullscreen: () => !!document.fullscreenElement && document.fullscreenElement === canvas?.parentElement,

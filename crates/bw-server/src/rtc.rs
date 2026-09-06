@@ -26,7 +26,7 @@ use std::{
 use anyhow::{Context, Result};
 use bw_core::Bytes;
 use str0m::{Candidate, Event, Input, Output, Rtc, change::SdpOffer, channel::ChannelId, net::{Protocol, Receive}};
-use tokio::{net::UdpSocket, sync::mpsc};
+use tokio::{net::UdpSocket, sync::{mpsc, oneshot}};
 
 use crate::protocol;
 
@@ -50,15 +50,15 @@ enum Msg {
     /// A frame for a session's channel.
     Frame { session: u64, data: Bytes },
     /// The session ended, or went back to its socket.
-    Close { session: u64 },
+    Close { session: u64, g: Option<serde_json::Value>, reply: Option<oneshot::Sender<bool>> },
 }
 
 /// A session's way to the hub; cheap to clone.
 #[derive(Clone)]
 pub struct Hub {
     tx: mpsc::Sender<Msg>,
-    /// Sessions whose `video` channel is open right now, with the frames dropped for each since it last asked
-    /// and the frames waiting in its queue.
+    /// Channel claims and pressure. Closed claims remain until acknowledged, so even a pending
+    /// browser attempt that missed its final frame can request a refresh.
     open: Arc<Open>,
     pub ice_servers: Arc<Vec<serde_json::Value>>,
 }
@@ -95,7 +95,7 @@ impl Hub {
     /// The session's channel, while it is open, under pressure: frames dropped since the last call, and
     /// frames waiting in its queue now; congestion, to its rate controller.
     pub fn pressure(&self, session: u64) -> Option<(u32, usize)> {
-        self.open.lock().unwrap().get_mut(&session).map(|(dropped, queued)| (std::mem::take(dropped), *queued))
+        self.open.lock().unwrap().get_mut(&session).filter(|c| c.active).map(|c| (std::mem::take(&mut c.dropped), c.queued))
     }
 
     /// Signalling waits for room in the queue: an offer without an answer, or a close that never arrives,
@@ -112,8 +112,16 @@ impl Hub {
         }
     }
 
+    /// Releases only the named attempt, returning whether it held video and needs a refresh.
+    /// Delayed client closes cannot remove its successor.
+    pub async fn close_attempt(&self, session: u64, g: serde_json::Value) -> bool {
+        let (reply, rx) = oneshot::channel();
+        let _ = self.tx.send(Msg::Close { session, g: Some(g), reply: Some(reply) }).await;
+        rx.await.unwrap_or(false)
+    }
+
     pub async fn close(&self, session: u64) {
-        let _ = self.tx.send(Msg::Close { session }).await;
+        let _ = self.tx.send(Msg::Close { session, g: None, reply: None }).await;
     }
 }
 
@@ -140,6 +148,7 @@ struct Peer {
     /// The session's socket and the offer's number, for the word that the channel is given up.
     reply: mpsc::Sender<Bytes>,
     g: serde_json::Value,
+    close_reason: &'static str,
 }
 
 /// A frame at the front of the queue this long, moving or not, is too slow for a desktop: the channel
@@ -150,8 +159,14 @@ const STALL: Duration = Duration::from_secs(3);
 // ponytail: a cap; blocking the session as the socket does if a viewer wants the latency bounded tighter
 const QUEUE: usize = 30;
 
-/// Per open channel: frames dropped since the session last asked, frames waiting in the queue.
-type Open = Mutex<HashMap<u64, (u32, usize)>>;
+/// The latest channel claim, with live queue pressure or an inactive claim awaiting close acknowledgement.
+struct Claim {
+    g: serde_json::Value,
+    active: bool,
+    dropped: u32,
+    queued: usize,
+}
+type Open = Mutex<HashMap<u64, Claim>>;
 
 /// One datagram in: the candidate address it came to, from where, the bytes.
 type Datagram = (SocketAddr, SocketAddr, Vec<u8>);
@@ -178,7 +193,7 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
         for (id, peer) in peers.iter_mut() {
             if !peer.queue.is_empty() && peer.front_since.elapsed() > STALL {
                 tracing::info!(session = id, "WebRTC: a frame {STALL:?} at the queue's front; the socket takes the video");
-                let _ = peer.reply.try_send(protocol::rtc(&serde_json::json!({ "close": true, "g": peer.g })));
+                peer.close_reason = "Server queue stalled";
                 peer.rtc.disconnect(); // and the peer goes below, with its channel's claim on the frames
             }
             flush(peer, &open, *id);
@@ -204,7 +219,8 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
         peers.retain(|id, p| {
             let alive = p.rtc.is_alive();
             if !alive {
-                open.lock().unwrap().remove(id);
+                if let Some(claim) = open.lock().unwrap().get_mut(id) { claim.active = false; }
+                let _ = p.reply.try_send(protocol::rtc(&serde_json::json!({ "close": true, "g": p.g, "reason": p.close_reason })));
                 tracing::debug!(session = id, "WebRTC: peer connection over");
             }
             alive
@@ -227,12 +243,16 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
             }
             msg = rx.recv() => match msg {
                 Some(Msg::Offer { session, sdp, g, reply }) => {
+                    peers.remove(&session);
                     open.lock().unwrap().remove(&session);
-                    match answer(&sdp, g, &addrs, reply) {
+                    match answer(&sdp, g.clone(), &addrs, reply.clone()) {
                         Ok(peer) => {
                             peers.insert(session, peer); // a second offer replaces the first connection
                         }
-                        Err(e) => tracing::warn!(session, "WebRTC offer refused: {e:#}"),
+                        Err(e) => {
+                            tracing::warn!(session, "WebRTC offer refused: {e:#}");
+                            let _ = reply.try_send(protocol::rtc(&serde_json::json!({ "close": true, "g": g, "reason": "Offer rejected" })));
+                        }
                     }
                 }
                 Some(Msg::Frame { session, data }) => {
@@ -255,9 +275,14 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
                         }
                     }
                 }
-                Some(Msg::Close { session }) => {
-                    peers.remove(&session);
-                    open.lock().unwrap().remove(&session);
+                Some(Msg::Close { session, g, reply }) => {
+                    let mut claims = open.lock().unwrap();
+                    let claimed = claims.get(&session).is_some_and(|c| g.is_none() || g.as_ref() == Some(&c.g));
+                    if g.is_none() || peers.get(&session).is_some_and(|p| g.as_ref() == Some(&p.g)) {
+                        peers.remove(&session);
+                    }
+                    if claimed { claims.remove(&session); }
+                    if let Some(reply) = reply { let _ = reply.send(claimed); }
                 }
                 None => return,
             },
@@ -277,7 +302,7 @@ fn answer(sdp: &str, g: serde_json::Value, addrs: &[SocketAddr], reply: mpsc::Se
     }
     let answer = rtc.sdp_api().accept_offer(offer).context("accept offer")?;
     let _ = reply.try_send(protocol::rtc(&serde_json::json!({ "answer": answer.to_sdp_string(), "g": g })));
-    Ok(Peer { rtc, channel: None, frame_id: 0, queue: VecDeque::new(), sent: 0, front_since: Instant::now(), reply, g })
+    Ok(Peer { rtc, channel: None, frame_id: 0, queue: VecDeque::new(), sent: 0, front_since: Instant::now(), reply, g, close_reason: "Peer connection closed" })
 }
 
 fn event(session: u64, peer: &mut Peer, e: Event, open: &Open) {
@@ -285,14 +310,14 @@ fn event(session: u64, peer: &mut Peer, e: Event, open: &Open) {
         Event::ChannelOpen(cid, label) => {
             tracing::info!(session, label, "WebRTC: data channel open");
             peer.channel = Some(cid);
-            open.lock().unwrap().insert(session, (0, 0));
+            open.lock().unwrap().insert(session, Claim { g: peer.g.clone(), active: true, dropped: 0, queued: 0 });
         }
         Event::ChannelClose(cid) => {
             if peer.channel == Some(cid) {
                 peer.channel = None;
                 peer.queue.clear();
                 peer.sent = 0;
-                open.lock().unwrap().remove(&session);
+                if let Some(claim) = open.lock().unwrap().get_mut(&session) { claim.active = false; }
             }
         }
         Event::IceConnectionStateChange(state) => {
@@ -306,8 +331,8 @@ fn event(session: u64, peer: &mut Peer, e: Event, open: &Open) {
 }
 
 fn dropped(open: &Open, session: u64, count: u32) {
-    if let Some((n, _)) = open.lock().unwrap().get_mut(&session) {
-        *n += count;
+    if let Some(claim) = open.lock().unwrap().get_mut(&session) {
+        claim.dropped += count;
     }
 }
 
@@ -338,7 +363,7 @@ fn flush(peer: &mut Peer, open: &Open, session: u64) {
         peer.front_since = Instant::now();
         peer.frame_id = peer.frame_id.wrapping_add(1);
     }
-    if let Some((_, queued)) = open.lock().unwrap().get_mut(&session) {
-        *queued = peer.queue.len();
+    if let Some(claim) = open.lock().unwrap().get_mut(&session) {
+        claim.queued = peer.queue.len();
     }
 }

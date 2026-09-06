@@ -29,7 +29,7 @@ try {
     const context = await browser.newContext({ viewport: { width: 1600, height: 900 } });
     await context.addInitScript(saved => {
       if (saved !== null) localStorage.setItem('bw.quality', saved);
-      window.qualityStates = []; window.hellos = []; window.qualityRtcFrames = 0;
+      window.qualityStates = []; window.hellos = []; window.qualityOffers = []; window.qualitySocketFrames = 0; window.qualityRtcFrames = 0;
       const OriginalPeer = window.RTCPeerConnection;
       window.RTCPeerConnection = class extends OriginalPeer {
         createDataChannel(...args) {
@@ -43,10 +43,11 @@ try {
         constructor(...args) {
           super(...args); window.qualitySocket = this;
           this.addEventListener('message', ({ data }) => {
+            if (data instanceof ArrayBuffer && new Uint8Array(data)[0] === 0x02) qualitySocketFrames++;
             if (data instanceof ArrayBuffer && new Uint8Array(data)[0] === 0x0c) qualityStates.push(JSON.parse(new TextDecoder().decode(new Uint8Array(data, 1))));
           });
         }
-        send(data) { const bytes = new Uint8Array(data); if (bytes[0] === 0x81) hellos.push([...bytes]); super.send(data); }
+        send(data) { const bytes = new Uint8Array(data); if (bytes[0] === 0x81) hellos.push([...bytes]); if (bytes[0] === 0x95) { const v = JSON.parse(new TextDecoder().decode(bytes.subarray(1))); if (v.offer) qualityOffers.push(v.g); } super.send(data); }
       };
     }, saved ?? null);
     const page = await context.newPage();
@@ -115,6 +116,24 @@ try {
     assert.equal(await select.inputValue(), 'low');
     assert.equal(await page.evaluate(() => localStorage.getItem('bw.quality')), 'low');
     assert.equal(await page.evaluate(() => bw.store.get().streamState.ceiling_kbps), 5000);
+    assert(await page.evaluate(() => qualityOffers.length >= 2 && qualityOffers.at(-2) !== qualityOffers.at(-1)));
+    // A close from the first attempt must not release the successor's channel claim.
+    await page.evaluate(() => {
+      const body = new TextEncoder().encode(JSON.stringify({ close: true, g: qualityOffers.at(-2) }));
+      qualitySocket.send(new Uint8Array([0x95, ...body]));
+    });
+    await page.waitForTimeout(200);
+    await page.evaluate(() => { window.qualityRtcFrames = 0; qualitySocket.send(new Uint8Array([0x88])); });
+    await page.waitForFunction(() => qualityRtcFrames > 0);
+    // Explicit matching signaling releases the server claim even while the browser peer stays open.
+    await page.evaluate(() => {
+      window.qualitySocketFrames = 0;
+      const body = new TextEncoder().encode(JSON.stringify({ close: true, g: qualityOffers.at(-1) }));
+      qualitySocket.send(new Uint8Array([0x95, ...body]));
+    });
+    await page.waitForTimeout(200);
+    await page.evaluate(() => qualitySocket.send(new Uint8Array([0x88])));
+    await page.waitForFunction(() => qualitySocketFrames > 0);
     await page.evaluate(() => bw.setTransport('websocket'));
     await page.evaluate(() => bw.store.set({ streamState: { ...bw.store.get().streamState, bitrate_kbps: 1562, max_fps: 30 } }));
     assert.equal(await page.getByTitle('Current encoder target; actual network throughput depends on scene activity').textContent(), 'Target 1.6 Mbit/s, 30 fps cap');

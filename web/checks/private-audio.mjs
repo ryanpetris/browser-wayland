@@ -5,10 +5,11 @@ import { spawn, execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
 
+const rtc = process.argv.includes('--rtc');
 const root = await mkdtemp(tmpdir() + '/bw-private-check-');
 await mkdir(root + '/home'); await mkdir(root + '/runtime', { mode: 0o700 });
 const log = await open(root + '/desktop.log', 'w');
-const desktop = spawn('/src/target/release/browser-wayland', ['--no-tls', '--no-rtc', '--render-node', 'none', '--listen', '127.0.0.1:8088', '--socket-name', 'wayland-private-check'], {
+const desktop = spawn('/src/target/release/browser-wayland', ['--no-tls', ...(rtc ? [] : ['--no-rtc']), '--render-node', 'none', '--listen', '127.0.0.1:8088', '--socket-name', 'wayland-private-check'], {
   env: { ...process.env, HOME: root + '/home', XDG_RUNTIME_DIR: root + '/runtime', XDG_CONFIG_HOME: root + '/config', PULSE_SINK: 'inherited-wrong-sink', PULSE_SOURCE: 'inherited-wrong-source', PIPEWIRE_NODE: '99999' },
   stdio: ['ignore', log.fd, log.fd],
 });
@@ -39,14 +40,28 @@ try {
   browser = await chromium.launch({ executablePath: '/usr/bin/chromium', env: { ...process.env, HOME: root + '/home', XDG_CONFIG_HOME: root + '/browser-config', XDG_RUNTIME_DIR: root + '/runtime' }, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-audio-capture=' + root + '/microphone.wav'] });
   const page = await browser.newPage();
   await page.addInitScript(() => {
+    window.audioSocketPackets = 0;
+    const Peer = window.RTCPeerConnection;
+    window.RTCPeerConnection = class extends Peer {
+      createDataChannel(...args) { const ch = super.createDataChannel(...args); window.audioCheckChannel = ch; return ch; }
+    };
     const Original = window.WebSocket;
     window.WebSocket = class extends Original {
-      constructor(...args) { super(...args); window.checkSocket = this; }
+      constructor(...args) { super(...args); window.checkSocket = this; this.addEventListener('message', ({ data }) => { if (data instanceof ArrayBuffer && new Uint8Array(data)[0] === 5) audioSocketPackets++; }); }
     };
   });
   await page.goto('http://127.0.0.1:8088/#token=' + token);
   await page.waitForFunction(() => window.bw?.store.get().status === 'connected');
   assert.equal(await page.evaluate(() => bw.store.get().audioAvailable), true);
+  if (!rtc) {
+    await page.evaluate(() => bw.setTransport('webrtc'));
+    assert.deepEqual(await page.evaluate(() => [bw.store.get().rtcAvailable, bw.store.get().rtcRecovery.state, localStorage.getItem('bw.transport')]), [false, 'unavailable', 'webrtc']);
+    await page.waitForTimeout(1200);
+    assert.equal(await page.evaluate(() => window.audioCheckChannel), undefined);
+    await page.evaluate(() => bw.setTransport('websocket'));
+    console.log('disabled server preserves WebRTC preference without attempts');
+  }
+
   await page.evaluate(() => {
     for (const length of [0, 65_537]) {
       const packet = new Uint8Array(length + 1);
@@ -57,7 +72,7 @@ try {
   await page.waitForTimeout(500);
   assert.equal(await page.evaluate(() => bw.store.get().audioAvailable), true);
   console.log('invalid microphone lengths leave audio available');
-  await page.evaluate(() => bw.spawn('gst-launch-1.0 -q audiotestsrc is-live=true num-buffers=300 freq=440 volume=0.1 ! audioconvert ! audio/x-raw,rate=48000,channels=2 ! pipewiresink sync=false'));
+  await page.evaluate(() => bw.spawn('gst-launch-1.0 -q audiotestsrc is-live=true num-buffers=900 freq=440 volume=0.1 ! audioconvert ! audio/x-raw,rate=48000,channels=2 ! pipewiresink sync=false'));
   await page.waitForTimeout(2000);
   console.log('native audio stats', await page.evaluate(() => bw.store.get().stats.audio));
   let clientEnv;
@@ -75,6 +90,21 @@ try {
   }
   await page.waitForFunction(() => bw.store.get().stats.audio?.signalPeak > .05);
   console.log('native playback through private default passed');
+  if (rtc) {
+    await page.evaluate(() => bw.setTransport('webrtc'));
+    await page.waitForFunction(() => bw.store.get().videoVia === 'webrtc');
+    const before = await page.evaluate(() => audioSocketPackets);
+    await page.waitForFunction(n => audioSocketPackets > n + 10, before);
+    await page.evaluate(() => audioCheckChannel.close());
+    await page.waitForFunction(() => bw.store.get().rtcRecovery.state === 'waiting');
+    const fallback = await page.evaluate(() => audioSocketPackets);
+    await page.waitForFunction(n => audioSocketPackets > n + 5, fallback);
+    await page.waitForFunction(() => bw.store.get().videoVia === 'webrtc');
+    assert.equal(await page.evaluate(() => bw.store.get().transport), 'webrtc');
+    assert(await page.evaluate(() => bw.store.get().stats.audio.signalPeak > .05));
+    console.log('real session audio stayed on WebSocket during RTC playback, fallback and recovery');
+  }
+
   await page.evaluate(() => bw.spawn('gst-launch-1.0 -q audiotestsrc is-live=true num-buffers=300 freq=880 volume=0.1 ! audioconvert ! pulsesink'));
   await page.evaluate(() => { bw.store.get().playback.source.smoothingTimeConstant = 0; });
   await page.waitForTimeout(1000);
@@ -143,7 +173,12 @@ try {
   });
   await page.waitForTimeout(1200);
   await page.evaluate(() => { clearInterval(window.mixerFlood); bw.mixer.subscribe(false); });
-  for (const { command, samples } of recorders) assert(samples.some(s => s.at > resumed + 600 && s.peak > .02), command + ' microphone progresses under subscription traffic');
+  console.log('microphone under subscription traffic', recorders.map(({ command, samples }) => ({ command, buffers: samples.filter(s => s.at > resumed + 600).length, peak: Math.max(0, ...samples.filter(s => s.at > resumed + 600).map(s => s.peak)) })));
+  for (const { command, samples } of recorders) {
+    const active = samples.filter(s => s.at > resumed + 600);
+    // Capture processing attenuates a steady tone; progress needs samples and signal above muted silence.
+    assert(active.reduce((n, s) => n + s.frames, 0) >= 9600 && active.some(s => s.peak > .005), command + ' microphone progresses under subscription traffic');
+  }
   console.log('session microphone mute preserves consent; microphone resumes under sustained mixer traffic');
   await page.evaluate(() => bw.mic.stop());
   const stopped = Date.now();

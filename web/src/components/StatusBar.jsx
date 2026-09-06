@@ -17,7 +17,6 @@ function Choice({ viewer }) {
   const status = useStore(viewer.store, s => s.status);
   const transport = useStore(viewer.store, s => s.transport);
   const rtcAvailable = useStore(viewer.store, s => s.rtcAvailable);
-  const videoVia = useStore(viewer.store, s => s.videoVia);
   if (status !== 'connected') return null;
   const TRANSPORT_LABEL = { webrtc: 'WebRTC', websocket: 'WebSocket' };
   const ceilings = { 'very-low': 2000, low: 5000, medium: st?.medium_kbps, high: 12000, max: 25000 };
@@ -36,7 +35,7 @@ function Choice({ viewer }) {
       <span className="inline-block w-[30ch] shrink-0 whitespace-nowrap" title="Current encoder target; actual network throughput depends on scene activity">
         {st?.preset === choice.quality ? `Target ${mbit(st.bitrate_kbps, 1)}${st.max_fps ? `, ${st.max_fps} fps cap` : ''}` : 'Applying quality…'}
       </span>
-      {rtcAvailable && (
+      {(rtcAvailable || transport === 'webrtc') && (
         <select value={transport} onChange={e => viewer.setTransport(e.target.value)} className={cls} title="Transport: how the video travels (the socket unless the data channel is picked and opens)">
           {TRANSPORTS.map(t => <option key={t} value={t}>{TRANSPORT_LABEL[t]}</option>)}
         </select>
@@ -56,6 +55,16 @@ export function StatusBar({ viewer, audioPanel, onAudioPanel, mixerPanel, onMixe
   const cam = useStore(viewer.store, st => st.cam);
   const camAvailable = useStore(viewer.store, st => st.camAvailable);
   const role = useStore(viewer.store, st => st.role);
+  const transport = useStore(viewer.store, st => st.transport);
+  const videoVia = useStore(viewer.store, st => st.videoVia);
+  const status = useStore(viewer.store, st => st.status);
+  const recovery = useStore(viewer.store, st => st.rtcRecovery);
+  const transportHint = status !== 'connected' ? 'WebSocket disconnected'
+    : videoVia === 'webrtc' ? 'WebRTC'
+    : transport !== 'webrtc' ? 'WebSocket'
+    : recovery.state === 'unavailable' ? 'WebSocket · WebRTC unavailable'
+    : recovery.state === 'connecting' ? 'WebSocket · connecting WebRTC'
+    : 'WebSocket · retrying WebRTC';
   const bad = s.lost + s.dropped + s.decodeErrors;
   // Fixed readout widths keep live statistics from resizing the stage.
   return (
@@ -64,6 +73,10 @@ export function StatusBar({ viewer, audioPanel, onAudioPanel, mixerPanel, onMixe
       <span className="w-[17ch] shrink-0 truncate" title={`Measured video throughput: ${s.mbps.toFixed(1)} Mbit/s`}>{s.mbps.toFixed(1)} Mbit/s</span>
       <span className="hidden w-[10ch] shrink-0 truncate sm:inline" title={`Input to the next painted frame: ${s.latencyMs.toFixed(0)} ms`}>{s.latencyMs.toFixed(0)} ms</span>
       <span className={`hidden w-[20ch] shrink-0 truncate sm:inline ${bad ? 'text-amber-400' : ''}`} title={`lost ${s.lost} · dropped ${s.dropped} · decode errors ${s.decodeErrors}`}>{s.lost} · {s.dropped} · {s.decodeErrors}</span>
+      <span className="flex w-[40ch] max-w-full shrink-0 items-center gap-2" title={recovery.reason || transportHint}>
+        <span className="min-w-0 flex-1 truncate" data-transport-status>{transportHint}</span>
+        <button type="button" onClick={() => viewer.retryRtc()} disabled={recovery.state !== 'waiting'} className={`shrink-0 text-indigo-300 hover:text-indigo-200 ${recovery.state === 'waiting' ? '' : 'invisible'}`}>Retry now</button>
+      </span>
       <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-4 gap-y-1">
         {clipboardFiles.length > 0 ? (
           <button type="button" onClick={async () => { for (const [i, n] of clipboardFiles.entries()) await downloadClipboardFile(i, n).catch(() => {}); }} title={`Download the copied files: ${clipboardFiles.join(', ')}`} className="flex max-w-48 items-center gap-1 truncate text-indigo-300 hover:text-indigo-200">

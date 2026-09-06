@@ -194,6 +194,9 @@ function StatsPanel({ viewer }) {
   const renderer = useStore(viewer.store, st => st.renderer);
   const locked = useStore(viewer.store, st => st.locked);
   const videoVia = useStore(viewer.store, st => st.videoVia);
+  const transport = useStore(viewer.store, st => st.transport);
+  const status = useStore(viewer.store, st => st.status);
+  const recovery = useStore(viewer.store, st => st.rtcRecovery);
   const t = s.timings;
   return (
     <div className="flex flex-col gap-4 p-3 text-xs">
@@ -228,6 +231,17 @@ function StatsPanel({ viewer }) {
         ) : <Row label="State" value="off" />}
       </Section>
       <Section title="Connection">
+        <Row label="Selected transport" value={transport === 'webrtc' ? 'WebRTC' : 'WebSocket'} />
+        <Row label="WebSocket" value={status === 'connected' ? 'connected' : status} />
+        <Row label="WebRTC recovery" value={transport === 'webrtc' ? recovery.state : 'off'} />
+        {transport === 'webrtc' && <>
+          {recovery.reason && <Row label="Reason" value={recovery.reason} />}
+          <Row label="Retries this viewer" value={recovery.retries} />
+          {recovery.state === 'waiting' && <>
+            <Row label="Next attempt" value={`in ${Math.max(0, Math.ceil((recovery.nextAt - Date.now()) / 1000))} s`} />
+            <button type="button" onClick={() => viewer.retryRtc()} className="text-indigo-300 hover:text-indigo-200">Retry now</button>
+          </>}
+        </>}
         <Row label="Video via" value={videoVia === 'webrtc' ? 'WebRTC data channel' : 'WebSocket'} />
         {s.rtc && (
           <>
