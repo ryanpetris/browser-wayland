@@ -147,40 +147,31 @@ impl App {
     }
 
     /// The browser's drag as a compositor command. A drop names the files of its batch and drops their
-    /// URIs; the batch waits for the desktop's word (`dropped_batch`). A name that isn't a plain file name
-    /// cancels instead, so the desktop lets go; a cancel that names a batch (a drag whose upload half
+    /// URIs; the batch comes back with the desktop's word (`DragEnded`). A name that isn't a plain file
+    /// name cancels instead, so the desktop lets go; a cancel that names a batch (a drag whose upload half
     /// failed) sends its files to the transfer folder.
     pub fn drag_command(&self, msg: crate::protocol::DragMsg) -> bw_core::Command {
         use crate::protocol::DragMsg;
         bw_core::Command::Drag(match msg {
             DragMsg::Start => bw_core::Drag::Start,
-            DragMsg::Drop { batch, names } => match self.batch_dir(&batch).and_then(|dir| Ok((uri_list(&dir, &names)?, dir))) {
-                Ok((list, dir)) => {
-                    *self.dropped.lock().unwrap() = Some(dir);
-                    bw_core::Drag::Drop(list)
-                }
+            DragMsg::Drop { batch, names } => match self.batch_dir(&batch).and_then(|dir| uri_list(&dir, &names)) {
+                Ok(list) => bw_core::Drag::Drop { list, batch },
                 Err(_) => bw_core::Drag::Cancel,
             },
             DragMsg::Cancel { batch } => {
-                if let Some(dir) = batch.and_then(|b| self.batch_dir(&b).ok()) {
-                    let files_dir = self.files_dir.clone();
-                    tokio::task::spawn_blocking(move || rescue_files(&dir, &files_dir));
+                if let Some(b) = batch {
+                    self.rescue(&b);
                 }
                 bw_core::Drag::Cancel
             }
         })
     }
 
-    /// The batch just dropped, for the desktop's word on it.
-    pub fn dropped_batch(&self) -> Option<PathBuf> {
-        self.dropped.lock().unwrap().take()
-    }
-
-    /// Staged files nobody took go to the transfer folder, off the async threads; whether every one got
-    /// there. The directory stays for the sweep.
-    pub async fn rescue(&self, dir: PathBuf) -> bool {
-        let files_dir = self.files_dir.clone();
-        tokio::task::spawn_blocking(move || rescue_files(&dir, &files_dir)).await.unwrap_or(false)
+    /// The files of a batch nobody took go to the transfer folder, off the async threads; the task tells
+    /// whether every one got there. The directory stays for the sweep.
+    pub fn rescue(&self, batch: &str) -> tokio::task::JoinHandle<bool> {
+        let (dir, files_dir) = (self.batch_dir(batch), self.files_dir.clone());
+        tokio::task::spawn_blocking(move || dir.is_ok_and(|dir| rescue_files(&dir, &files_dir)))
     }
 
     /// The `index`th `file://` URI of the list on the desktop clipboard, streamed: its name, size and body.
@@ -203,7 +194,6 @@ impl App {
 
 /// Every file of `dir` into `files_dir` under the first free of its names, claimed with a hard link so
 /// nothing there is replaced; across filesystems the bytes go through a `.part` file of ours first.
-/// A source gone already (another rescue, a file manager) is no loss.
 fn rescue_files(dir: &Path, files_dir: &Path) -> bool {
     let _ = std::fs::create_dir_all(files_dir);
     let mut all = true;

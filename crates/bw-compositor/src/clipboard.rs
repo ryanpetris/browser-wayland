@@ -172,11 +172,13 @@ impl State {
         let (serial, time) = (SERIAL_COUNTER.next_serial(), self.now());
         match drag {
             Drag::Start => {
+                if self.drag_dropping.is_some() {
+                    self.drag_release(); // a drop still settling ends first, and is reported
+                }
                 self.drag_active = true;
                 self.drag_data = None;
                 self.drag_accepted = false;
                 self.drag_action = DndAction::empty();
-                self.drag_dropping = None;
                 pointer.motion(self, None, &MotionEvent { location, serial, time });
                 pointer.button(self, &ButtonEvent { button: crate::input::BTN_LEFT, state: ButtonState::Pressed, serial, time });
                 pointer.frame(self);
@@ -187,12 +189,13 @@ impl State {
                 start_dnd(&dh, &seat, self, serial, Some(start), None, source);
                 self.pointer_motion(location); // enter the application under the pointer
             }
-            Drag::Drop(_) if !self.drag_active => {
+            Drag::Drop { batch, .. } if !self.drag_active => {
                 // the grab ended while the files were uploading (the viewer blurred or lost control)
-                let _ = self.events.send(Event::DragEnded { taken: false });
+                let _ = self.events.send(Event::DragEnded { taken: false, batch });
             }
-            Drag::Drop(list) => {
+            Drag::Drop { list, batch } => {
                 self.drag_data = Some(Arc::new(list));
+                self.drag_batch = batch;
                 self.drag_dropping = Some(std::time::Instant::now() + std::time::Duration::from_millis(1500));
                 // out and back in: a fresh offer, readable now (a target that asked early keeps what it read,
                 // an empty list; its predecessor's late accept/action requests can't count for the new one:
@@ -214,8 +217,8 @@ impl State {
                 });
             }
             Drag::Cancel => {
-                self.drag_dropping = None;
-                pointer.motion(self, None, &MotionEvent { location, serial, time }); // out of the application: the release drops on nothing
+                // out of the application: the release drops on nothing (a drop still settling is reported as not taken)
+                pointer.motion(self, None, &MotionEvent { location, serial, time });
                 self.drag_release();
                 self.pointer_motion(location); // back in, as a plain pointer
             }
@@ -243,7 +246,7 @@ impl State {
         pointer.frame(self);
         self.pressed_buttons.remove(&crate::input::BTN_LEFT);
         if ended {
-            let _ = self.events.send(Event::DragEnded { taken: self.drag_taken });
+            let _ = self.events.send(Event::DragEnded { taken: self.drag_taken, batch: std::mem::take(&mut self.drag_batch) });
         }
     }
 

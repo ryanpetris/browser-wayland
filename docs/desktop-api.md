@@ -177,7 +177,9 @@ carries in the drop (`Drag` `drop`) or the paste (`POST /api/clipboard/files` wi
 state waits on the server between the uploads and their use. The desktop's word on the drop (`DragEnded`)
 settles a drag's batch: taken, it is left as it is, moved out or copied from; refused, or a `cancel`
 naming the batch, its files go to the transfer folder (claimed with hard links, so nothing there is
-replaced; a copy through a `.part` file across filesystems), and the page hears once they are there.
+replaced; a copy through a `.part` file across filesystems), and the page hears how a refused drop went
+once they are there. A drop still settling when the drag is cancelled or a new one starts ends first,
+and is reported.
 A paste's batch is the sweep's whether pasted or not. Nothing else removes: an hourly sweep removes
 batches older than a day; instances share the directory, batch names are random, and a batch already
 gone is no error to either. An application that opened a dropped file where it is (an editor) loses it

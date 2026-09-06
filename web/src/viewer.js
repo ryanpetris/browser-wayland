@@ -727,6 +727,7 @@ export function createViewer() {
     const batch = crypto.randomUUID();
     const names = await uploadFiles(files, batch);
     drag(names.length === files.length ? { op: 'drop', batch, names } : { op: 'cancel', batch });
+    if (names.length !== files.length) notice('upload failed; the files that did upload are in the transfer folder');
     dragging = false;
   }
   document.addEventListener('drop', e => {
@@ -798,9 +799,10 @@ export function createViewer() {
       // if the upload failed. Files are staged first and the clipboard then names them there.
       const chord = pendingPaste === KEYCODES.Insert ? 'shift+Insert' : 'ctrl+v';
       swallowKeyup = pendingPaste; pendingPaste = null; clearTimeout(pasteTimer);
+      const batch = crypto.randomUUID();
       const put = image
         ? api('/api/clipboard', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: image, signal: AbortSignal.timeout(5000) })
-        : (batch => uploadFiles(files, batch).then(names => (names.length === files.length ? clipboardFiles(names, batch) : { ok: false })))(crypto.randomUUID()); // a file that didn't land isn't pasted, and the notice says what did
+        : uploadFiles(files, batch).then(names => (names.length === files.length ? clipboardFiles(names, batch) : { ok: false })); // a file that didn't land isn't pasted, and the notice says what did
       put.then(r => { if (r.ok) return api('/api/input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'key', keys: chord }) }); }).catch(() => {});
       return;
     }

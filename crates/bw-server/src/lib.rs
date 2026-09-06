@@ -120,8 +120,6 @@ pub struct App {
     files_dir: PathBuf,
     /// Where a drag's or a paste's files wait for the application that takes them (`files.rs`).
     drops_dir: PathBuf,
-    /// The dropped batch, until the desktop says whether an application took it.
-    dropped: Mutex<Option<PathBuf>>,
     elements: bool,
     version: &'static str,
     tls: bool,
@@ -204,7 +202,6 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         notify_bus: std::sync::OnceLock::new(),
         files_dir: cfg.files_dir,
         drops_dir: files::drops_dir(),
-        dropped: Mutex::default(),
         elements: cfg.elements,
         version: cfg.version,
         tls: cfg.tls,

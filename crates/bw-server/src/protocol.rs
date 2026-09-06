@@ -277,10 +277,7 @@ pub enum ClientMsg {
 pub enum DragMsg {
     Start,
     Drop { batch: String, names: Vec<String> },
-    Cancel {
-        #[serde(default)]
-        batch: Option<String>,
-    },
+    Cancel { batch: Option<String> },
 }
 
 /// `{"codec": "auto" | "h264" | …, "quality": "auto" | "low" | …}`, either optional (unchanged).

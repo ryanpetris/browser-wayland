@@ -228,6 +228,8 @@ pub struct State {
     pub drag_action: DndAction,
     pub drag_dropping: Option<Instant>,
     pub drag_taken: bool,
+    /// The batch the dropped files are staged in, for `DragEnded`.
+    pub drag_batch: String,
     /// A client's drag icon and its offset from the pointer, drawn there while the drag lasts. (A drag a
     /// finger starts would show it at the pointer: touch motion moves no pointer.)
     pub dnd_icon: Option<(WlSurface, Point<i32, Logical>)>,
@@ -328,6 +330,7 @@ impl State {
             drag_action: DndAction::empty(),
             drag_dropping: None,
             drag_taken: false,
+            drag_batch: String::new(),
             dnd_icon: None,
             dirty: true,
             force_full_frame: true,

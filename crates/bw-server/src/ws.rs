@@ -67,24 +67,21 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 v.clipboard = Some((mime, data));
                 msg
             }
-            Event::DragEnded { taken } => {
-                // the controller dragged; it alone hears how it went, once files nobody took are in the transfer folder
-                let batch = app.dropped_batch();
-                if let Some(events) = v.controller.and_then(|c| v.sessions.get(&c)).map(|s| s.events.clone()) {
-                    let app = app.clone();
-                    tokio::spawn(async move {
-                        let saved = match batch {
-                            Some(dir) if !taken => app.rescue(dir).await,
-                            _ => true,
-                        };
-                        let text = match (taken, saved) {
-                            (true, _) => "the application took the files",
-                            (false, true) => "no application took the files; they are in the desktop's transfer folder",
-                            (false, false) => "no application took the files, and they could not be saved to the transfer folder",
-                        };
+            Event::DragEnded { taken, batch } => {
+                // files nobody took go to the transfer folder; then the controller, if still here, hears how it went
+                let events = v.controller.and_then(|c| v.sessions.get(&c)).map(|s| s.events.clone());
+                let app = app.clone();
+                tokio::spawn(async move {
+                    let saved = taken || app.rescue(&batch).await.unwrap_or(false);
+                    let text = match (taken, saved) {
+                        (true, _) => "the application took the files",
+                        (false, true) => "no application took the files; they are in the desktop's transfer folder",
+                        (false, false) => "no application took the files, and they could not be saved to the transfer folder",
+                    };
+                    if let Some(events) = events {
                         let _ = events.try_send(protocol::notice(text));
-                    });
-                }
+                    }
+                });
                 continue;
             }
         };

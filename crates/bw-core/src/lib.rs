@@ -257,7 +257,8 @@ pub enum Event {
     /// A desktop application put text (a `text/*` mime) or a PNG on the clipboard.
     Clipboard { mime: String, data: Bytes },
     /// A drag from the browser was dropped: the application under the pointer took it, or nobody did.
-    DragEnded { taken: bool },
+    /// The browser's drag ended: whether an application took the files, and the batch they were staged in.
+    DragEnded { taken: bool, batch: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -273,8 +274,9 @@ pub enum TouchKind {
 pub enum Drag {
     /// Take the pointer with a drag; the application under it is told what is coming.
     Start,
-    /// The files are on the desktop now: this is their URI list; drop it on the application under the pointer.
-    Drop(Vec<u8>),
+    /// The files are on the desktop now: this is their URI list; drop it on the application under the
+    /// pointer. `batch` names where they wait, and comes back with `DragEnded`.
+    Drop { list: Vec<u8>, batch: String },
     /// Let go over nothing.
     Cancel,
 }
