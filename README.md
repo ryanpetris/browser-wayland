@@ -295,10 +295,11 @@ The viewer page uses the same data over its WebSocket: its application menu list
 programs by category, with a search box, and starts them; its side panel lists the windows with thumbnails
 and open-in-popup, snapshot, maximize, minimize and close buttons (click a row to bring the window
 forward, type in the box at the top to run a command), its Statistics tab shows the stream's numbers
-(per-stage timings, drops, audio lead) once a second, and the top bar toggles colour-coded borders with
-the app id over every window and an outline of the focused window's elements; its power menu quits
-browser-wayland; desktop notifications (browser-wayland is the session's notification daemon when no
-other runs) appear as toasts with their actions. A panel is optional. In the browser console,
+(per-stage timings, drops, audio lead) once a second. **Settings → Overlays** in the top bar controls
+local coloured window outlines and the focused window's accessibility-element outlines. Both apply
+immediately and are remembered. UI elements requires server accessibility support (`--elements`).
+The power menu quits browser-wayland. Desktop notifications appear as toasts with their actions;
+browser-wayland is the session's notification daemon when no other runs. A panel is optional. In the browser console,
 `bw.windows()`, `bw.activate(id)`, `bw.control({...})`, `bw.spawn(cmd)`, `bw.snapshot(id)` and
 `bw.elements(id)` do the same.
 

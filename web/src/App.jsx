@@ -8,6 +8,7 @@ import { Sidebar } from './components/Sidebar.jsx';
 import { StatusBar } from './components/StatusBar.jsx';
 import { TokenForm } from './components/TokenForm.jsx';
 import { Launcher, PowerMenu } from './components/Launcher.jsx';
+import { Settings } from './components/Settings.jsx';
 import { MixerPanel } from './components/MixerPanel.jsx';
 import { AudioPanel } from './components/AudioPanel.jsx';
 import { Keyboard, focusKeyboard } from './components/Keyboard.jsx';
@@ -28,11 +29,11 @@ export function App({ viewer }) {
   const [borders, setBorders] = usePref('borders', false);
   const [elements, setElements] = usePref('elements', false);
   const [tab, setTab] = useState('windows');
-  const [menu, setMenu] = useState(null); // 'apps' or 'power' while one of the top bar's menus is open
+  const [menu, setMenu] = useState(null); // One top-bar menu at a time.
   const [fullscreen, setFullscreen] = useState(false); // the chrome is gone then, so nothing is collected for it
   const windowMode = !!WINDOW;
   useEffect(() => {
-    const on = () => setFullscreen(viewer.isFullscreen());
+    const on = () => { const full = viewer.isFullscreen(); setFullscreen(full); if (full) setMenu(null); };
     document.addEventListener('fullscreenchange', on);
     return () => document.removeEventListener('fullscreenchange', on);
   }, [viewer]);
@@ -45,8 +46,6 @@ export function App({ viewer }) {
       <TopBar
         viewer={viewer}
         windowMode={windowMode}
-        borders={borders} onBorders={() => setBorders(!borders)}
-        elements={elements} onElements={() => setElements(!elements)}
         sidebar={sidebar} onSidebar={() => setSidebar(!sidebar)}
         onFullscreen={viewer.fullscreen}
         menu={menu} onMenu={m => setMenu(menu === m ? null : m)}
@@ -54,6 +53,7 @@ export function App({ viewer }) {
       />
       {menu === 'apps' && <Launcher viewer={viewer} onClose={() => setMenu(null)} />}
       {menu === 'power' && <PowerMenu viewer={viewer} onClose={() => setMenu(null)} />}
+      {menu === 'settings' && !windowMode && !fullscreen && <Settings viewer={viewer} borders={borders} onBorders={setBorders} elements={elements} onElements={setElements} onClose={() => setMenu(null)} />}
       <div className="relative flex min-h-0 flex-1">
         <Stage viewer={viewer} windowMode={windowMode} borders={borders && !windowMode} elements={elements && !windowMode} />
         {/* stays mounted while hidden, so the thumbnails don't reload on every toggle */}

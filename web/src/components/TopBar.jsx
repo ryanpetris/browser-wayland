@@ -1,4 +1,4 @@
-import { Expand, Eye, Hand, Keyboard, LayoutGrid, LayoutList, Maximize, MousePointer2, PanelRight, Power, ScanSearch } from 'lucide-react';
+import { Expand, Eye, Hand, Keyboard, LayoutGrid, LayoutList, MousePointer2, PanelRight, Power, Settings } from 'lucide-react';
 import { useStore } from '../store.js';
 import { WINDOW } from '../api.js';
 import { IconButton, codecName } from './ui.jsx';
@@ -13,7 +13,7 @@ const STATUS = {
   quit: ['bg-zinc-500', 'Shut down'],
 };
 
-export function TopBar({ viewer, windowMode, borders, onBorders, elements, onElements, sidebar, onSidebar, onFullscreen, menu, onMenu, keyboard, onKeyboard }) {
+export function TopBar({ viewer, windowMode, sidebar, onSidebar, onFullscreen, menu, onMenu, keyboard, onKeyboard }) {
   const status = useStore(viewer.store, s => s.status);
   const stream = useStore(viewer.store, s => s.stream);
   const windowTitle = useStore(viewer.store, s => s.windowTitle);
@@ -22,12 +22,12 @@ export function TopBar({ viewer, windowMode, borders, onBorders, elements, onEle
   const [dot, text] = STATUS[status];
   const acts = !windowMode && role && role !== 'viewer' && status === 'connected'; // the menus act on the desktop
   return (
-    <header className="flex h-11 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-2 sm:gap-3 sm:px-3">
+    <header onClick={event => { if (!event.target.closest('[data-menu-trigger]')) onMenu(null); }} className="flex h-11 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-2 sm:gap-3 sm:px-3">
       <div className="flex min-w-0 shrink items-center gap-2 font-medium text-zinc-100">
         <Logo />
         <span className="hidden truncate sm:inline">{windowMode ? windowTitle || `Window ${WINDOW}` : 'browser-wayland'}</span>
       </div>
-      {acts && <IconButton icon={LayoutGrid} label="Applications" active={menu === 'apps'} onClick={() => onMenu('apps')} />}
+      {acts && <IconButton data-menu-trigger icon={LayoutGrid} label="Applications" active={menu === 'apps'} onClick={() => onMenu('apps')} />}
       <div className="flex min-w-0 shrink-0 items-center gap-2 text-xs text-zinc-400">
         <span className={`size-2 shrink-0 rounded-full ${dot}`} title={text} />
         <span className="hidden truncate sm:inline">{text}</span>
@@ -51,14 +51,13 @@ export function TopBar({ viewer, windowMode, borders, onBorders, elements, onEle
         {!windowMode && viewer.touch && <IconButton icon={Hand} label="Touch as mouse: tap, hold for the right button, two fingers scroll, pinch to zoom (off: applications get the touch points)" active={touchMouse} onClick={() => viewer.setTouchMouse(!touchMouse)} />}
         {!windowMode && (
           <>
-            <IconButton icon={Maximize} label="Window borders" active={borders} onClick={onBorders} />
-            <IconButton icon={ScanSearch} label="UI elements of the focused window" active={elements} onClick={onElements} />
+            <IconButton data-menu-trigger id="settings-toggle" icon={Settings} label="Settings" active={menu === 'settings'} aria-haspopup="dialog" aria-expanded={menu === 'settings'} aria-controls="viewer-settings" onClick={() => onMenu('settings')} />
             <IconButton icon={sidebar ? PanelRight : LayoutList} label="Windows and statistics" active={sidebar} onClick={onSidebar} />
             <span className="mx-1 h-5 w-px bg-zinc-800" />
           </>
         )}
         <IconButton icon={Expand} label="Fullscreen (browser shortcuts go to the desktop)" onClick={onFullscreen} />
-        {acts && <IconButton icon={Power} label="Quit browser-wayland" active={menu === 'power'} onClick={() => onMenu('power')} className="hover:text-rose-300" />}
+        {acts && <IconButton data-menu-trigger icon={Power} label="Quit browser-wayland" active={menu === 'power'} onClick={() => onMenu('power')} className="hover:text-rose-300" />}
       </div>
     </header>
   );

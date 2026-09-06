@@ -12,16 +12,16 @@ const CATEGORIES = [
 const groupOf = app => CATEGORIES.find(([c]) => app.categories.includes(c))?.[1] ?? 'Other';
 
 /// A popover under the top bar; a click outside or Escape closes it.
-function Popover({ onClose, className = '', children }) {
+export function Popover({ onClose, onEscape = onClose, className = '', children, ...props }) {
   useEffect(() => {
-    const key = e => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
+    const key = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onEscape(); } };
     document.addEventListener('keydown', key, true);
     return () => document.removeEventListener('keydown', key, true);
-  }, [onClose]);
+  }, [onEscape]);
   return (
     <>
-      <div className="absolute inset-0 z-20" onClick={onClose} />
-      <div className={`absolute top-12 z-30 flex flex-col rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl ${className}`}>{children}</div>
+      <div className="absolute inset-x-0 top-11 bottom-0 z-20" onClick={onClose} />
+      <div tabIndex={-1} {...props} className={`absolute top-12 z-30 flex flex-col rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl ${className}`}>{children}</div>
     </>
   );
 }

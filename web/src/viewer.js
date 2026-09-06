@@ -944,20 +944,22 @@ export function createViewer() {
   // The focused window's elements, fetched again when anything the answer depends on changed: the focus,
   // the title, the content (updated_ms, whole seconds), the geometry, the open popups or the stream scale
   // (Chromium's web content is scaled by it). The 300 ms delay merges a burst of list updates into one request.
-  let elementsKey = '', elementsTimer = 0;
+  let elementsKey = '', elementsTimer = 0, elementsRev = 0;
   const focusedWindow = () => state().windows.find(w => w.focused && !w.minimized);
   function fetchElements() {
     const f = focusedWindow();
     const key = state().elementsOn && f ? `${f.id}/${f.title}/${f.updated_ms}/${f.w}x${f.h}+${f.geo_x}+${f.geo_y}@${stream?.scale}/${JSON.stringify(f.popups)}` : '';
     if (key === elementsKey) return;
     elementsKey = key;
+    const revision = ++elementsRev;
     clearTimeout(elementsTimer);
     if (!key) { store.set({ elements: null }); return; }
     elementsTimer = setTimeout(async () => {
       const res = await api(`/api/windows/${f.id}/elements`).catch(() => null);
-      if (elementsKey !== key) return; // superseded while in flight; the newer request is on its way
+      const page = res && await res.json().catch(() => ({}));
+      if (elementsRev !== revision) return;
       if (!res) { elementsKey = ''; return; } // network failure: the next list update retries
-      store.set({ elements: { id: f.id, status: res.status, page: await res.json().catch(() => ({})) } });
+      store.set({ elements: { id: f.id, status: res.status, page } });
     }, 300);
   }
 

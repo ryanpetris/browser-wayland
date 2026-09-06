@@ -1,9 +1,10 @@
 // Small shared pieces: toolbar buttons and the colour of a window.
 
 /// An icon button; `active` marks a toggle that is on. Focus leaves it after a click so keys go to the desktop.
-export function IconButton({ icon: Icon, label, active = false, onClick, className = '' }) {
+export function IconButton({ icon: Icon, label, active = false, onClick, className = '', ...props }) {
   return (
     <button
+      {...props}
       type="button"
       title={label}
       aria-label={label}
