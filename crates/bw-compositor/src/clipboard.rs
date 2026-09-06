@@ -46,12 +46,14 @@ pub const PNG: &str = "image/png";
 pub const URI_LIST: &str = "text/uri-list";
 pub const GNOME_FILES: &str = "x-special/gnome-copied-files";
 
-/// What the browser's drag shares between `State` and the source Smithay's grab asks: the URI list, there
-/// after the drop, and whether the target has accepted a mime and chosen an action, which the release
-/// waits for.
+/// What one browser drag shares between `State` and the source Smithay's grab asks: the URI list, there
+/// after the drop; the pipes targets asked to have it written to, served from the loop; and whether the
+/// target has accepted a mime and chosen an action, which the release waits for. Each drag gets its own,
+/// so an offer a target keeps from an earlier drag can't read a later one's list.
 #[derive(Debug, Default)]
 pub struct DragShared {
     data: Mutex<Option<Arc<Vec<u8>>>>,
+    fds: Mutex<Vec<OwnedFd>>,
     accepted: AtomicBool,
     action: Mutex<DndAction>,
 }
@@ -61,16 +63,16 @@ impl DragShared {
         self.accepted.store(false, Ordering::Relaxed);
         *self.action.lock().unwrap() = DndAction::None;
     }
-    fn ready(&self) -> bool {
+    pub(crate) fn ready(&self) -> bool {
         self.accepted.load(Ordering::Relaxed) && *self.action.lock().unwrap() != DndAction::None
     }
 }
 
-/// The browser's files as a drag-and-drop source: `text/uri-list`, to copy or to move. The list is
-/// written whole when asked (it fits a pipe's buffer); before the drop there is nothing yet, and the pipe
-/// closes at once (EOF) rather than staying pending, since GTK 3 never asks for that mime again if the
-/// pointer leaves it while a read is pending. What the target accepts and chooses goes to `DragShared`,
-/// and the ping brings `State::drag_settle` round.
+/// The browser's files as a drag-and-drop source: `text/uri-list`, to copy or to move. A pipe to write
+/// the list to is handed to the loop through `DragShared` (this runs inside the target's request); before
+/// the drop there is nothing yet, and the pipe closes at once (EOF) rather than staying pending, since
+/// GTK 3 never asks for that mime again if the pointer leaves it while a read is pending. What the target
+/// accepts and chooses goes to `DragShared` too, and the ping brings `State::drag_settle` round.
 #[derive(Debug)]
 struct FileSource {
     shared: Arc<DragShared>,
@@ -96,8 +98,9 @@ impl Source for FileSource {
         self.ping.ping();
     }
     fn send(&self, _mime_type: &str, fd: OwnedFd) {
-        if let Some(data) = self.shared.data.lock().unwrap().clone() {
-            let _ = rustix::io::write(&fd, &data);
+        if self.shared.data.lock().unwrap().is_some() {
+            self.shared.fds.lock().unwrap().push(fd);
+            self.ping.ping();
         }
     }
     fn drop_performed(&self) {}
@@ -242,9 +245,9 @@ impl State {
                 if self.drag_dropping.is_some() {
                     self.drag_release(); // a drop still settling ends first, and is reported
                 }
+                let (serial, time) = (SERIAL_COUNTER.next_serial(), self.now()); // after that release's own
                 self.drag_active = true;
-                *self.drag_shared.data.lock().unwrap() = None;
-                self.drag_shared.reset();
+                self.drag_shared = Default::default();
                 pointer.motion(self, None, &MotionEvent { location, serial, time });
                 pointer.button(self, &ButtonEvent { button: crate::input::BTN_LEFT, state: ButtonState::Pressed, serial, time });
                 pointer.frame(self);
@@ -252,7 +255,7 @@ impl State {
                 let start = GrabStartData { focus: None, button: crate::input::BTN_LEFT, location };
                 let source = FileSource { shared: self.drag_shared.clone(), ping: self.drag_ping.clone() };
                 let (dh, seat) = (self.dh.clone(), self.seat.clone());
-                pointer.set_grab(self, DnDGrab::new_pointer(&dh, start, source, seat), serial, Focus::Clear);
+                pointer.set_grab(self, DnDGrab::new_pointer(&dh, start, source, seat), serial, Focus::Keep);
                 self.pointer_motion(location); // enter the application under the pointer
             }
             Drag::Drop { batch, .. } if !self.drag_active => {
@@ -290,10 +293,18 @@ impl State {
         }
     }
 
-    /// Let go of a drop the target is ready for: it accepted a mime and chose an action (the source's ping,
-    /// answered on the loop's own turn, outside the request that told us).
+    /// The source rang, on the loop's own turn: pipes a target asked to have the list written to are served
+    /// (as our clipboard is, from the loop), and a drop the target is ready for, having accepted a mime and
+    /// chosen an action, is let go of. A source of an earlier drag ringing finds nothing of its own here.
     pub fn drag_settle(&mut self) {
-        if self.drag_dropping.is_some() && self.drag_shared.ready() {
+        let shared = self.drag_shared.clone();
+        let data = shared.data.lock().unwrap().clone();
+        for fd in std::mem::take(&mut *shared.fds.lock().unwrap()) {
+            if let Some(data) = &data {
+                self.serve_clipboard(data.clone(), URI_LIST, fd);
+            }
+        }
+        if self.drag_dropping.is_some() && shared.ready() {
             self.drag_release();
         }
     }

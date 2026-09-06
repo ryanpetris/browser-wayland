@@ -717,7 +717,8 @@ impl DndGrabHandler for State {
         self.dnd_icon = None;
         self.dirty = true;
         if self.drag_active {
-            self.drag_taken = validated;
+            // validated alone is true over a client with no data device (an X11 window): the offer it got was empty
+            self.drag_taken = validated && self.drag_shared.ready();
             self.drag_target = target.map(DndTarget::into_inner).and_then(|s| {
                 let mut root = s.clone();
                 while let Some(parent) = get_parent(&root) {

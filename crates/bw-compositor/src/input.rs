@@ -301,7 +301,7 @@ impl State {
                 }
                 touch.down(self, under, &DownEvent { slot, location, serial, time });
             }
-            TouchKind::Motion => touch.motion(self, None, &TouchMotion { slot, location, time }), // the focus is the down's
+            TouchKind::Motion => touch.motion(self, self.surface_under(location), &TouchMotion { slot, location, time }), // a plain touch keeps the down's focus; a drag grab finds its target here
             TouchKind::Up => {
                 self.touch_down.remove(&slot_id);
                 touch.up(self, &UpEvent { slot, serial, time });

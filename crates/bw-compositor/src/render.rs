@@ -12,7 +12,7 @@ use smithay::{
     desktop::Window,
     utils::{Logical, Point},
     backend::allocator::Buffer as _,
-    backend::renderer::{ImportAll, ImportMem, utils::with_renderer_surface_state, element::{AsRenderElements, Id, Kind, memory::MemoryRenderBufferRenderElement, surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree}}, gles::GlesRenderer},
+    backend::renderer::{ImportAll, ImportMem, element::{AsRenderElements, Id, Kind, memory::MemoryRenderBufferRenderElement, surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree}}, gles::GlesRenderer},
     desktop::{
         WindowSurface, layer_map_for_output,
         utils::{OutputPresentationFeedback, send_frames_surface_tree},
@@ -42,10 +42,8 @@ impl State {
     /// A mapped window is fullscreen: it covers the panels (Top layer), only the Overlay layer stays above.
     pub fn fullscreen_window_mapped(&self) -> bool {
         self.space.elements().any(|w| match w.underlying_surface() {
-            // a toplevel that unmapped with a null buffer keeps its state and stays in the space until destroyed
-            WindowSurface::Wayland(t) => {
-                t.with_committed_state(|s| s.is_some_and(|s| s.states.contains(xdg_toplevel::State::Fullscreen))) && with_renderer_surface_state(t.wl_surface(), |s| s.buffer().is_some()).unwrap_or(false)
-            }
+            // a toplevel that unmapped with a null buffer stays in the space until destroyed, with no committed state
+            WindowSurface::Wayland(t) => t.with_committed_state(|s| s.is_some_and(|s| s.states.contains(xdg_toplevel::State::Fullscreen))),
             WindowSurface::X11(x) => x.is_fullscreen(),
         })
     }
