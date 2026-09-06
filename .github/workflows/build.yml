@@ -53,7 +53,7 @@ jobs:
         run: |
           d=browser-wayland-$BW_VERSION-linux-x86_64
           mkdir -p dist/$d
-          cp target/release/browser-wayland README.md LICENSE dist/$d/
+          cp target/release/browser-wayland README.md LICENSE docs/audio-visualiser.md web/dist/THIRD_PARTY.txt dist/$d/
           strip dist/$d/browser-wayland
           tar -C dist -czf dist/$d.tar.gz $d
           cp target/debian/*.deb dist/

@@ -311,3 +311,8 @@ Games and other clients that lock the pointer get raw mouse deltas: the page mir
 Pointer Lock API; Escape releases it.
 
 Certificate and tokens live in `$XDG_CONFIG_HOME/browser-wayland/`; delete them to regenerate.
+
+The optional [session audio visualiser](docs/audio-visualiser.md) is enabled by
+default. `BW_VISUALISER=0 make` or Docker's `--build-arg BW_VISUALISER=0` excludes
+audioMotion and its AGPL dependency. Enabled viewers include licence and
+corresponding-source downloads in the audio panel; original code remains MIT.

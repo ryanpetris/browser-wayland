@@ -31,6 +31,8 @@ export function createViewer() {
     streamState: null, // { codec, auto_codec, bitrate_kbps, max_fps } from the server
     choice: { codec: pref.getStr('codec', 'auto'), quality: pref.getStr('quality', 'auto') }, // this viewer's picks
     touchMouse: pref.get('touchmouse', false), // fingers as a mouse with gestures, instead of real touch points
+    audioAvailable: false,
+    playback: null, // shared context/source; visualisers own only their analysis branch
     mic: false, // the local microphone is going to the desktop
     micAvailable: false, // the desktop takes one (audio is on there)
     transport: pref.getStr('transport') === 'webrtc' ? 'webrtc' : 'websocket', // this viewer's pick
@@ -156,7 +158,7 @@ export function createViewer() {
       closes.push(`${e.code}:${e.reason}`);
       micStop(); camStop(); // nobody hears or sees them now, and the role is whatever the next connection says
       clearTimeout(rtcTimer); rtc?.close(); rtc = null; // the next connection offers again
-      store.set({ role: null, micAvailable: false, camAvailable: false, rtcAvailable: false, videoVia: 'websocket' });
+      store.set({ role: null, playback: null, audioAvailable: false, micAvailable: false, camAvailable: false, rtcAvailable: false, videoVia: 'websocket' });
       if (e.code === 4001) {
         stream = null;
         forgetToken();
@@ -336,7 +338,7 @@ export function createViewer() {
       case ROLE: {
         const role = ROLES[dv.getUint8(1)] ?? 'viewer';
         const features = dv.getUint8(2);
-        store.set({ role, micAvailable: !!(features & 1), camAvailable: !!(features & 2) });
+        store.set({ role, audioAvailable: !!(features & 4), micAvailable: !!(features & 1), camAvailable: !!(features & 2) });
         if (role !== 'controller') {
           if (document.pointerLockElement) document.exitPointerLock(); // only the controller's pointer is the desktop's
           micStop(); camStop(); // and only its microphone and webcam
@@ -436,7 +438,7 @@ export function createViewer() {
   // Opus packets decode with WebCodecs and are scheduled back to back on an AudioContext, a small
   // lead ahead of the clock as a jitter buffer. Browsers keep the context suspended until a user
   // gesture, so it's resumed from the first click or key.
-  let audioCtx, audioDecoder, nextPlay = 0, analyser, audioPackets = 0, audioDecoded = 0;
+  let audioCtx, audioDecoder, nextPlay = 0, analyser, audioPackets = 0, audioDecoded = 0, signalPeak = 0;
   function onAudioData(data) {
     audioDecoded++;
     const now = audioCtx.currentTime;
@@ -447,6 +449,7 @@ export function createViewer() {
       const plane = new Float32Array(data.numberOfFrames);
       data.copyTo(plane, { planeIndex: ch, format: 'f32-planar' });
       ab.copyToChannel(plane, ch);
+      for (const sample of plane) signalPeak = Math.max(signalPeak, Math.abs(sample));
     }
     data.close();
     const src = audioCtx.createBufferSource();
@@ -467,6 +470,7 @@ export function createViewer() {
       analyser.connect(audioCtx.destination);
       newAudioDecoder();
     }
+    if (!state().playback) store.set({ playback: { context: audioCtx, source: analyser } });
     audioPackets++;
     const dv = new DataView(buf);
     const seq = dv.getUint16(2, true);
@@ -481,7 +485,9 @@ export function createViewer() {
     analyser.getByteFrequencyData(bins);
     let peak = 0;
     for (let i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
-    return { packets: audioPackets, decoded: audioDecoded, state: audioCtx.state, level: bins[peak], lead: (nextPlay - audioCtx.currentTime) * 1000 };
+    const peakSinceLastTick = signalPeak;
+    signalPeak = 0;
+    return { signalPeak: peakSinceLastTick, packets: audioPackets, decoded: audioDecoded, state: audioCtx.state, level: bins[peak], lead: (nextPlay - audioCtx.currentTime) * 1000 };
   }
 
   // --- WebRTC transport ------------------------------------------------------------------------
@@ -892,9 +898,11 @@ export function createViewer() {
 
   const viewer = {
     store,
+    resumeAudio,
     attach,
     setStage,
     fullscreen,
+    isFullscreen: () => !!document.fullscreenElement && document.fullscreenElement === canvas?.parentElement,
     control: sendControl,
     snapshot,
     elements: elementsOf,

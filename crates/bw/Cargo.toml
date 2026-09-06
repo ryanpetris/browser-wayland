@@ -21,6 +21,8 @@ depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreame
 recommends = "xwayland, pulseaudio-utils | pipewire-pulse, va-driver-all, fonts-dejavu-core"
 assets = [
     ["target/release/browser-wayland", "usr/bin/", "755"],
+    ["../../web/dist/THIRD_PARTY.txt", "usr/share/doc/browser-wayland/", "644"],
+    ["../../docs/audio-visualiser.md", "usr/share/doc/browser-wayland/", "644"],
     ["../../README.md", "usr/share/doc/browser-wayland/", "644"],
 ]
 

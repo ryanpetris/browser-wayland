@@ -29,11 +29,13 @@
 
 # The viewer (React, built by Vite into web/dist); the binary embeds it.
 FROM node:24-alpine AS web
+RUN apk add --no-cache tar
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
-COPY web ./
-RUN npm run build
+COPY . /src/
+ARG BW_VISUALISER=1
+RUN BW_VISUALISER=$BW_VISUALISER npm run build
 
 FROM archlinux:latest AS build
 RUN pacman -Sy --noconfirm archlinux-keyring \
@@ -55,6 +57,7 @@ RUN pacman -Sy --noconfirm archlinux-keyring \
         guvcview audacity gimp mpv ristretto pavucontrol nano sudo \
     && rm -rf /var/cache/pacman/pkg/*
 COPY --from=build /src/target/release/browser-wayland /usr/local/bin/
+COPY --from=web /src/web/dist/THIRD_PARTY.txt /usr/share/licenses/browser-wayland/THIRD_PARTY.txt
 # GTK hides menu icons unless told otherwise, and on Wayland it takes the title-bar buttons of
 # client-decorated windows (GTK apps, Firefox, Chromium) from GSettings, where GNOME's default keeps
 # only Close. On a real Xfce session xfsettingsd provides both.

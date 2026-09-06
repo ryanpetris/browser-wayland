@@ -100,6 +100,7 @@ pub fn role(role: Role, features: u8) -> Bytes {
 }
 pub const FEATURE_MIC: u8 = 1;
 pub const FEATURE_CAM: u8 = 2;
+pub const FEATURE_AUDIO: u8 = 4;
 
 pub fn config(info: &StreamInfo) -> Bytes {
     let json = format!(

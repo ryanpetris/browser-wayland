@@ -74,8 +74,9 @@ pub struct Config {
     pub version: &'static str,
     /// One encoder per viewer and per window stream.
     pub sinks: SinkFactory,
-    /// Where the browser's microphone packets (Opus) go to be played into the desktop's virtual source;
-    /// `None` without a microphone.
+    /// Whether session playback initialized successfully, independently of microphone capture.
+    pub audio_available: bool,
+    /// Where browser microphone packets go; `None` without a microphone.
     pub mic: Option<mpsc::Sender<Bytes>>,
     /// Where the browser's webcam frames (VP8) go to be played into the loopback camera; `None` without
     /// `--webcam`, or when its device couldn't be opened.
@@ -105,6 +106,7 @@ pub struct App {
     bitrate_kbps: u32,
     viewers: Mutex<Viewers>,
     sinks: SinkFactory,
+    audio_available: bool,
     mic: Option<mpsc::Sender<Bytes>>,
     cam: Option<mpsc::Sender<Bytes>>,
     rtc: Option<rtc::Hub>,
@@ -191,6 +193,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         bitrate_kbps: cfg.bitrate_kbps,
         viewers: Mutex::new(Viewers { output: bw_core::OutputGeometry { refresh_mhz: cfg.refresh_mhz, ..bw_core::INITIAL_OUTPUT }, ..Default::default() }),
         sinks: cfg.sinks,
+        audio_available: cfg.audio_available,
         mic: cfg.mic,
         cam: cfg.cam,
         rtc,
@@ -216,6 +219,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         .route("/", get(index))
         .route("/app.js", get(|| async { asset("text/javascript", include_str!("../../../web/dist/app.js")) }))
         .route("/app.css", get(|| async { asset("text/css", include_str!("../../../web/dist/app.css")) }))
+        .route("/assets/{*path}", get(web_asset))
         .route("/ws", get(websocket))
         .route("/ws/window/{id}", get(window_websocket))
         .merge(
@@ -268,9 +272,45 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
 }
 
 /// The page is public; it authenticates its WebSocket with the token from its URL fragment (or sessionStorage).
-/// The viewer is built from `web/` into `web/dist` (`npm run build`), which is committed and embedded here.
+/// The viewer is built from `web/` into `web/dist` (`npm run build`), and embedded here.
 async fn index() -> Html<&'static str> {
     Html(include_str!("../../../web/dist/index.html"))
+}
+
+const WEB_ASSETS: &[(&str, &str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
+
+async fn web_asset(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
+    let name = format!("assets/{path}");
+    match WEB_ASSETS.iter().find(|(key, _, _)| *key == name) {
+        Some((_, mime, src)) => ([(header::CONTENT_TYPE, *mime), (header::CACHE_CONTROL, "no-cache")], *src).into_response(),
+        None => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod web_asset_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn emitted_assets_are_served_and_unknown_paths_are_not() {
+        // CI supplies the requested variant independently of the emitted asset table.
+        if let Ok(variant) = std::env::var("BW_VISUALISER") {
+            assert_eq!(WEB_ASSETS.iter().any(|(name, _, _)| name.contains("visualiser-")), variant != "0");
+            if variant == "0" {
+                assert!(WEB_ASSETS.iter().all(|(name, _, _)| !name.contains("audiomotion") && !name.contains("viewer-source")));
+            }
+        }
+        for (name, mime, bytes) in WEB_ASSETS.iter().filter(|(name, _, _)| name.starts_with("assets/")) {
+            let response = web_asset(axum::extract::Path(name[7..].to_owned())).await;
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], *mime);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(body.as_ref(), *bytes);
+        }
+        for name in ["missing.js", "../app.js"] {
+            assert_eq!(web_asset(axum::extract::Path(name.into())).await.status(), axum::http::StatusCode::NOT_FOUND);
+        }
+    }
 }
 
 /// Revalidated on every load, so an upgraded server never runs a stale page.

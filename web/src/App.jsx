@@ -8,6 +8,7 @@ import { Sidebar } from './components/Sidebar.jsx';
 import { StatusBar } from './components/StatusBar.jsx';
 import { TokenForm } from './components/TokenForm.jsx';
 import { Launcher, PowerMenu } from './components/Launcher.jsx';
+import { AudioPanel } from './components/AudioPanel.jsx';
 import { Keyboard, focusKeyboard } from './components/Keyboard.jsx';
 
 // A remembered on/off switch.
@@ -20,6 +21,7 @@ export function App({ viewer }) {
   const status = useStore(viewer.store, s => s.status);
   const role = useStore(viewer.store, s => s.role);
   const [sidebar, setSidebar] = usePref('sidebar', matchMedia('(min-width: 48rem)').matches); // a phone starts with the stage alone
+  const [audioPanel, setAudioPanel] = useState(false);
   const [keyboard, setKeyboard] = useState(false);
   const [borders, setBorders] = usePref('borders', false);
   const [elements, setElements] = usePref('elements', false);
@@ -28,10 +30,10 @@ export function App({ viewer }) {
   const [fullscreen, setFullscreen] = useState(false); // the chrome is gone then, so nothing is collected for it
   const windowMode = !!WINDOW;
   useEffect(() => {
-    const on = () => setFullscreen(!!document.fullscreenElement);
+    const on = () => setFullscreen(viewer.isFullscreen());
     document.addEventListener('fullscreenchange', on);
     return () => document.removeEventListener('fullscreenchange', on);
-  }, []);
+  }, [viewer]);
   useEffect(() => viewer.setElementsOn(elements && !windowMode), [viewer, elements, windowMode]);
   useEffect(() => { if (role !== 'controller') setKeyboard(false); }, [role]); // only the controller's typing counts
   useEffect(() => viewer.setStatsOn(sidebar && tab === 'stats' && !fullscreen), [viewer, sidebar, tab, fullscreen]);
@@ -56,7 +58,8 @@ export function App({ viewer }) {
         {!windowMode && <Sidebar viewer={viewer} tab={tab} onTab={setTab} hidden={!sidebar} />}
       </div>
       {keyboard && <Keyboard viewer={viewer} onClose={() => setKeyboard(false)} />}
-      <StatusBar viewer={viewer} />
+      {__BW_VISUALISER__ && audioPanel && !windowMode && <AudioPanel viewer={viewer} hidden={fullscreen} onClose={() => setAudioPanel(false)} />}
+      <StatusBar viewer={viewer} audioPanel={audioPanel} onAudioPanel={!windowMode ? () => setAudioPanel(!audioPanel) : undefined} />
       {(status === 'no-token' || status === 'unauthorized') && <TokenForm viewer={viewer} />}
     </div>
   );
