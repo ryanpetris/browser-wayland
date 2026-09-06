@@ -1,7 +1,7 @@
 //! Remote file operations use explicit paths and the server process's Unix permissions.
 //! Interface uploads publish through an opened directory; desktop drops and pastes stage in
 //! cache batches until their Wayland recipient chooses a destination. Unclaimed batches are
-//! linked or copied to the transfer folder, and staged sources remain for the daily sweep.
+//! linked or copied to the transfer folder, and staged sources remain for the cache sweep.
 
 use std::{
     path::{Path, PathBuf},
@@ -139,10 +139,12 @@ fn regular_file(path: &Path, follow: bool) -> Result<File, ApiError> {
 fn file_body(file: File) -> Result<(Option<u64>, Body), ApiError> {
     let size = file.metadata().map_err(io_error)?.len();
     let mut fs = std::mem::MaybeUninit::<libc::statfs>::uninit();
-    if unsafe { libc::fstatfs(file.as_raw_fd(), fs.as_mut_ptr()) } != 0 { return Err(io_error(std::io::Error::last_os_error())); }
-    let fs = unsafe { fs.assume_init() };
+    let virtual_fs = unsafe { libc::fstatfs(file.as_raw_fd(), fs.as_mut_ptr()) } == 0 && {
+        let fs = unsafe { fs.assume_init() };
+        fs.f_type == libc::PROC_SUPER_MAGIC || fs.f_type == libc::SYSFS_MAGIC
+    };
     // procfs/sysfs report synthetic lengths. Zero-size regular files may also generate data on read.
-    let len = if size == 0 || fs.f_type == libc::PROC_SUPER_MAGIC || fs.f_type == libc::SYSFS_MAGIC { None } else { Some(size) };
+    let len = if size == 0 || virtual_fs { None } else { Some(size) };
     Ok((len, Body::from_stream(tokio_util::io::ReaderStream::new(tokio::io::AsyncReadExt::take(tokio::fs::File::from_std(file), len.unwrap_or(u64::MAX))))))
 }
 
@@ -160,7 +162,7 @@ fn link_file(dir: &Directory, file: &File, name: &str) -> std::io::Result<String
 
 fn publish_error(error: std::io::Error) -> ApiError {
     if matches!(error.raw_os_error(), Some(libc::EPERM | libc::EOPNOTSUPP | libc::ENOSYS)) {
-        file_error("unsupported_operation", "this filesystem cannot publish files with collision protection")
+        file_error("unsupported_operation", "this filesystem or its permissions prevent publishing the file without replacement")
     } else { io_error(error) }
 }
 
@@ -413,7 +415,7 @@ impl App {
             let result = dir.and_then(|dir| rescue_files(&dir, &files_dir));
             let (saved, failed, error) = match result {
                 Ok((saved, failed)) => (saved, failed, None),
-                Err(e) => (vec![], 1, Some(e.to_string())),
+                Err(e) => { tracing::warn!(error = %e, "file rescue failed"); (vec![], 1, Some(e.to_string())) },
             };
             let complete = failed == 0;
             let mut packet = vec![crate::protocol::FILE_RESULT];
@@ -465,7 +467,7 @@ fn rescue_files(dir: &Path, files_dir: &Path) -> Result<(Vec<SavedFile>, usize),
             // of a source name must not be unlinked as a side effect of copying an opened inode.
             Ok(saved)
         })();
-        match result { Ok(file) => saved.push(file), Err(_) => failed += 1 }
+        match result { Ok(file) => saved.push(file), Err(e) => { tracing::warn!(error = %e, "staged file could not be rescued"); failed += 1; } }
     }
     Ok((saved, failed))
 }

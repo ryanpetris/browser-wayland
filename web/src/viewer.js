@@ -525,7 +525,7 @@ export function createViewer() {
   function notice(text, kind = 'warning', path) {
     store.set({ notice: { text, kind, path } });
     clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => store.set({ notice: null }), path ? 30000 : 10000);
+    noticeTimer = setTimeout(() => store.set({ notice: null }), path ? 30000 : 6000);
   }
 
   // --- pointer lock -----------------------------------------------------------------

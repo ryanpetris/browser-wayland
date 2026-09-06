@@ -23,6 +23,7 @@ for (const name of ['a', 'b', 'large', 'blocked', 'gone'])
   await mkdir(root + '/' + name);
 await writeFile(root + '/a/hello ü.txt', 'hello');
 await writeFile(root + '/a/.hidden', 'hidden');
+await writeFile(root + '/a/fstatfs-fallback.txt', 'fallback works');
 await writeFile(
     Buffer.concat([ Buffer.from(root + '/a/'), Buffer.from([ 255 ]) ]),
     'non-UTF8');
@@ -131,6 +132,9 @@ try {
                true);
   assert.equal((await list('@transfer')).path, root + '/Downloads');
   assert.equal((await list('@home')).path, root);
+  const fallback = await request(location('fstatfs-fallback.txt', root + '/a'));
+  assert.equal(fallback.status, 200);
+  assert.equal(await fallback.text(), 'fallback works');
   for (const [directory, name] of [[ '/proc', 'cpuinfo' ],
                                    [ '/sys/kernel', 'uevent_seqnum' ]]) {
     const response = await request(location(name, directory));
