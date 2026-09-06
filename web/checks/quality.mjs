@@ -123,6 +123,29 @@ try {
       await page.setViewportSize({ width, height: 768 });
       assert(await page.locator('footer').evaluate(el => el.scrollWidth <= el.clientWidth), `quality controls fit ${width}px`);
     }
+    assert(await page.locator('footer').evaluate(footer => {
+      const target = footer.querySelector('[title^="Current encoder target"]');
+      const original = target.firstChild.data;
+      const metrics = [...footer.children].slice(0, 4);
+      const nodes = metrics.map(el => [...el.childNodes]);
+      const icon = metrics[0].querySelector('svg').cloneNode(true);
+      let stable = true;
+      for (let width = 640; width <= 1280; width += 8) {
+        footer.style.width = `${width}px`;
+        let height;
+        for (const values of [['9 fps', '9.9 Mbit/s', '9 ms', '0 · 0 · 0'], ['30 fps', '10.0 Mbit/s', '200 ms', '100 · 100 · 0'], ['60 fps', '100.0 Mbit/s', '2000 ms', '10000 · 10000 · 10']]) {
+          metrics.forEach((el, i) => el.replaceChildren(...(i === 0 ? [icon.cloneNode(true)] : []), document.createTextNode(values[i])));
+          for (const text of ['Target 25 Mbit/s', 'Target 12.5 Mbit/s', 'Target 1.6 Mbit/s, 30 fps cap', 'Target 4294967.3 Mbit/s']) {
+            target.firstChild.data = text;
+            height ??= footer.getBoundingClientRect().height;
+            stable &&= footer.getBoundingClientRect().height === height && target.scrollWidth <= target.clientWidth;
+          }
+        }
+      }
+      target.firstChild.data = original; footer.style.width = '';
+      metrics.forEach((el, i) => el.replaceChildren(...nodes[i]));
+      return stable;
+    }), 'live readouts fit without resizing the stage');
     await page.screenshot({ path: `/tmp/bw41-${id ? 'window' : 'desktop'}-${medium}.png` });
     if (id) await page.context().close();
   }

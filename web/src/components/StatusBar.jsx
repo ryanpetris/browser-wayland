@@ -33,7 +33,7 @@ function Choice({ viewer }) {
       <select value={choice.quality} onChange={e => viewer.setChoice({ quality: e.target.value })} className={cls} title="Quality">
         {PRESETS.map(p => <option key={p} value={p}>{PRESET_LABEL[p]} ({ceilings[p] === undefined ? 'server ceiling' : `up to ${mbit(ceilings[p])}`})</option>)}
       </select>
-      <span title="Current encoder target; actual network throughput depends on scene activity">
+      <span className="inline-block w-[30ch] shrink-0 whitespace-nowrap" title="Current encoder target; actual network throughput depends on scene activity">
         {st?.preset === choice.quality ? `Target ${mbit(st.bitrate_kbps, 1)}${st.max_fps ? `, ${st.max_fps} fps cap` : ''}` : 'Applying quality…'}
       </span>
       {rtcAvailable && (
@@ -57,12 +57,13 @@ export function StatusBar({ viewer, audioPanel, onAudioPanel, mixerPanel, onMixe
   const camAvailable = useStore(viewer.store, st => st.camAvailable);
   const role = useStore(viewer.store, st => st.role);
   const bad = s.lost + s.dropped + s.decodeErrors;
+  // Fixed readout widths keep live statistics from resizing the stage.
   return (
     <footer className="flex min-h-7 shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-zinc-800 bg-zinc-900 px-3 py-0.5 font-mono text-[11px] text-zinc-500">
-      <span className="flex items-center gap-1.5"><Activity className="size-3" /> {s.fps} fps</span>
-      <span title="Measured video throughput">{s.mbps.toFixed(1)} Mbit/s</span>
-      <span className="hidden sm:inline" title="Input to the next painted frame">{s.latencyMs.toFixed(0)} ms</span>
-      <span className={`hidden sm:inline ${bad ? 'text-amber-400' : ''}`} title="lost · dropped · decode errors">{s.lost} · {s.dropped} · {s.decodeErrors}</span>
+      <span className="flex w-[10ch] shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap" title={`${s.fps} fps`}><Activity className="size-3" /> {s.fps} fps</span>
+      <span className="w-[17ch] shrink-0 truncate" title="Measured video throughput" aria-label={`Measured video throughput: ${s.mbps.toFixed(1)} Mbit/s`}>{s.mbps.toFixed(1)} Mbit/s</span>
+      <span className="hidden w-[10ch] shrink-0 truncate sm:inline" title={`Input to the next painted frame: ${s.latencyMs.toFixed(0)} ms`}>{s.latencyMs.toFixed(0)} ms</span>
+      <span className={`hidden w-[20ch] shrink-0 truncate sm:inline ${bad ? 'text-amber-400' : ''}`} title={`lost ${s.lost} · dropped ${s.dropped} · decode errors ${s.decodeErrors}`}>{s.lost} · {s.dropped} · {s.decodeErrors}</span>
       <span className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-4 gap-y-1">
         {clipboardFiles.length > 0 ? (
           <button type="button" onClick={async () => { for (const [i, n] of clipboardFiles.entries()) await downloadClipboardFile(i, n).catch(() => {}); }} title={`Download the copied files: ${clipboardFiles.join(', ')}`} className="flex max-w-48 items-center gap-1 truncate text-indigo-300 hover:text-indigo-200">
