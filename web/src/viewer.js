@@ -685,7 +685,7 @@ export function createViewer() {
     clearTimeout(reconnectTimer); clearInterval(statsTimer);
     closeRtc(false);
     ws?.close();
-    store.set({ status: 'closed', role: null, stream: null });
+    store.set({ status: 'closed', role: null, stream: null, windows: [] });
     recovery('unavailable', 'Viewer closed');
   }
 

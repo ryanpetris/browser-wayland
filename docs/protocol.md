@@ -174,7 +174,7 @@ Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; se
 {"id": 3, "title": "…", "app_id": "org.gnome.Calculator", "icon": "org.gnome.Calculator", "content": null, "x11": false, "pid": 4242,
  "x": 70, "y": 70, "w": 360, "h": 616, "geo_x": 26, "geo_y": 23, "popups": [[12, 40, 200, 310]], "decoration": 0, "z": 1,
  "maximized": false, "fullscreen": false, "minimized": false, "focused": true,
- "updated_ms": 34044000}
+ "updated_ms": 34044000, "content_revision": 42}
 ```
 
 - `id` is stable for the window's life and never reused.
@@ -186,7 +186,7 @@ Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; se
   application draws its own. That bar and its buttons are part of the window's elements (below).
 - `z` is the stacking index, 0 = bottom, over the listed windows; `null` while minimized. Menus and tooltips (X11 override-redirect) are not listed.
 - `focused` is the compositor's intent: the window last activated by a click, the taskbar or the API.
-- `updated_ms` is the time of the window's last commit on the compositor's monotonic clock, whole seconds, so a client redrawing at 60 fps does not produce sixty lists a second.
+- `updated_ms` is the time of the window's last applied commit on the compositor's monotonic clock, in milliseconds. `content_revision` increases for applied content commits and changes to captured geometry or surface membership. It is an invalidation signal, not a pixel comparison. Content-only lists are coalesced to at most four per second, with the final revision published even after drawing stops. Structural list changes publish immediately.
 
 ### Input message
 

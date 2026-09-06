@@ -63,7 +63,7 @@ export function App({ viewer }) {
       <div className="relative flex min-h-0 flex-1">
         <Stage viewer={viewer} windowMode={windowMode} borders={borders && !windowMode} elements={elements && !windowMode} />
         {/* stays mounted while hidden, so the thumbnails don't reload on every toggle */}
-        {!windowMode && <Sidebar viewer={viewer} tab={tab} onTab={setTab} hidden={!sidebar} />}
+        {!windowMode && <Sidebar viewer={viewer} tab={tab} onTab={setTab} hidden={!sidebar || fullscreen} />}
       </div>
       {keyboard && <Keyboard viewer={viewer} onClose={() => setKeyboard(false)} />}
       {audioPanel && !windowMode && <AudioPanel viewer={viewer} hidden={fullscreen} onClose={() => setAudioPanel(false)} />}

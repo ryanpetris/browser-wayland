@@ -310,9 +310,16 @@ impl CompositorHandler for State {
             }
         }
         self.popups.commit(surface);
-        // a menu redrawing counts as its window updating (thumbnails)
-        if let Some(window) = self.popups.find_popup(surface).and_then(|p| find_popup_root_surface(&p).ok()).and_then(|root| self.window_for(&root)) {
-            self.touch_window(&window);
+        // Applied popup/subsurface commits invalidate the owning window, including minimized windows.
+        if !is_sync_subsurface(surface) {
+            let mut root = surface.clone();
+            while let Some(parent) = get_parent(&root) { root = parent; }
+            if let Some(root) = self.popups.find_popup(&root).and_then(|p| find_popup_root_surface(&p).ok())
+                && let Some(window) = self.space.elements().chain(self.minimized.iter().map(|(w, ..)| w))
+                    .find(|w| w.wl_surface().is_some_and(|s| *s == root)).cloned()
+            {
+                self.touch_window(&window);
+            }
         }
         if matches!(&self.cursor_status, CursorImageStatus::Surface(s) if s == surface) {
             // GTK 4 changes the image on the same surface with wl_surface.offset; the hotspot moves with it

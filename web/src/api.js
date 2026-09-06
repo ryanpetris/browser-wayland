@@ -20,8 +20,8 @@ export const WINDOW = new URLSearchParams(location.search).get('window');
 /// fetch() with the bearer token.
 export const api = (path, init = {}) => fetch(path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${TOKEN}` } });
 export const snapshotUrl = (id, sizing = {}) => `${id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`}?${new URLSearchParams(typeof sizing === 'number' ? { scale: sizing } : sizing)}`;
-export const snapshot = async (id, sizing = {}) => {
-  const response = await api(snapshotUrl(id, sizing));
+export const snapshot = async (id, sizing = {}, signal) => {
+  const response = await api(snapshotUrl(id, sizing), { signal });
   if (!response.ok) throw new Error(await response.text());
   return response.blob();
 };
@@ -65,13 +65,9 @@ export const downloadClipboardFile = (index, name) => download(`/api/clipboard/f
 // A notification's icon as a blob URL (the caller revokes it), or null.
 export const notificationIcon = id => api(`/api/notifications/${id}/icon`).then(r => (r.ok ? r.blob().then(URL.createObjectURL) : null)).catch(() => null);
 
-// The server renders one snapshot at a time (429 otherwise): thumbnails are fetched one by one, and
-// one nobody wants any more by its turn (`wanted()` false) is skipped.
+// Thumbnail jobs recheck eligibility when they reach this serialized queue.
 let queue = Promise.resolve();
-export const queuedSnapshot = (id, sizing, wanted = () => true) => {
-  const run = () => (wanted() ? snapshot(id, sizing) : null);
-  return (queue = queue.then(run, run));
-};
+export const queueSnapshot = run => (queue = queue.then(run, run));
 
 /// A remembered UI preference.
 export const pref = {

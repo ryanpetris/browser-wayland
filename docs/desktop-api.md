@@ -83,7 +83,7 @@ MCP samples at each size, not a throughput benchmark.
 
 The run checked 63 target/size combinations over both HTTP and MCP, including
 compositor scales 1, 1.5 and 2, portrait output, and 1×1 results. Preview dimensions
-use the same capture path; no grid UI or new thumbnail scheduler is implied.
+use the same capture path; no grid UI is implied.
 
 ## Window list
 
@@ -93,12 +93,42 @@ window), states from the acked xdg state or the X11 flags, `focused` from `State
 the client's socket credentials or `_NET_WM_PID`, `icon` from the name the client set through
 xdg-toplevel-icon (its picture, or the pixels it set instead, or its launcher's icon by app id, is at
 `GET /api/windows/{id}/icon`), `content` from content-type-v1 (`photo`, `video`, `game`, else `null`),
-`updated_ms` from a per-window `LastCommit` cell set
-in the commit handler (also for minimized windows and for a window whose popup committed). `windows()`
+`updated_ms` from the last applied commit in milliseconds, and `content_revision` from a monotonic
+per-window counter. Applied commits, including popup/subsurface content and minimized windows, advance
+the revision. Captured geometry and surface-tree membership changes also invalidate the image. `windows()`
 walks the space bottom to top, skipping X11 override-redirect surfaces, then the minimized list.
-`refresh_windows` runs once per loop iteration and sends `Event::Windows` only when the list differs from
-the last one sent. The server caches the encoded message for `/api/windows` and replays it to a new
+`refresh_windows` runs once per loop iteration. Structural changes publish immediately; content-only
+changes publish at most four times per second, retaining the final pending revision after drawing stops. The server caches the encoded message for `/api/windows` and replays it to a new
 viewer; window lists to a slow viewer are coalesced to the newest.
+
+
+Thumbnail verification runs in the Docker rig with `node web/checks/thumbnail-scheduler.mjs` and
+`node web/checks/thumbnails.mjs` after building the viewer and release binary. The live check needs
+`wayland-protocols`, a C compiler, and Python GObject/GTK 3 support in the image. It compiles a controlled
+Wayland client and also paints through X11, checking retained PNGs against fresh captures. It covers
+synchronized and desynchronized subsurfaces, popup children and lifecycle, a two-commit burst,
+minimized windows, resize, visibility, batched observer records, and disposal during a capture.
+
+
+Measured thumbnail workload in the Docker software-rendering rig, before/after scheduling changes,
+with a 1280×1100 browser viewport at DPR 1 and 640×360 terminal requests. The animated terminal
+writes a timestamp every 50 ms. These are single-run observations, not latency guarantees.
+
+| Scenario | HTTP responses, before → after | Response bytes, before → after | Capture/readback ms total, before → after | PNG ms total, before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Idle window, 4 s after a 1.5 s startup wait | 0 → 1 | 0 → 448 | 0.000 → 0.786 | 0.000 → 0.194 |
+| Animated window, 10 s | 13 → 5 | 14,858 → 4,837 | 8.579 → 4.883 | 0.827 → 0.339 |
+| Hidden pane, 4 s | 5 → 0 | 6,207 → 0 | 4.581 → 0.000 | 0.633 → 0.000 |
+| Ten additional windows starting, 5 s | 19 → 22 | 12,363 → 10,853 | 30.925 → 29.529 | 0.982 → 1.512 |
+
+The first sample includes a trailing initial-size update in the new scheduler; a separate settled-idle
+check produced no repeat requests. The startup sample includes initial buffers and size changes, so its
+request count increased even though transferred bytes fell. The baseline had one failed response in
+each animated/startup sample; the new run had none. Response counts and completed captures are assigned
+by their timestamps, so a request crossing a sample boundary can contribute to adjacent samples.
+Capture time includes compositor queueing, rendering and readback; PNG time includes blocking-pool
+dispatch. These timings do not isolate window-list bookkeeping CPU cost. Hidden-pane capture work fell
+to zero. The measurements do not justify adding preview streams or encoders.
 
 `State::active` is written by `focus_window` and when a window is first mapped, and cleared when the
 active window dies. Maximize and restore raise a window without activating it, so an API request on a
@@ -458,9 +488,16 @@ read it with `useSyncExternalStore` and send actions back through the engine.
   also gets the keyboard), close. Clicking a row activates the window. The command box at the top spawns
   programs; focusing it releases any key held in the compositor, and keys typed into any text field of
   the page never reach the desktop.
-- Thumbnails reload only when a window's `updated_ms` changed. `<img>` can't send the bearer header, so
-  thumbnails and the full-size snapshot come through `fetch()` and blob URLs, one at a time (the server
-  allows one snapshot in flight); the old picture stays until the new one is in.
+- Thumbnails use `content_revision` and their required image dimensions to detect pending updates.
+  A row is eligible only while the sidebar and Windows tab are open, the document is visible, fullscreen
+  is not hiding the pane, and the row intersects the list viewport. Unchanged rows reuse their image.
+  Each window has a three-second minimum between request starts and one coalesced trailing update;
+  continuous activity does not postpone that update. The shared queue serializes thumbnail requests and
+  rechecks eligibility before each start. Requests have a fifteen-second client deadline. A final failed
+  update gets one retry while eligible; new content activity permits another attempt, still throttled.
+  Hidden or removed rows cancel timers and abort obsolete client requests. Already-dispatched compositor
+  work may finish. Old images remain until a successful replacement; replacement and disposal revoke
+  owned blob URLs. Explicit full-size snapshots bypass thumbnail scheduling.
 - **Borders**: an overlay with one rectangle per visible window, positioned from the geometry scaled by
   the stage's CSS size over the logical stream size, hue hashed from the app id (the same hue as the
   row's dot), thicker for the focused window, app id label in the corner. React redraws it from the

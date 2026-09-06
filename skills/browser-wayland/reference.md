@@ -59,6 +59,13 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
         "null"
       ]
     },
+    "content_revision": {
+      "description": "Monotonic content invalidation revision; independent of timestamp resolution.",
+      "type": "integer",
+      "format": "uint64",
+      "default": 0,
+      "minimum": 0
+    },
     "decoration": {
       "description": "height of the compositor's title bar above the geometry (the `decoration` module has its layout); 0 when the client draws its own",
       "type": "integer",

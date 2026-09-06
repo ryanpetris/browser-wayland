@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Camera, ChevronDown, ChevronUp, Download, ExternalLink, Maximize2, Minimize2, Play, RefreshCw, Trash2, Upload, X } from 'lucide-react';
 import { useStore } from '../store.js';
-import { deleteFile, downloadFile, files, queuedSnapshot, snapshot, windowIcon } from '../api.js';
+import { deleteFile, downloadFile, files, queueSnapshot, snapshot, windowIcon } from '../api.js';
+import { thumbnailScheduler } from '../thumbnails.js';
 import { codecName, windowColor } from './ui.jsx';
 
 // The two panels stay mounted (hidden) so the window list keeps its thumbnails across toggles.
@@ -21,14 +22,27 @@ export function Sidebar({ viewer, tab, onTab, hidden }) {
           </button>
         ))}
       </nav>
-      <div hidden={tab !== 'windows'} className="min-h-0 flex-1 overflow-y-auto"><WindowList viewer={viewer} /></div>
+      <div data-window-list hidden={tab !== 'windows'} className="min-h-0 flex-1 overflow-y-auto"><WindowList viewer={viewer} active={!hidden && tab === 'windows'} /></div>
       <div hidden={tab !== 'files'} className="min-h-0 flex-1 overflow-y-auto"><FilesPanel viewer={viewer} open={tab === 'files'} /></div>
       <div hidden={tab !== 'stats'} className="min-h-0 flex-1 overflow-y-auto"><StatsPanel viewer={viewer} /></div>
     </aside>
   );
 }
 
-function WindowList({ viewer }) {
+function WindowList({ viewer, active }) {
+  const [visible, setVisible] = useState(!document.hidden);
+  const [dpr, setDpr] = useState(devicePixelRatio);
+  useEffect(() => {
+    const change = () => setVisible(!document.hidden);
+    document.addEventListener('visibilitychange', change);
+    return () => document.removeEventListener('visibilitychange', change);
+  }, []);
+  useEffect(() => {
+    const media = matchMedia(`(resolution: ${dpr}dppx)`);
+    const change = () => setDpr(devicePixelRatio);
+    media.addEventListener('change', change);
+    return () => media.removeEventListener('change', change);
+  }, [dpr]);
   const windows = useStore(viewer.store, s => s.windows);
   const acts = useStore(viewer.store, s => s.role) !== 'viewer'; // the viewer token only watches
   const order = windows.slice().sort((a, b) => a.minimized - b.minimized || b.z - a.z); // top-most first, minimized last
@@ -36,7 +50,7 @@ function WindowList({ viewer }) {
     <div className="flex flex-col">
       {acts && <Spawn viewer={viewer} />}
       {order.length === 0 && <div className="px-4 py-8 text-center text-sm text-zinc-600">{acts ? 'No windows yet. Run a command above.' : 'No windows.'}</div>}
-      {order.map(w => <WindowRow key={w.id} viewer={viewer} w={w} acts={acts} />)}
+      {order.map(w => <WindowRow key={w.id} viewer={viewer} w={w} acts={acts} eligible={active && visible} dpr={dpr} />)}
     </div>
   );
 }
@@ -75,7 +89,7 @@ function WinIcon({ w }) {
   return src ? <img src={src} alt="" className="size-4 shrink-0 object-contain" /> : null;
 }
 
-function WindowRow({ viewer, w, acts }) {
+function WindowRow({ viewer, w, acts, eligible, dpr }) {
   const badges = [w.fullscreen && 'fullscreen', w.maximized && 'maximized', w.minimized && 'minimized'].filter(Boolean);
   const act = (op, e) => { e.stopPropagation(); e.currentTarget.blur(); viewer.control({ id: w.id, op }); };
   return (
@@ -83,7 +97,7 @@ function WindowRow({ viewer, w, acts }) {
       onClick={() => acts && viewer.activate(w.id)}
       className={`group relative flex cursor-pointer items-center gap-2.5 border-b border-zinc-800/70 px-2.5 py-2 transition-colors hover:bg-zinc-800/60 ${w.focused ? 'bg-indigo-500/10' : ''} ${w.minimized ? 'opacity-60' : ''}`}
     >
-      <Thumb viewer={viewer} id={w.id} updated={w.updated_ms} width={w.w} height={w.h} />
+      <Thumb viewer={viewer} id={w.id} revision={w.content_revision ?? w.updated_ms} width={w.w} height={w.h} eligible={eligible} dpr={dpr} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="size-2 shrink-0 rounded-full" style={{ background: windowColor(w) }} />
@@ -162,29 +176,50 @@ function Action({ icon: Icon, label, onClick, className = '' }) {
   );
 }
 
-// A window's thumbnail, refetched when its content changed (updated_ms has whole-second resolution, so a
-// busy window costs at most one render per second). <img> can't send the bearer header, so the PNG comes
-// through fetch() and a blob URL; the old picture stays until the new one is in.
-function Thumb({ viewer, id, updated, width, height }) {
+// Retain the last successful image across visibility changes; only the row's scheduler owns its URL.
+function Thumb({ viewer, id, revision, width, height, eligible, dpr }) {
   const scale = useStore(viewer.store, s => s.stream?.scale ?? 1);
   const [src, setSrc] = useState('');
-  const url = useRef('');
+  const [intersecting, setIntersecting] = useState(false);
+  const box = useRef(null), scheduler = useRef(null);
+  const axis = width / height > 64 / 40 ? 'width' : 'height';
+  const pixels = Math.ceil((axis === 'width' ? 64 : 40) * dpr);
+  const native = Math.max(1, Math.floor((axis === 'width' ? width : height) * scale));
+  const dimension = Math.min(pixels, native);
   useEffect(() => {
-    let live = true;
-    const axis = width / height > 64 / 40 ? 'width' : 'height';
-    const pixels = Math.ceil((axis === 'width' ? 64 : 40) * devicePixelRatio);
-    const native = Math.max(1, Math.floor((axis === 'width' ? width : height) * scale));
-    queuedSnapshot(id, { [axis]: Math.min(pixels, native) }, () => live).then(b => {
-      if (!live || !b) return;
-      if (url.current) URL.revokeObjectURL(url.current);
-      url.current = URL.createObjectURL(b);
-      setSrc(url.current);
-    }).catch(() => {});
-    return () => { live = false; };
-  }, [id, updated, width, height, scale]);
-  useEffect(() => () => { if (url.current) URL.revokeObjectURL(url.current); }, []);
+    const observer = new IntersectionObserver(entries => {
+      const entry = entries.at(-1);
+      setIntersecting(entry.isIntersecting && entry.intersectionRect.width > 0 && entry.intersectionRect.height > 0);
+    });
+    observer.observe(box.current);
+    let url;
+    scheduler.current = thumbnailScheduler({
+      queue: queueSnapshot,
+      allowed() {
+        const element = box.current, container = element?.closest('[data-window-list]');
+        if (!container || document.hidden || !viewer.store.get().windows.some(w => w.id === id)) return false;
+        const row = element.getBoundingClientRect(), list = container.getBoundingClientRect();
+        return row.width > 0 && row.height > 0 && Math.max(row.top, list.top, 0) < Math.min(row.bottom, list.bottom, innerHeight)
+          && Math.max(row.left, list.left, 0) < Math.min(row.right, list.right, innerWidth);
+      },
+      capture: (sizing, signal) => snapshot(id, sizing, AbortSignal.any([signal, AbortSignal.timeout(15000)])),
+      publish(blob) {
+        if (url) URL.revokeObjectURL(url);
+        url = URL.createObjectURL(blob);
+        setSrc(url);
+      },
+    });
+    return () => {
+      observer.disconnect();
+      scheduler.current.dispose();
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [viewer, id]);
+  useEffect(() => {
+    scheduler.current.update({ eligible: eligible && intersecting && !document.hidden, revision, sizing: { [axis]: dimension } });
+  }, [viewer, id, eligible, intersecting, revision, axis, dimension]);
   return (
-    <div className="h-10 w-16 shrink-0 overflow-hidden rounded bg-black/60 ring-1 ring-zinc-800">
+    <div ref={box} className="h-10 w-16 shrink-0 overflow-hidden rounded bg-black/60 ring-1 ring-zinc-800">
       {src && <img src={src} alt="" className="h-full w-full object-contain" />}
     </div>
   );

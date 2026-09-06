@@ -39,7 +39,7 @@ try {
   browser = await chromium.launch({ env: { ...process.env, XDG_CONFIG_HOME: root + '/chromium' }, executablePath: '/usr/bin/chromium', args: ['--no-sandbox'] });
   for (const [dpr, viewport] of [[1, { width: 1000, height: 700 }], [1.5, { width: 700, height: 1000 }], [2, { width: 1000, height: 700 }]]) {
     const context = await browser.newContext({ viewport, deviceScaleFactor: dpr });
-    await context.addInitScript(() => localStorage.setItem('bw.sidebar', 'false'));
+    await context.addInitScript(() => localStorage.setItem('bw.sidebar', '1'));
     const page = await context.newPage();
     const previews = [];
     page.on('request', request => { if (request.url().includes('/snapshot.png')) previews.push(new URL(request.url()).searchParams); });
@@ -52,7 +52,9 @@ try {
     }
     await page.waitForTimeout(750);
     const windows = await (await fetch(origin + '/api/windows', { headers })).json();
+    await wait(() => previews.some(q => q.get('width') === String(Math.ceil(64 * dpr))));
     assert(previews.some(q => q.get('width') === String(Math.ceil(64 * dpr))), 'landscape list previews use width');
+    await wait(() => previews.some(q => q.get('height') === String(Math.ceil(40 * dpr))));
     assert(previews.some(q => q.get('height') === String(Math.ceil(40 * dpr))), 'portrait list previews use height');
     const stream = await page.evaluate(() => bw.store.get().stream);
     for (const id of [null, ...windows.filter(w => w.app_id.startsWith('sizing-')).map(w => w.id)]) {

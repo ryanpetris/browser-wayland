@@ -272,7 +272,7 @@ Each window reports `id`, `title`, `app_id`, `icon` (with the picture at `/api/w
 that geometry sits in the client's surface (`geo_x geo_y`), its open `popups` (`[x, y, w, h]` relative to
 the geometry), the height of the title bar the compositor draws above it (`decoration`, 0 when the
 application draws its own), its stacking index `z` (`null` while minimized), `maximized`, `fullscreen`,
-`minimized`, `focused`, and `updated_ms`, the time of its last commit to the second. Ops: `activate`, `close`, `minimize`, `unminimize`, `maximize`,
+`minimized`, `focused`, `updated_ms` on the compositor clock, and monotonic `content_revision` for preview invalidation. Ops: `activate`, `close`, `minimize`, `unminimize`, `maximize`,
 `unmaximize`, `fullscreen`, `unfullscreen`, `move` (`x`, `y`), `resize` (`w`, `h`), `spawn` (`cmd`, run
 with `sh -c` in the same environment as `--exec`), `launch` (`app`, an id from `GET /api/applications`,
 the installed `.desktop` launchers, whose icons are at `/api/applications/{id}/icon`) and `quit`, which

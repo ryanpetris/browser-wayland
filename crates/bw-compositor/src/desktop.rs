@@ -1,7 +1,7 @@
 //! The desktop API: the window list the viewer and `/api` see, and the control requests they send.
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -28,6 +28,8 @@ use crate::State;
 struct WindowId(u64);
 /// Last commit, ms on the compositor clock.
 struct LastCommit(Cell<u64>);
+struct ContentRevision(Cell<u64>);
+struct SurfaceTree(RefCell<Vec<smithay::reexports::wayland_server::backend::ObjectId>>);
 
 /// Stable for the window's life, never reused.
 pub fn window_id(window: &Window) -> u64 {
@@ -37,10 +39,17 @@ pub fn window_id(window: &Window) -> u64 {
 }
 
 impl State {
-    /// Whole seconds: a window redrawing at 60 fps must not mean 60 window lists a second.
+    /// Track every applied content commit, independently of window-list publication.
     pub fn touch_window(&self, window: &Window) {
         window.user_data().insert_if_missing(|| LastCommit(Cell::new(0)));
-        window.user_data().get::<LastCommit>().unwrap().0.set(self.clock.now().as_micros() / 1_000_000 * 1000);
+        window.user_data().get::<LastCommit>().unwrap().0.set(self.clock.now().as_micros() / 1000);
+        Self::advance_revision(window);
+    }
+
+    fn advance_revision(window: &Window) {
+        window.user_data().insert_if_missing(|| ContentRevision(Cell::new(0)));
+        let revision = &window.user_data().get::<ContentRevision>().unwrap().0;
+        revision.set(revision.get().saturating_add(1));
     }
 
     pub fn title_app_id(window: &Window) -> (String, String) {
@@ -105,6 +114,7 @@ impl State {
             fullscreen,
             minimized: z.is_none(),
             focused: self.active.as_ref() == Some(window),
+            content_revision: window.user_data().get::<ContentRevision>().map_or(0, |c| c.0.get()),
             updated_ms: window.user_data().get::<LastCommit>().map_or(0, |c| c.0.get()),
         }
     }
@@ -122,14 +132,42 @@ impl State {
         list
     }
 
-    /// Send the list to the viewer when it changed. Called once per loop iteration.
+    /// Publish content changes at most four times a second, including the final pending revision.
+    /// Structural list changes (focus, placement, creation, removal) publish immediately.
     pub fn refresh_windows(&mut self) {
-        let list = self.windows();
-        if list != self.last_windows {
-            let _ = self.events.send(Event::Windows(list.clone()));
-            self.last_windows = list;
-            self.dirty = true; // a title or state change redraws the bar
+        for window in self.space.elements().chain(self.minimized.iter().map(|(w, ..)| w)) {
+            let mut surfaces = Vec::new();
+            window.with_surfaces(|s, _| surfaces.push(s.id()));
+            window.user_data().insert_if_missing(|| SurfaceTree(RefCell::new(Vec::new())));
+            let mut previous = window.user_data().get::<SurfaceTree>().unwrap().0.borrow_mut();
+            if *previous != surfaces {
+                *previous = surfaces;
+                window.on_commit();
+                Self::advance_revision(window);
+            }
         }
+        let mut list = self.windows();
+        for info in &mut list {
+            if let Some(old) = self.last_windows.iter().find(|w| w.id == info.id)
+                && (info.w, info.h, info.geo_x, info.geo_y, &info.popups) != (old.w, old.h, old.geo_x, old.geo_y, &old.popups)
+                && let Some(window) = self.window_by_id(info.id)
+            {
+                Self::advance_revision(&window);
+                info.content_revision = window.user_data().get::<ContentRevision>().unwrap().0.get();
+            }
+        }
+        if list == self.last_windows { return; }
+        let only_content = list.len() == self.last_windows.len() && list.iter().zip(&self.last_windows).all(|(new, old)| {
+            let mut comparable = new.clone();
+            comparable.content_revision = old.content_revision;
+            comparable.updated_ms = old.updated_ms;
+            comparable == *old
+        });
+        if only_content && self.last_windows_sent.elapsed() < std::time::Duration::from_millis(250) { return; }
+        let _ = self.events.send(Event::Windows(list.clone()));
+        self.last_windows = list;
+        self.last_windows_sent = std::time::Instant::now();
+        self.dirty = true;
     }
 
     pub fn window_by_id(&self, id: u64) -> Option<Window> {

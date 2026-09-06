@@ -162,6 +162,9 @@ pub struct WindowInfo {
     pub focused: bool,
     /// last commit, ms on the compositor clock
     pub updated_ms: u64,
+    /// Monotonic content invalidation revision; independent of timestamp resolution.
+    #[serde(default)] // Accept window lists without revision metadata.
+    pub content_revision: u64,
 }
 
 /// `{"id":3,"op":"move","x":10,"y":20}`, `{"op":"spawn","cmd":"foot"}`.

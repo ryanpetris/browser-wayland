@@ -173,6 +173,7 @@ pub struct State {
     pub active: Option<Window>,
     /// What the viewer was last told (desktop API).
     pub last_windows: Vec<WindowInfo>,
+    pub last_windows_sent: Instant,
 
     pub seat_state: SeatState<State>,
     pub seat: Seat<State>,
@@ -351,6 +352,7 @@ impl State {
             window_streams: Vec::new(),
             active: None,
             last_windows: Vec::new(),
+            last_windows_sent: Instant::now(),
             seat_state,
             seat,
             pointer_location: (0.0, 0.0).into(),
