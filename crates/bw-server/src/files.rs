@@ -17,20 +17,12 @@ use tokio::io::AsyncWriteExt;
 
 use crate::{App, api::ApiError};
 
-/// One file in the folder.
-#[derive(Debug, Serialize, JsonSchema)]
-pub struct FileInfo {
-    pub name: String,
-    pub size: u64,
-    /// last modification, ms since the epoch
-    pub modified_ms: u64,
-}
-
 /// Browser paths are absolute UTF-8 paths or the exact @home / @transfer shortcuts.
-#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FileQuery {
-    pub path: Option<String>,
+    /// Absolute directory path, @home, or @transfer.
+    pub path: String,
     #[serde(default)]
     pub hidden: bool,
     #[serde(default)]
@@ -219,7 +211,7 @@ impl App {
     }
 
     pub async fn browse_files(&self, query: FileQuery) -> Result<FileListing, ApiError> {
-        let requested = query.path.as_deref().ok_or_else(|| file_error("invalid_path", "path is required"))?;
+        let requested = query.path.as_str();
         let path = self.file_path(requested)?;
         let create = requested == "@transfer";
         blocking(move || {
@@ -253,22 +245,18 @@ impl App {
         }).await
     }
 
-    pub async fn upload_file(&self, path: Option<&str>, name: &str, body: Body) -> Result<SavedFile, ApiError> {
-        if path.is_none() { safe(name)?; }
-        let requested = path.unwrap_or("@transfer");
-        upload(self.file_path(requested)?, requested == "@transfer", name.to_owned(), body).await
+    pub async fn upload_file(&self, path: &str, name: &str, body: Body) -> Result<SavedFile, ApiError> {
+        upload(self.file_path(path)?, path == "@transfer", name.to_owned(), body).await
     }
 
-    pub async fn download_file(&self, path: Option<&str>, name: &str) -> Result<(Option<u64>, Body), ApiError> {
-        if path.is_none() { return self.open_file(name).await; }
-        let dir = self.file_path(path.unwrap())?;
+    pub async fn download_file(&self, path: &str, name: &str) -> Result<(Option<u64>, Body), ApiError> {
+        let dir = self.file_path(path)?;
         let name = entry_name(name)?.to_owned();
         blocking(move || { let dir = Directory::open(&dir)?; regular_file(&dir.at(&name), true) }).await.and_then(file_body)
     }
 
-    pub async fn remove_file(&self, path: Option<&str>, name: &str) -> Result<(), ApiError> {
-        if path.is_none() { safe(name)?; }
-        let dir = self.file_path(path.unwrap_or("@transfer"))?;
+    pub async fn remove_file(&self, path: &str, name: &str) -> Result<(), ApiError> {
+        let dir = self.file_path(path)?;
         let name = entry_name(name)?.to_owned();
         blocking(move || { let dir = Directory::open(&dir)?; std::fs::remove_file(dir.at(&name)).map_err(io_error) }).await
     }
@@ -328,30 +316,6 @@ fn candidates(name: &str) -> impl Iterator<Item = String> + '_ {
 }
 
 impl App {
-    /// The files in the folder (not its subfolders, hidden entries or symlinks), newest first.
-    pub async fn files(&self) -> Result<Vec<FileInfo>, ApiError> {
-        let dir = self.files_dir.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut list: Vec<FileInfo> = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries
-                    .flatten()
-                    .filter_map(|e| {
-                        let name = e.file_name().into_string().ok()?;
-                        let meta = e.metadata().ok()?;
-                        let modified_ms = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
-                        (e.file_type().ok()?.is_file() && !name.starts_with('.')).then(|| FileInfo { name, size: meta.len(), modified_ms }) // no symlinks: they could point anywhere
-                    })
-                    .collect(),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
-                Err(e) => return Err(ApiError::Internal(e.to_string())),
-            };
-            list.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms).then_with(|| a.name.cmp(&b.name))); // newest first: what just landed
-            Ok(list)
-        })
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-    }
-
     /// Write an upload into the batch `batch`, a drag's or a paste's, for the application that will take it.
     pub async fn stage_file(&self, batch: &str, name: &str, body: Body) -> Result<String, ApiError> {
         self.store_into(&self.batch_dir(batch)?, name, body).await
@@ -364,11 +328,6 @@ impl App {
     async fn store_into(&self, dir: &Path, name: &str, body: Body) -> Result<String, ApiError> {
         safe(name)?;
         Ok(upload(dir.to_owned(), true, name.to_owned(), body).await?.name)
-    }
-
-    /// A file from the folder as a streaming body with its size.
-    pub async fn open_file(&self, name: &str) -> Result<(Option<u64>, Body), ApiError> {
-        stream_file(&self.files_dir.join(safe(name)?)).await
     }
 
     /// Files of the transfer folder, or with `batch` of the batch a paste staged, as the desktop clipboard's

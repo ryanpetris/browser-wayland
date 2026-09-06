@@ -300,10 +300,10 @@ impl Mcp {
         json(self.app.applications().await)
     }
 
-    #[tool(description = "Control token required. The visible regular files in the desktop's transfer folder: name, size, modified_ms. GET /api/files/{name} downloads one.")]
-    async fn files(&self, Extension(parts): Extension<Parts>) -> ToolResult {
+    #[tool(description = "Control token required. List a directory by absolute path, @home, or @transfer. Returns FileListing with entries and pagination; hidden, sort, desc, offset, and limit match GET /api/files. Download entries with GET /api/files/{name}?path=... .")]
+    async fn files(&self, Extension(parts): Extension<Parts>, Parameters(query): Parameters<crate::files::FileQuery>) -> ToolResult {
         if let Err(e) = self.acting(&parts) { return done(Err(e)); }
-        match self.app.files().await {
+        match self.app.browse_files(query).await {
             Ok(list) => json(list),
             Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(e.to_string())])),
         }

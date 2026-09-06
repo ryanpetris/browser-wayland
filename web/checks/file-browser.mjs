@@ -86,7 +86,7 @@ try {
     assert.equal(r.status, 200);
     return r.json();
   };
-  for (const [url, method] of [[ '/api/files', 'GET' ],
+  for (const [url, method] of [[ '/api/files?path=@transfer', 'GET' ],
                                [ location('hello ü.txt', root + '/a'), 'GET' ],
                                [ location('x', root + '/a'), 'PUT' ],
                                [ location('x', root + '/a'), 'DELETE' ],
@@ -101,8 +101,10 @@ try {
                      viewerToken))
           .status,
       403);
-  let rpcSession, rpcId = 0;
-  const rpc = async (method, params) => {
+  const rpcSessions = new Map();
+  let rpcId = 0;
+  const rpc = async (method, params, key = viewerToken) => {
+    const rpcSession = rpcSessions.get(key);
     const r = await request('/mcp', {
       method : 'POST',
       headers : {
@@ -112,8 +114,8 @@ try {
       },
       body : JSON.stringify({jsonrpc : '2.0', id : ++rpcId, method, params})
     },
-                            viewerToken);
-    rpcSession ||= r.headers.get('Mcp-Session-Id');
+                            key);
+    if (r.headers.has('Mcp-Session-Id')) rpcSessions.set(key, r.headers.get('Mcp-Session-Id'));
     const text = await r.text();
     return JSON.parse(text.split('\n')
                           .filter(line => line.startsWith('data:'))
@@ -127,11 +129,28 @@ try {
     capabilities : {},
     clientInfo : {name : 'files-check', version : '1'}
   });
-  assert.equal((await rpc('tools/call', {name : 'files', arguments : {}}))
+  assert.equal((await rpc('tools/call', {name : 'files', arguments : {path : '@transfer'}}))
                    .result.isError,
                true);
   assert.equal((await list('@transfer')).path, root + '/Downloads');
   assert.equal((await list('@home')).path, root);
+  for (const [url, method] of [['/api/files', 'GET'], ['/api/files/x', 'GET'], ['/api/files/x', 'PUT'], ['/api/files/x', 'DELETE']]) {
+    assert.equal((await request(url, {method})).status, 400, `${method} requires path`);
+  }
+  await rpc('initialize', {protocolVersion: '2025-03-26', capabilities: {}, clientInfo: {name: 'files-control-check', version: '1'}}, token);
+  const tools = (await rpc('tools/list', {}, token)).result.tools;
+  assert(tools.find(t => t.name === 'files').inputSchema.required.includes('path'));
+  const missingPath = await rpc('tools/call', {name: 'files', arguments: {}}, token);
+  assert(missingPath.error || missingPath.result?.isError, JSON.stringify(missingPath));
+  assert.match(JSON.stringify(missingPath), /path/);
+  for (const query of [{path: '@transfer'}, {path: '@home'}, {path: root + '/a', hidden: true, sort: 'size', desc: true, offset: 1, limit: 2}]) {
+    const result = await rpc('tools/call', {name: 'files', arguments: query}, token);
+    assert(!result.error && !result.result.isError, JSON.stringify(result));
+    const expected = await (await request('/api/files?' + new URLSearchParams(query))).json();
+    assert.deepEqual(JSON.parse(result.result.content[0].text), expected);
+  }
+  assert((await rpc('tools/call', {name: 'files', arguments: {path: root + '/blocked'}}, token)).result.isError);
+
   const fallback = await request(location('fstatfs-fallback.txt', root + '/a'));
   assert.equal(fallback.status, 200);
   assert.equal(await fallback.text(), 'fallback works');

@@ -18,10 +18,10 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 | `GET /api/applications` | | JSON array of **Application**: the installed launchers, for `launch` |
 | `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
 | `GET /api/windows/{id}/icon` | | the window's icon (its own, else its launcher's), SVG or PNG; `404` none |
-| `GET /api/files` | optional **FileQuery** query | control token; pathless: legacy **File** array; with path: **FileListing** |
-| `PUT /api/files/{name}` | bytes; optional `path` query | control token; streaming upload with collision suffix; `201` **SavedFile** |
-| `GET /api/files/{name}` | optional `path` query | control token; regular file attachment |
-| `DELETE /api/files/{name}` | optional `path` query | control token; nonrecursive unlink; `204` |
+| `GET /api/files` | **FileQuery** query, required `path` | control token; **FileListing** |
+| `PUT /api/files/{name}` | bytes; required `path` query | control token; streaming upload with collision suffix; `201` **SavedFile** |
+| `GET /api/files/{name}` | required `path` query | control token; regular file attachment |
+| `DELETE /api/files/{name}` | required `path` query | control token; nonrecursive unlink; `204` |
 | `POST /api/files` | **FileAction** | control token; mkdir or rename without replacement; `201` **SavedFile** |
 | `PUT /api/drop/{batch}/{name}` | the file's bytes | staged in batch `batch` (a random id of the page's) for a drag or a paste onto the desktop, where the application picks the folder; the transfer folder is for uploads; `201` with `{"name": "…"}` |
 | `GET /api/notifications` | | JSON array of **Notification**: what applications reported and the viewers show |
@@ -310,38 +310,6 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
 }
 ```
 
-## File
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "FileInfo",
-  "description": "One file in the folder.",
-  "type": "object",
-  "properties": {
-    "modified_ms": {
-      "description": "last modification, ms since the epoch",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
-    },
-    "name": {
-      "type": "string"
-    },
-    "size": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
-    }
-  },
-  "required": [
-    "name",
-    "size",
-    "modified_ms"
-  ]
-}
-```
-
 ## FileQuery
 
 ```json
@@ -374,16 +342,17 @@ rejected before that with a plain-text message: `400` invalid JSON, `415` missin
       "minimum": 0
     },
     "path": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "description": "Absolute directory path, @home, or @transfer.",
+      "type": "string"
     },
     "sort": {
       "$ref": "#/$defs/FileSort"
     }
   },
   "additionalProperties": false,
+  "required": [
+    "path"
+  ],
   "$defs": {
     "FileSort": {
       "type": "string",
@@ -1193,11 +1162,56 @@ The UI elements of a window (buttons, links, text fields, menu items, tabs, ...)
 
 ### `files`
 
-Control token required. The visible regular files in the desktop's transfer folder: name, size, modified_ms. GET /api/files/{name} downloads one.
+Control token required. List a directory by absolute path, @home, or @transfer. Returns FileListing with entries and pagination; hidden, sort, desc, offset, and limit match GET /api/files. Download entries with GET /api/files/{name}?path=... .
 
 ```json
 {
-  "properties": {},
+  "$defs": {
+    "FileSort": {
+      "enum": [
+        "name",
+        "size",
+        "modified"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "desc": {
+      "default": false,
+      "type": "boolean"
+    },
+    "hidden": {
+      "default": false,
+      "type": "boolean"
+    },
+    "limit": {
+      "format": "uint",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "offset": {
+      "default": 0,
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "path": {
+      "description": "Absolute directory path, @home, or @transfer.",
+      "type": "string"
+    },
+    "sort": {
+      "$ref": "#/$defs/FileSort"
+    }
+  },
+  "required": [
+    "path"
+  ],
   "type": "object"
 }
 ```

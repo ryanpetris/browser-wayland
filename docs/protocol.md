@@ -146,10 +146,10 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `GET /api/windows/{id}/snapshot.png` | PNG of that window. Optional `width`, `height`, or `percentage`, default native dimensions; [sizing limits](desktop-api.md#screenshot-sizing). `400` invalid sizing. `404` unknown id, `429` another snapshot is in flight, `500` the render failed (logged), `503` the compositor didn't answer within 2 s. |
 | `GET /api/screenshot.png` | PNG of the whole output (layers included, cursor excluded); sizing as for a window; `400`, `429`, `500`, `503` as for a window. |
 | `POST /api/input` | Body: an input message (below). `202`, with `{"warning": …}` when a click aims past the desktop's edge at an X11 window; `404` unknown window; `503` compositor gone. |
-| `GET /api/files` | The transfer folder's files (`name`, `size`, `modified_ms`), newest first. |
-| `PUT /api/files/{name}` | The body is saved in the folder under `name` (streamed; a taken name gets ` (2)` before its extension). `201` with `{"name": "…"}`. |
-| `GET /api/files/{name}` | The file, as an attachment. `404`. |
-| `DELETE /api/files/{name}` | `204`; `404`. |
+| `GET /api/files?path=…` | Control token required. Paginated `FileListing`; required absolute directory path, `@home`, or `@transfer`. Optional `hidden`, `sort`, `desc`, `offset`, `limit`; [file operations](desktop-api.md#files). |
+| `PUT /api/files/{name}?path=…` | Control token required. Streamed upload to the required directory; collisions add ` (2)` before the extension. `201` with `name`, `path`, and `directory`. |
+| `GET /api/files/{name}?path=…` | Control token required. Download from the required directory, as an attachment. `404` missing. |
+| `DELETE /api/files/{name}?path=…` | Control token required. Nonrecursive unlink from the required directory. `204`; `404` missing. |
 | `PUT /api/drop/{batch}/{name}` | Like `PUT /api/files/{name}`, but into batch `batch`, a directory under the cache directory named by a random id of the page's, for the application that will take the files in a drag or a paste (the `Drag` `drop` or `POST /api/clipboard/files` name the batch); batches are swept after a day. `201` with `{"name": "…"}`. |
 | `GET /api/notifications` | The open notifications, oldest first, as the `Notifications` message carries them. |
 | `POST /api/notifications/{id}` | Body `{"action": "default" \| "<key>"}`, or `{}` to dismiss. `202`; `404` unknown id. |

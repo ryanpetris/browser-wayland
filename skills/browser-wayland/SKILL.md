@@ -52,8 +52,10 @@ curl -s -H "$H" https://host:8443/api/windows | jq
   (`PUT /api/clipboard`, tool `clipboard_write`) and press `ctrl+v` in the field; `GET /api/clipboard`
   (tool `clipboard_read`) returns what an application last copied, text or a PNG (its Content-Type says
   which), and a PNG body with `Content-Type: image/png` on the PUT puts an image on the clipboard.
-- Files: `GET /api/files` lists the desktop's transfer folder (its Downloads), `GET /api/files/{name}`
-  fetches one, `PUT /api/files/{name}` with the bytes puts a file there for an application to open.
+- Files require a control token and an explicit directory: `GET /api/files?path=@transfer` lists
+  Downloads. Use `@home` or an absolute path for another directory. MCP `files` takes `path` and
+  optional `hidden`, `sort`, `desc`, `offset`, and `limit`, returning the same paginated listing.
+  `GET` and `PUT /api/files/{name}?path=…` download or upload an entry in that directory.
 - `key` presses a chord and releases it: `ctrl+s`, `ctrl+shift+t`, `alt+F4`, `Return`, `Escape`,
   `Tab`, `Down`, `Prior` (Page Up), `F5`. Modifier names: `ctrl`, `shift`, `alt`, `super`. Anything
   else is an X keysym name or a single character; `ctrl+T` is the same as `ctrl+t` (write `shift` when

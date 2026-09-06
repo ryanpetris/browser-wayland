@@ -15,10 +15,10 @@ const ROUTES: &str = "\
 | `GET /api/applications` | | JSON array of **Application**: the installed launchers, for `launch` |
 | `GET /api/applications/{id}/icon` | | the application's icon, SVG or PNG; `404` none |
 | `GET /api/windows/{id}/icon` | | the window's icon (its own, else its launcher's), SVG or PNG; `404` none |
-| `GET /api/files` | optional **FileQuery** query | control token; pathless: legacy **File** array; with path: **FileListing** |
-| `PUT /api/files/{name}` | bytes; optional `path` query | control token; streaming upload with collision suffix; `201` **SavedFile** |
-| `GET /api/files/{name}` | optional `path` query | control token; regular file attachment |
-| `DELETE /api/files/{name}` | optional `path` query | control token; nonrecursive unlink; `204` |
+| `GET /api/files` | **FileQuery** query, required `path` | control token; **FileListing** |
+| `PUT /api/files/{name}` | bytes; required `path` query | control token; streaming upload with collision suffix; `201` **SavedFile** |
+| `GET /api/files/{name}` | required `path` query | control token; regular file attachment |
+| `DELETE /api/files/{name}` | required `path` query | control token; nonrecursive unlink; `204` |
 | `POST /api/files` | **FileAction** | control token; mkdir or rename without replacement; `201` **SavedFile** |
 | `PUT /api/drop/{batch}/{name}` | the file's bytes | staged in batch `batch` (a random id of the page's) for a drag or a paste onto the desktop, where the application picks the folder; the transfer folder is for uploads; `201` with `{\"name\": \"…\"}` |
 | `GET /api/notifications` | | JSON array of **Notification**: what applications reported and the viewers show |
@@ -48,7 +48,7 @@ pub fn markdown() -> String {
     out.push_str("Generated from the code (`UPDATE_REFERENCE=1 cargo test -p bw-server reference`); do not edit.\n\n");
     out.push_str("## HTTP API\n\nEvery `/api` request carries `Authorization: Bearer <token>`; `401` (empty body) otherwise. The\nviewer token (the server prints it as \"view only\") reads: the acting routes and tools answer `403`\n`read-only token` to it. The\nstatuses in the table come with a JSON body `{\"error\": \"...\"}`. A request body the server can't read is\nrejected before that with a plain-text message: `400` invalid JSON, `415` missing\n`Content-Type: application/json`, `422` wrong shape. Coordinates are logical pixels.\n\n");
     out.push_str(ROUTES);
-    for (name, s) in [("Window", schema::<WindowInfo>()), ("Application", schema::<AppInfo>()), ("Notification", schema::<crate::notify::Notification>()), ("File", schema::<crate::files::FileInfo>()), ("FileQuery", schema::<crate::files::FileQuery>()), ("FileListing", schema::<crate::files::FileListing>()), ("FileAction", schema::<crate::files::FileAction>()), ("SavedFile", schema::<crate::files::SavedFile>()), ("Control", schema::<ControlMsg>()), ("Input", schema::<InputMsg>()), ("Elements", schema::<Page>())] {
+    for (name, s) in [("Window", schema::<WindowInfo>()), ("Application", schema::<AppInfo>()), ("Notification", schema::<crate::notify::Notification>()), ("FileQuery", schema::<crate::files::FileQuery>()), ("FileListing", schema::<crate::files::FileListing>()), ("FileAction", schema::<crate::files::FileAction>()), ("SavedFile", schema::<crate::files::SavedFile>()), ("Control", schema::<ControlMsg>()), ("Input", schema::<InputMsg>()), ("Elements", schema::<Page>())] {
         out.push_str(&format!("\n## {name}\n\n```json\n{s}\n```\n"));
     }
     out.push_str("\n## MCP tools\n\nStreamable HTTP at `/mcp`, same bearer token. Failures come back as tool errors with the same text as the API.\n");

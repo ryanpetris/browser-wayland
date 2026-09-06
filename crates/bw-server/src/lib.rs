@@ -409,10 +409,7 @@ async fn api_window_icon(UrlPath(id): UrlPath<u64>, State(app): State<Arc<App>>)
 
 async fn api_files(Extension(key): Extension<Key>, State(app): State<Arc<App>>, Query(query): Query<files::FileQuery>) -> Response {
     if let Err(e) = writable(key) { return e.into_response(); }
-    if query.path.is_some() {
-        return match app.browse_files(query).await { Ok(list) => (NO_STORE, Json(list)).into_response(), Err(e) => e.into_response() };
-    }
-    match app.files().await { Ok(list) => (NO_STORE, Json(list)).into_response(), Err(e) => e.into_response() }
+    match app.browse_files(query).await { Ok(list) => (NO_STORE, Json(list)).into_response(), Err(e) => e.into_response() }
 }
 
 async fn api_manage_file(Extension(key): Extension<Key>, State(app): State<Arc<App>>, Json(action): Json<files::FileAction>) -> Response {
@@ -422,7 +419,7 @@ async fn api_manage_file(Extension(key): Extension<Key>, State(app): State<Arc<A
 
 async fn api_put_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>, Query(query): Query<files::FileQuery>, req: Request) -> Response {
     if let Err(e) = writable(key) { return e.into_response(); }
-    match app.upload_file(query.path.as_deref(), &name, req.into_body()).await {
+    match app.upload_file(&query.path, &name, req.into_body()).await {
         Ok(saved) => (StatusCode::CREATED, NO_STORE, Json(saved)).into_response(), Err(e) => e.into_response()
     }
 }
@@ -459,7 +456,7 @@ fn attachment(name: &str, len: Option<u64>, body: axum::body::Body) -> Response 
 
 async fn api_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>, Query(query): Query<files::FileQuery>) -> Response {
     if let Err(e) = writable(key) { return e.into_response(); }
-    match app.download_file(query.path.as_deref(), &name).await {
+    match app.download_file(&query.path, &name).await {
         Ok((len, body)) => attachment(&name, len, body),
         Err(e) => e.into_response(),
     }
@@ -467,7 +464,7 @@ async fn api_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>
 
 async fn api_delete_file(Extension(key): Extension<Key>, UrlPath(name): UrlPath<String>, State(app): State<Arc<App>>, Query(query): Query<files::FileQuery>) -> Response {
     match writable(key) {
-        Ok(()) => match app.remove_file(query.path.as_deref(), &name).await {
+        Ok(()) => match app.remove_file(&query.path, &name).await {
             Ok(()) => StatusCode::NO_CONTENT.into_response(),
             Err(e) => e.into_response(),
         },

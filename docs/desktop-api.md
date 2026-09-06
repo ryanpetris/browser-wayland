@@ -249,8 +249,7 @@ It is not an access boundary: the process's Unix permissions determine access to
 including mounted volumes in a container. `/proc` must be mounted for descriptor-based operations.
 
 Every file endpoint, including clipboard file lists/downloads and equivalent MCP tools, requires a control
-token. Participants may use files without taking desktop control. Restricting pathless transfer-folder
-listing and download for view-only tokens is an intentional authorization change.
+token. Participants may use files without taking desktop control.
 
 `GET /api/files?path=…` returns `FileListing`: the resolved absolute path, entries, total, offset, limit,
 and the count of omitted non-UTF-8 names. Paths are absolute UTF-8 strings, percent-encoded once as query
@@ -282,12 +281,12 @@ not describe their contents. Uploads hold an opened directory,
 write a temporary file with mode `0666` filtered by the process umask, then publish the opened inode under the first free name, adding ` (2)`
 before the extension on collisions. Failure/cancellation cleans up its temporary entry. A renamed
 destination remains anchored and its current path is reported; a removed destination fails. Only the
-`@transfer` shortcut, pathless uploads, and staging intentionally create their destination directory.
+`@transfer` shortcut and staging intentionally create their destination directory.
 An explicitly selected absolute path is never recreated.
 
-Without `path`, GET retains the legacy newest-first array of visible regular transfer files, download
-rejects symlinks, and upload/delete retain visible-name validation. Upload replies add the saved path
-and directory to the existing name. Staging keeps its stricter batch/name validation and name-only reply.
+Listing, upload, download, and delete require `path`. The MCP `files` tool accepts the same
+listing arguments and returns the same `FileListing`. Staging keeps its stricter batch/name
+validation and name-only reply.
 
 Each viewer starts with `@transfer` and keeps its navigation in client state. The first visible Files
 panel fetches a listing; navigation, sorting, pagination, hidden-file changes and Refresh request new
