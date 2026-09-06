@@ -11,7 +11,7 @@ generated schemas.
 |---|---|
 | Protocol | MCP over Streamable HTTP at `/mcp` on the existing server, with the `rmcp` SDK. No second port or process; works remotely and from the container. Agents that only speak stdio use the standard `mcp-remote` bridge. |
 | Auth | The bearer tokens, through the same middleware as `/api`; `401` otherwise. The middleware tags the request with which token it carried (rmcp hands tools the HTTP request parts), so the tools that act answer `read-only token` as a tool error to the viewer token. rmcp's host allow-list (DNS-rebinding protection) is off because the tokens already gate every request. No OAuth. |
-| Shape of the tools | One tool per thing an agent wants to say, sixteen in all, each a few lines calling an `App` method. Arguments use the API's own types where they exist (`Button`, the control ops) so the vocabulary is shared. |
+| Shape of the tools | One tool per operation, each a few lines calling an `App` method. The generated [tool reference](../skills/browser-wayland/reference.md#mcp-tools) lists every tool from the router. Arguments use the API's own types where they exist (`Button`, the control ops) so the vocabulary is shared. |
 | Results | JSON as text content for lists and elements, `image/png` content for snapshots, `ok` for fire-and-forget actions, and `isError` results carrying the API's error text so the model can react. |
 | Documentation | The manual is the server's `instructions` at `initialize` and both skill files are MCP resources, so a client gets the documentation with the connection. |
 | Screenshots for models | `snapshot` and `screenshot` default to native dimensions. Supply one of `width`, `height`, or `percentage` for previews; [sizing limits](desktop-api.md#screenshot-sizing). |
@@ -54,8 +54,8 @@ the embedded viewer needs) and cannot silently drift.
 ## Verification
 
 - A scripted MCP handshake with curl against a test compositor: `initialize` (server info,
-  capabilities, instructions), `tools/list` (16 tools), `resources/list` and `resources/read`, and
-  `tools/call` for `windows`, `elements`, `click`, `type` (text appeared in the editor) and `snapshot`
+  capabilities, instructions), `tools/list` matching the generated tool reference, `resources/list`
+  and `resources/read`, and `tools/call` for `windows`, `elements`, `click`, `type` (text appeared in the editor) and `snapshot`
   (a PNG of the window's size), plus a tool error for an unknown window and `401` without the token.
 - The input route through curl: click into an editor, type text with punctuation and capitals, `Return`,
   `ctrl+a`; the snapshot showed the typed lines selected.
