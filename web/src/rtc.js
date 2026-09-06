@@ -41,7 +41,7 @@ export function openRtc({ iceServers, g, signal, onMessage, onOpen, onClose }) {
     stats: async () => {
       const out = { incomplete, rttMs: null, bytes: 0, messages: 0 };
       (await pc.getStats()).forEach(r => {
-        if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.currentRoundTripTime !== undefined) out.rttMs = r.currentRoundTripTime * 1000;
+        if (r.type === 'candidate-pair' && r.nominated && r.currentRoundTripTime !== undefined) out.rttMs = r.currentRoundTripTime * 1000; // the pair in use, not any that worked
         if (r.type === 'data-channel') { out.bytes = r.bytesReceived; out.messages = r.messagesReceived; }
       });
       return out;

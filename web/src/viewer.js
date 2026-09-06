@@ -373,10 +373,14 @@ export function createViewer() {
   }
 
   // frame rate, bandwidth (video + audio) and timings over the last second
-  let rtcStats = null; // the channel's numbers as of the last second, fetched off the tick
+  let rtcStats = null, rtcStatsPending = false; // the channel's numbers as of the last second, fetched off the tick
   setInterval(() => {
-    if (state().statsOn && rtc) rtc.stats().then(s => { rtcStats = s; }).catch(() => {}); else rtcStats = null;
     const s = state();
+    if (s.statsOn && rtc && !rtcStatsPending) {
+      const mine = rtc;
+      rtcStatsPending = true;
+      mine.stats().then(st => { if (rtc === mine) rtcStats = st; }).catch(() => {}).finally(() => { rtcStatsPending = false; });
+    } else if (!rtc) rtcStats = null;
     const timings = s.statsOn ? { decode: [pct(stage_.decode, .5), pct(stage_.decode, .95)], paint: [pct(stage_.paint, .5), pct(stage_.paint, .95)], interval: [pct(stage_.interval, .5), pct(stage_.interval, .95)] } : null;
     stage_.decode.length = stage_.paint.length = stage_.interval.length = 0;
     store.set({ stats: { fps: windowFrames, mbps: windowBytes * 8 / 1e6, latencyMs, lost, dropped, decodeErrors, keyframes, sinceKey, frames, received, connects, closes, audio: audioStats(), queue: decoder?.decodeQueueSize ?? 0, timings, lockRequests, lockError, underruns: audioUnderruns, rtc: rtcStats } });
@@ -874,7 +878,6 @@ export function createViewer() {
     takeControl: () => send(TAKE_CONTROL, 0),
     setChoice,
     setTransport,
-    rtcStats: () => rtc?.stats(),
     uploadFiles,
     // a click ('default'), an action key, or nothing to dismiss; a session that can't act only hides it for itself
     notify(id, action) {

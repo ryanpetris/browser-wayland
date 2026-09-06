@@ -198,7 +198,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                     if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
                         // sent in order, waiting for the socket: the pipeline drops raw frames upstream of the encoder
                         // while we do, so nothing goes missing between encoder and page (no keyframe dance)
-                        let backlog = rx.len() + app.rtc.as_ref().map_or(0, |hub| hub.take_dropped(id) as usize); // channel drops are congestion too
+                        let (backlog, dropped) = (rx.len(), app.rtc.as_ref().map_or(0, |hub| hub.take_dropped(id))); // channel drops are congestion too
                         let t = Instant::now();
                         match &app.rtc {
                             // the data channel, while the page has one open: a lost packet costs one frame, not a stall
@@ -206,7 +206,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                             _ => if !send(&mut socket, protocol::video(&f, seq)).await { break None },
                         }
                         seq = seq.wrapping_add(1);
-                        if let Some(q) = auto.frame(backlog, t.elapsed()) {
+                        if let Some(q) = auto.frame(backlog, dropped, t.elapsed()) {
                             app.set_quality(id, q);
                             let Some(state) = app.stream_state(id) else { break Some((UNAUTHORIZED, "token rotated")) };
                             if !send(&mut socket, state).await { break None }
@@ -270,6 +270,9 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                 _ => {}
             },
             _ = ping.tick() => {
+                if app.key_for(&token).is_none() {
+                    break Some((UNAUTHORIZED, "token rotated")); // an idle session, which no message would end
+                }
                 // the pong comes back behind whatever video is queued in the socket: its time is the backlog's
                 if unanswered >= 10 || socket.send(Message::Ping(ping_payload(started))).await.is_err() {
                     break None; // dead peer
@@ -361,14 +364,14 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                 }
                 Some(StreamMsg::Frame(f)) => {
                     if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
-                        let backlog = rx.len() + app.rtc.as_ref().map_or(0, |hub| hub.take_dropped(rtc_key) as usize);
+                        let (backlog, dropped) = (rx.len(), app.rtc.as_ref().map_or(0, |hub| hub.take_dropped(rtc_key)));
                         let t = Instant::now();
                         match &app.rtc {
                             Some(hub) if hub.is_open(rtc_key) => hub.frame(rtc_key, protocol::video(&f, seq)),
                             _ => if !send(&mut socket, protocol::video(&f, seq)).await { break None },
                         }
                         seq = seq.wrapping_add(1);
-                        if let Some(q) = auto.frame(backlog, t.elapsed()) {
+                        if let Some(q) = auto.frame(backlog, dropped, t.elapsed()) {
                             quality = q;
                             control.set_quality(q);
                             if !send(&mut socket, state(codec, quality, preset, want_codec)).await { break None }
@@ -472,6 +475,9 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                 _ => {}
             },
             _ = ping.tick() => {
+                if app.key_for(&token).is_none() {
+                    break Some((UNAUTHORIZED, "token rotated")); // an idle session, which no message would end
+                }
                 if unanswered >= 10 || socket.send(Message::Ping(ping_payload(started))).await.is_err() {
                     break None;
                 }
@@ -779,9 +785,9 @@ impl AutoRate {
     }
 
     /// One frame went out; `backlog` frames were waiting behind it and the send took `took`.
-    fn frame(&mut self, backlog: usize, took: Duration) -> Option<bw_core::Quality> {
+    fn frame(&mut self, backlog: usize, dropped: u32, took: Duration) -> Option<bw_core::Quality> {
         self.frames += 1;
-        if backlog >= 2 || took > Duration::from_millis(33) {
+        if backlog >= 2 || dropped > 0 || took > Duration::from_millis(33) {
             self.congested += 1;
         }
         self.evaluate()
@@ -847,7 +853,7 @@ mod tests {
             if i == n - 1 {
                 a.window = Instant::now() - Duration::from_secs(2); // the window is over with this frame
             }
-            changed = a.frame(if i < bad { 2 } else { 0 }, Duration::ZERO).or(changed);
+            changed = a.frame(if i < bad { 2 } else { 0 }, 0, Duration::ZERO).or(changed);
         }
         changed
     }
@@ -867,7 +873,7 @@ mod tests {
         let mut a = AutoRate::new(2000, true);
         let q = second(&mut a, 1, 1).unwrap();
         assert_eq!((q.bitrate_kbps, q.max_fps), (1500, 30));
-        assert!(AutoRate::new(8000, false).frame(5, Duration::from_secs(1)).is_none());
+        assert!(AutoRate::new(8000, false).frame(5, 0, Duration::from_secs(1)).is_none());
         // a pong slower than the link's best by 200 ms congests the second on its own; a steady slow link doesn't
         let mut a = AutoRate::new(8000, true);
         a.rtt(Duration::from_millis(300));
