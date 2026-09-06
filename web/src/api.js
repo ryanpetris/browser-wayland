@@ -1,17 +1,17 @@
 // The token and the HTTP API. The token arrives once in the URL fragment (`#token=`, which never
-// reaches the server or a proxy log; `?token=` is accepted too), then lives in sessionStorage (this
+// reaches the server or a proxy log), then lives in sessionStorage (this
 // tab only, copied into popups this page opens) and leaves the address bar.
 export const TOKEN = (() => {
   const url = new URL(location);
-  const t = new URLSearchParams(url.hash.slice(1)).get('token') || url.searchParams.get('token');
-  if (!t) {
-    try { return sessionStorage.getItem('bw.token') ?? ''; } catch { return ''; }
+  const t = new URLSearchParams(url.hash.slice(1)).get('token');
+  if (t) {
+    try { sessionStorage.setItem('bw.token', t); } catch {}
+    url.hash = '';
   }
-  try { sessionStorage.setItem('bw.token', t); } catch {}
-  url.hash = '';
   url.searchParams.delete('token');
   try { history.replaceState(null, '', url); } catch {}
-  return t;
+  if (t) return t;
+  try { return sessionStorage.getItem('bw.token') ?? ''; } catch { return ''; }
 })();
 
 /// `?window=ID`: this tab shows one application window as its own stream.
@@ -25,7 +25,7 @@ export const PIP = (() => {
 
 /// fetch() with the bearer token.
 export const api = (path, init = {}) => fetch(path, { ...init, headers: { ...init.headers, Authorization: `Bearer ${TOKEN}` } });
-export const snapshotUrl = (id, sizing = {}) => `${id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`}?${new URLSearchParams(typeof sizing === 'number' ? { scale: sizing } : sizing)}`;
+export const snapshotUrl = (id, sizing = {}) => `${id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`}?${new URLSearchParams(sizing)}`;
 export const snapshot = async (id, sizing = {}, signal) => {
   const response = await api(snapshotUrl(id, sizing), { signal });
   if (!response.ok) throw new Error(await response.text());

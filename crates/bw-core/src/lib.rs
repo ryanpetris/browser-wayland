@@ -163,7 +163,6 @@ pub struct WindowInfo {
     /// last commit, ms on the compositor clock
     pub updated_ms: u64,
     /// Monotonic content invalidation revision; independent of timestamp resolution.
-    #[serde(default)] // Accept window lists without revision metadata.
     pub content_revision: u64,
 }
 

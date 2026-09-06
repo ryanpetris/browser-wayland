@@ -49,12 +49,7 @@ one-pixel minimum, can change the integer aspect ratio of very small images.
 Unknown fields, malformed values, repeated query fields, multiple sizing inputs, and out-of-range
 sizes return HTTP 400 or an MCP error. Authentication and PNG output are unchanged.
 
-The deprecated `scale` alias remains a multiplier: `scale=0.5` is equivalent to
-`percentage=50`, not `percentage=0.5`. It must be finite, greater than zero, and at
-most 2, and counts toward mutual exclusion. Invalid values are rejected rather
-than clamped. MCP's former automatic 1600-pixel fit is replaced by native sizing;
-callers wanting a bounded preview should explicitly request width or height.
-The browser snapshot helpers accept a sizing object, or a legacy numeric multiplier.
+The browser snapshot helpers accept a sizing object with the same fields.
 
 List thumbnails use the same endpoint and sizing implementation as full-size
 captures. Their activity and visibility scheduling is covered separately by #39.
@@ -144,9 +139,9 @@ not floating. `spawn` reuses the `--exec` spawner and environment.
 
 ## Snapshots
 
-`snapshot(id, scale)` renders one window's elements
+`snapshot(id, sizing)` renders one window's elements
 (`Window::render_elements`, popups included) into an offscreen `GlesTexture` sized to the geometry at
-`scale` × output scale, with the element origin at minus the geometry offset so the geometry lands at
+the resolved sizing ratio × output scale, with the element origin at minus the geometry offset so the geometry lands at
 (0, 0). A fresh `OutputDamageTracker::new(size, scale, Normal)` with age 0 redraws everything;
 `copy_framebuffer` plus `map_texture` read the pixels back. Facts that matter, verified against Smithay's
 GLES renderer:

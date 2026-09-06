@@ -311,7 +311,7 @@ the installed `.desktop` launchers, whose icons are at `/api/applications/{id}/i
 ends browser-wayland. Requests are fire-and-forget; unknown ids are ignored.
 Snapshots are lossless PNGs of a window's own buffers, so they include covered and minimized windows.
 Omitted sizing returns native dimensions. Supply one of `width`, `height`, or
-`percentage`; see [sizing limits and migration](docs/desktop-api.md#screenshot-sizing).
+`percentage`; see [sizing limits](docs/desktop-api.md#screenshot-sizing).
 
 With `--elements`, `/api/windows/{id}/elements` lists a window's UI elements (buttons, links, text fields,
 tabs, menu items, …) with role, name and rectangle relative to the window, so a script or an agent can

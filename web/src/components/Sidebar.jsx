@@ -101,7 +101,7 @@ function WindowRow({ viewer, w, acts, eligible, dpr }) {
       onClick={() => acts && viewer.activate(w.id)}
       className={`group relative flex cursor-pointer items-center gap-2.5 border-b border-zinc-800/70 px-2.5 py-2 transition-colors hover:bg-zinc-800/60 ${w.focused ? 'bg-indigo-500/10' : ''} ${w.minimized ? 'opacity-60' : ''}`}
     >
-      <Thumb viewer={viewer} id={w.id} revision={w.content_revision ?? w.updated_ms} width={w.w} height={w.h} eligible={eligible} dpr={dpr} />
+      <Thumb viewer={viewer} id={w.id} revision={w.content_revision} width={w.w} height={w.h} eligible={eligible} dpr={dpr} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="size-2 shrink-0 rounded-full" style={{ background: windowColor(w) }} />

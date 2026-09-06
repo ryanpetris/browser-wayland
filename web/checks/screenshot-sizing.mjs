@@ -61,8 +61,8 @@ try {
       const path = id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`;
       const target = windows.find(w => w.id === id);
       const native = target ? [target.w * stream.scale, target.h * stream.scale] : [stream.width, stream.height];
-      for (const sizing of [{}, { width: 64 }, { height: 40 }, { width: 320 }, { percentage: 50 }, { percentage: 0.001 }, { scale: 0.5 }]) {
-        const ratio = sizing.width ? sizing.width / native[0] : sizing.height ? sizing.height / native[1] : sizing.percentage ? sizing.percentage / 100 : sizing.scale ?? 1;
+      for (const sizing of [{}, { width: 64 }, { height: 40 }, { width: 320 }, { percentage: 50 }, { percentage: 0.001 }]) {
+        const ratio = sizing.width ? sizing.width / native[0] : sizing.height ? sizing.height / native[1] : sizing.percentage ? sizing.percentage / 100 : 1;
         const expected = native.map(n => Math.max(1, Math.round(n * ratio)));
         const response = await fetch(origin + path + '?' + new URLSearchParams(sizing), { headers });
         assert.equal(response.status, 200, await response.clone().text().then(t => t.slice(0, 100)));
@@ -73,17 +73,17 @@ try {
         assert.deepEqual(dimensions(Buffer.from(result.result.content[0].data, 'base64')), expected);
         console.log(JSON.stringify({ dpr, target: target?.app_id ?? 'desktop', sizing, dimensions: dimensions(png), pngBytes: png.length }));
       }
-      for (const query of ['width=1&height=2', 'width=1&width=2', 'percentage=50&scale=.5', 'width=0', 'height=-1', 'width=1.5', 'percentage=NaN', 'percentage=Infinity', 'percentage=201', 'width=16385', 'height=16384', 'percentage=bad', 'width=', 'percentage=5e-324', 'widht=64', 'width=10000']) {
+      for (const query of ['width=1&height=2', 'width=1&width=2', 'scale=.5', 'percentage=50&scale=.5', 'width=0', 'height=-1', 'width=1.5', 'percentage=NaN', 'percentage=Infinity', 'percentage=201', 'width=16385', 'height=16384', 'percentage=bad', 'width=', 'percentage=5e-324', 'widht=64', 'width=10000']) {
         const response = await fetch(origin + path + '?' + query, { headers });
         assert.equal(response.status, 400, query);
       }
-      for (const fields of ['"width":32,"width":64', '"percentage":null,"percentage":50', '"scale":0.5,"scale":1']) {
+      for (const fields of ['"width":32,"width":64', '"percentage":null,"percentage":50']) {
         const response = await fetch(origin + '/mcp', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': session }, body: `{"jsonrpc":"2.0","id":${++rpcId},"method":"tools/call","params":{"name":"${id == null ? 'screenshot' : 'snapshot'}","arguments":{${id == null ? '' : '"window":' + id + ','}${fields}}}}` });
         assert.equal(response.status, 400, fields);
         const repeatedEnvelope = await fetch(origin + '/mcp', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': session }, body: `{"jsonrpc":"2.0","id":${++rpcId},"method":"tools/call","method":"tools/call","params":{"name":"screenshot","arguments":{${fields}}}}` });
         assert.equal(repeatedEnvelope.status, 400, 'repeated envelope fields cannot bypass sizing validation');
       }
-      for (const sizing of [{ widht: 64 }, { width: 10000 }, { width: 0 }, { width: 1, percentage: 50 }, { height: -1 }, { percentage: 201 }, { scale: 3 }]) {
+      for (const sizing of [{ widht: 64 }, { width: 10000 }, { width: 0 }, { width: 1, percentage: 50 }, { height: -1 }, { percentage: 201 }, { scale: 0.5 }]) {
         const result = await rpc('tools/call', { name: id == null ? 'screenshot' : 'snapshot', arguments: { ...(id == null ? {} : { window: id }), ...sizing } });
         assert(result.error || result.result.isError, JSON.stringify(sizing));
         assert(!result.error?.status, 'invalid tool arguments return a JSON-RPC error');

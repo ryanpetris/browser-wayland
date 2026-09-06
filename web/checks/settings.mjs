@@ -37,7 +37,7 @@ try {
       return Promise.resolve({ status: request.status, json: () => window.holdElements ? new Promise(resolve => { request.finish = () => resolve(page); }) : Promise.resolve(page) });
     };
     window.windowsFrame = (id = 1, title = 'Focused application') => {
-      const windows = [{ id, title, app_id: 'overlay-test', focused: true, minimized: false, x: 20, y: 20, w: 400, h: 250, decoration: 0, geo_x: 0, geo_y: 0, updated_ms: 1, popups: [] }];
+      const windows = [{ id, title, app_id: 'overlay-test', focused: true, minimized: false, x: 20, y: 20, w: 400, h: 250, decoration: 0, geo_x: 0, geo_y: 0, updated_ms: 1, content_revision: 1, popups: [] }];
       const json = new TextEncoder().encode(JSON.stringify(windows)), packet = new Uint8Array(json.length + 1);
       packet[0] = 6; packet.set(json, 1); window.socket.onmessage({ data: packet.buffer });
     };
@@ -50,7 +50,14 @@ try {
     await page.waitForFunction(() => !!window.bw?.store);
     await page.evaluate(() => { bw.store.set({ status: 'connected', role: 'controller', stream: { codec: 'vp8', width: 900, height: 600, scale: 1 } }); windowsFrame(); });
   };
-  await page.goto(url); await ready();
+  await page.goto(url.replace('#token=test', '?token=test'));
+  await page.waitForFunction(() => bw.store.get().status === 'no-token');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('bw.token')), null);
+  assert.equal(new URL(page.url()).search, '');
+  assert.equal(await page.evaluate(() => sent.length), 0);
+  await page.goto(url.replace('/#', '/?token=ignored#')); await ready();
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('bw.token')), 'test');
+  assert.equal(new URL(page.url()).search + new URL(page.url()).hash, '');
   const trigger = page.getByRole('button', { name: 'Settings', exact: true });
   const panel = page.getByRole('dialog', { name: 'Settings', exact: true });
   const borders = panel.getByRole('checkbox', { name: 'Window borders', exact: true });

@@ -255,12 +255,12 @@ impl Mcp {
         }
     }
 
-    #[tool(description = "PNG of the whole output (panels included, pointer excluded), native size by default. Supply at most one of width, height, percentage, or deprecated scale.")]
+    #[tool(description = "PNG of the whole output (panels included, pointer excluded), native size by default. Supply at most one of width, height, or percentage.")]
     async fn screenshot(&self, Parameters(sizing): Parameters<ScreenshotArgs>) -> ToolResult {
         self.png(None, sizing).await
     }
 
-    #[tool(description = "PNG of one window's own buffers (works for covered and minimized windows), popups included. Native size by default; supply at most one of width, height, percentage, or deprecated scale.")]
+    #[tool(description = "PNG of one window's own buffers (works for covered and minimized windows), popups included. Native size by default; supply at most one of width, height, or percentage.")]
     async fn snapshot(&self, Parameters(SnapshotArgs { window, sizing }): Parameters<SnapshotArgs>) -> ToolResult {
         self.png(Some(window), sizing).await
     }

@@ -14,7 +14,7 @@ generated schemas.
 | Shape of the tools | One tool per thing an agent wants to say, sixteen in all, each a few lines calling an `App` method. Arguments use the API's own types where they exist (`Button`, the control ops) so the vocabulary is shared. |
 | Results | JSON as text content for lists and elements, `image/png` content for snapshots, `ok` for fire-and-forget actions, and `isError` results carrying the API's error text so the model can react. |
 | Documentation | The manual is the server's `instructions` at `initialize` and both skill files are MCP resources, so a client gets the documentation with the connection. |
-| Screenshots for models | `snapshot` and `screenshot` default to native dimensions. Supply one of `width`, `height`, or `percentage` for previews; [limits and legacy scale migration](desktop-api.md#screenshot-sizing). |
+| Screenshots for models | `snapshot` and `screenshot` default to native dimensions. Supply one of `width`, `height`, or `percentage` for previews; [sizing limits](desktop-api.md#screenshot-sizing). |
 
 ## Input
 

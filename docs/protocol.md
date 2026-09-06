@@ -9,7 +9,7 @@ actions, programs or clipboard writes.
 ## Authentication
 
 - **Viewer page** (`/`, `/app.js`, `/app.css`): public. The token arrives once in the
-  URL fragment (`/#token=…`, the URLs the server prints; `?token=` is accepted too), is moved into
+  URL fragment (`/#token=…`, the URLs the server prints), is moved into
   `sessionStorage` and stripped from the address bar; a page with no token shows a dialog asking for one.
 - **WebSocket** (`/ws`): the first message must be `AUTH` with a token. Until then the socket is
   nobody: nothing is processed. A wrong token, or five seconds of silence, closes it with code **4001**
@@ -143,7 +143,7 @@ curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows/3/elements  
 | `GET /api/windows` | JSON array of window objects (the list the viewer was last sent; `[]` before any). |
 | `GET /api/codecs` | JSON array of `{"codec", "hardware"}`: what this server encodes, in the order Auto prefers. |
 | `POST /api/control` | Body: a control message. `202 Accepted`; fire-and-forget. |
-| `GET /api/windows/{id}/snapshot.png` | PNG of that window. Optional `width`, `height`, or `percentage`, default native dimensions; [sizing limits and legacy scale](desktop-api.md#screenshot-sizing). `400` invalid sizing. `404` unknown id, `429` another snapshot is in flight, `500` the render failed (logged), `503` the compositor didn't answer within 2 s. |
+| `GET /api/windows/{id}/snapshot.png` | PNG of that window. Optional `width`, `height`, or `percentage`, default native dimensions; [sizing limits](desktop-api.md#screenshot-sizing). `400` invalid sizing. `404` unknown id, `429` another snapshot is in flight, `500` the render failed (logged), `503` the compositor didn't answer within 2 s. |
 | `GET /api/screenshot.png` | PNG of the whole output (layers included, cursor excluded); sizing as for a window; `400`, `429`, `500`, `503` as for a window. |
 | `POST /api/input` | Body: an input message (below). `202`, with `{"warning": …}` when a click aims past the desktop's edge at an X11 window; `404` unknown window; `503` compositor gone. |
 | `GET /api/files` | The transfer folder's files (`name`, `size`, `modified_ms`), newest first. |
