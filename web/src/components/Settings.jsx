@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react';
+import { useStore } from '../store.js';
 import { Popover } from './Launcher.jsx';
 
 export function Settings({ viewer, borders, onBorders, elements, onElements, onClose }) {
   const first = useRef(null);
+  const captureOnClick = useStore(viewer.store, s => s.captureOnClick);
   useEffect(() => {
     viewer.releaseInput();
     if (document.pointerLockElement) document.exitPointerLock();
@@ -35,6 +37,13 @@ export function Settings({ viewer, borders, onBorders, elements, onElements, onC
         <input type="checkbox" aria-label="UI elements" checked={elements} onChange={event => onElements(event.target.checked)} className={checkbox} aria-describedby="elements-description" />
         <span><span className="block text-sm text-zinc-100">UI elements</span>
           <span id="elements-description" className="mt-1 block text-xs text-zinc-400">Accessibility outlines for the focused window. Requires server accessibility support and an application tree; this switch cannot enable server support.</span>
+        </span>
+      </label>
+      <h2 className="mt-3 mb-2 px-2 text-sm font-semibold text-zinc-100">Mouse</h2>
+      <label className={label}>
+        <input type="checkbox" aria-label="Capture mouse on click" checked={captureOnClick} onChange={event => viewer.setCaptureOnClick(event.target.checked)} className={checkbox} aria-describedby="capture-description" />
+        <span><span className="block text-sm text-zinc-100">Capture mouse on click</span>
+          <span id="capture-description" className="mt-1 block text-xs text-zinc-400">Keep the mouse inside the desktop. Press Left Ctrl + Left Alt to release.</span>
         </span>
       </label>
     </Popover>

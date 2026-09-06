@@ -8,3 +8,5 @@
 html, body { height: 100%; margin: 0; background: #09090b; }
 #root { height: 100%; height: 100dvh; } /* a phone's URL bar must not cover the stage */
 canvas.stage { touch-action: none; transform-origin: 0 0; } /* the touch zoom scales from the corner */
+
+.viewer-stage:fullscreen .mouse-capture-hint { display: flex; }

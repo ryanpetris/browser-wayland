@@ -53,6 +53,7 @@ export function createViewer() {
     filesChange: null,
     filesOpen: 0,
     locked: false,
+    captureOnClick: pref.get('captureOnClick', false),
     elements: null, // the focused window's elements: {id, status, page}
     elementsOn: false,
     statsOn: false,
@@ -61,6 +62,7 @@ export function createViewer() {
   const state = () => store.get();
 
   let canvas = null, ctx = null, draw = null; // draw(frame) takes ownership of the frame and closes it
+  let capturedCursor = null, cursorImage = null, pointerPosition = { x: 0, y: 0 };
   let stage = { w: 0, h: 0 }; // CSS size of the area the canvas lives in
   let quitting = false; // this page asked the desktop to shut down: the socket's end is not a failure
   let playbackEnabled = !PIP;
@@ -175,6 +177,8 @@ export function createViewer() {
     ws.onmessage = e => { if (!disposed && ws === socket) onMessage(e.data); };
     ws.onclose = e => {
       if (disposed || ws !== socket) return;
+      wantLock = false;
+      if (document.pointerLockElement === canvas) document.exitPointerLock();
       closes.push(`${e.code}:${e.reason}`);
       cancelMixerVolumes();
       store.set({ mixer: { available: false, generation: '', nodes: [], routing: false, error: 'Desktop disconnected.' }, mixerLevels: {}, mixerError: '' });
@@ -314,6 +318,7 @@ export function createViewer() {
     if (WINDOW) k = Math.min(1, k);
     canvas.style.width = `${w * k}px`;
     canvas.style.height = `${h * k}px`;
+    drawCapturedCursor();
   }
 
   // A decode error closes the decoder for good, so recovery means a fresh one plus a keyframe.
@@ -352,12 +357,14 @@ export function createViewer() {
       case CURSOR: {
         // The compositor doesn't draw the pointer; the browser does, with zero latency.
         const w = dv.getUint16(1, true), h = dv.getUint16(3, true);
-        if (!w || !h) { canvas.style.cursor = 'none'; break; }
+        if (!w || !h) { canvas.style.cursor = 'none'; cursorImage = null; drawCapturedCursor(); break; }
         const hx = dv.getInt16(5, true), hy = dv.getInt16(7, true), lw = dv.getUint16(9, true) || w, lh = dv.getUint16(11, true) || h;
         const c = document.createElement('canvas');
         c.width = w; c.height = h;
         c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(buf, 13, w * h * 4), w, h), 0, 0);
         // A HiDPI cursor bitmap is shown at lw×lh logical px; image-set() tells the browser its density.
+        cursorImage = { url: c.toDataURL(), hx, hy, width: lw, height: lh };
+        drawCapturedCursor();
         const density = w / lw;
         canvas.style.cursor = density !== 1 ? `image-set(url("${c.toDataURL()}") ${density}x) ${hx} ${hy}, default` : `url(${c.toDataURL()}) ${hx} ${hy}, default`;
         if (density !== 1 && !canvas.style.cursor.includes('image-set')) { // no image-set() in cursor: resize the bitmap instead
@@ -372,7 +379,8 @@ export function createViewer() {
         // A client locked the pointer (a game, say): lock the browser's too and send raw deltas.
         wantLock = dv.getUint8(1) !== 0;
         if (wantLock && driving()) requestLock();
-        else if (document.pointerLockElement) document.exitPointerLock();
+        else if (document.pointerLockElement && (WINDOW || !state().captureOnClick)) document.exitPointerLock();
+        drawCapturedCursor();
         break;
       case AUDIO:
         onAudio(buf);
@@ -530,20 +538,48 @@ export function createViewer() {
 
   // --- pointer lock -----------------------------------------------------------------
   // Needs a user gesture: called on the lock event (usually right after the click that caused it) and retried on clicks.
+  // Pointer lock hides the browser cursor. For edge scrolling, draw the remote cursor locally
+  // and send its clamped absolute position; application-requested locks still get raw deltas.
+  function drawCapturedCursor() {
+    if (!capturedCursor) return;
+    capturedCursor.hidden = !(document.pointerLockElement === canvas && !wantLock && cursorImage);
+    if (capturedCursor.hidden || !stream) return;
+    const r = canvas.getBoundingClientRect(), parent = canvas.parentElement.getBoundingClientRect();
+    const w = stream.width / stream.scale, h = stream.height / stream.scale;
+    pointerPosition.x = Math.max(0, Math.min(w - 1, pointerPosition.x));
+    pointerPosition.y = Math.max(0, Math.min(h - 1, pointerPosition.y));
+    if (capturedCursor.src !== cursorImage.url) capturedCursor.src = cursorImage.url;
+    Object.assign(capturedCursor.style, {
+      left: `${r.left - parent.left + pointerPosition.x / w * r.width - cursorImage.hx}px`,
+      top: `${r.top - parent.top + pointerPosition.y / h * r.height - cursorImage.hy}px`,
+      width: `${cursorImage.width}px`, height: `${cursorImage.height}px`,
+    });
+  }
   function requestLock() {
     if (document.pointerLockElement) return;
     lockRequests++;
     canvas.requestPointerLock({ unadjustedMovement: true })?.catch?.(e => {
       lockError = String(e);
+      if (e.name !== 'NotSupportedError') return;
       canvas.requestPointerLock()?.catch?.(e2 => { lockError += ' / ' + e2; });
     });
   }
-  const lockFailure = 'Pointer capture failed. Return to the main viewer to try again.';
-  document.addEventListener('pointerlockerror', () => { if (PIP) notice(lockFailure); });
+  const lockFailure = PIP ? 'Pointer capture failed. Return to the main viewer to try again.' : 'Mouse capture failed. Click the desktop to try again.';
+  document.addEventListener('pointerlockerror', () => notice(lockFailure));
   document.addEventListener('pointerlockchange', () => {
+    if (document.pointerLockElement === canvas && (disposed || state().status !== 'connected' || !driving() || (!wantLock && (WINDOW || !state().captureOnClick)))) {
+      document.exitPointerLock();
+      return;
+    }
     if (document.pointerLockElement && state().notice?.text === lockFailure) store.set({ notice: null });
-    store.set({ locked: !!document.pointerLockElement });
-    if (!document.pointerLockElement && wantLock) { wantLock = false; send(POINTER_LOCK_LOST, 0); } // Escape etc.
+    const released = state().locked && document.pointerLockElement !== canvas;
+    store.set({ locked: document.pointerLockElement === canvas });
+    drawCapturedCursor();
+    if (!document.pointerLockElement && wantLock) { wantLock = false; send(POINTER_LOCK_LOST, 0); } // browser release gesture
+    if (released) {
+      releaseKeys.clear();
+      releaseInput();
+    }
   });
 
   // --- audio ---------------------------------------------------------------------------
@@ -704,6 +740,8 @@ export function createViewer() {
     if (disposed) return;
     viewer.pip?.dispose();
     disposed = true;
+    if (document.pointerLockElement === canvas) document.exitPointerLock();
+    capturedCursor?.remove();
     uploadAbort?.abort();
     micStop(); camStop(); stopPlayback(); cancelMixerVolumes();
     clearTimeout(reconnectTimer); clearInterval(statsTimer);
@@ -749,10 +787,23 @@ export function createViewer() {
     const w = stream ? stream.width / stream.scale : r.width, h = stream ? stream.height / stream.scale : r.height;
     return { x: (e.clientX - r.left) / r.width * w, y: (e.clientY - r.top) / r.height * h };
   }
+  const mouseEnabled = e => driving() && (e?.pointerType === 'touch' || WINDOW || !state().captureOnClick || document.pointerLockElement === canvas);
   function onPointerMove(e) {
-    if (!driving()) return;
-    if (document.pointerLockElement) send(MOTION_REL, 8, dv => { dv.setFloat32(1, e.movementX, true); dv.setFloat32(5, e.movementY, true); });
-    else { const p = toDesktop(e); send(MOTION_ABS, 8, dv => { dv.setFloat32(1, p.x, true); dv.setFloat32(5, p.y, true); }); }
+    if (!mouseEnabled(e)) return;
+    if (document.pointerLockElement === canvas && wantLock) {
+      send(MOTION_REL, 8, dv => { dv.setFloat32(1, e.movementX, true); dv.setFloat32(5, e.movementY, true); });
+    } else {
+      if (document.pointerLockElement === canvas && stream) {
+        const r = canvas.getBoundingClientRect();
+        const w = stream.width / stream.scale, h = stream.height / stream.scale;
+        pointerPosition = {
+          x: Math.max(0, Math.min(w - 1, pointerPosition.x + e.movementX * w / r.width)),
+          y: Math.max(0, Math.min(h - 1, pointerPosition.y + e.movementY * h / r.height)),
+        };
+      } else pointerPosition = toDesktop(e);
+      drawCapturedCursor();
+      send(MOTION_ABS, 8, dv => { dv.setFloat32(1, pointerPosition.x, true); dv.setFloat32(5, pointerPosition.y, true); });
+    }
   }
   const sendButton = (btn, pressed) => send(BUTTON, 3, dv => { dv.setUint16(1, btn, true); dv.setUint8(3, pressed ? 1 : 0); });
   // the gesture counts for every session: audio and the browser clipboard need one; the canvas takes the
@@ -765,11 +816,22 @@ export function createViewer() {
     resumeAudio();
     flushClipboard();
   }
+  let captureClick = null;
   function onPointerButton(e) {
     const btn = BTN[e.button];
     if (btn === undefined) return;
-    if (e.type === 'pointerdown') { gesture(e); if (wantLock && driving()) requestLock(); }
-    if (!driving()) return;
+    if (e.type === 'pointerup' && captureClick === e.button) { captureClick = null; return; }
+    if (e.type === 'pointerdown') {
+      gesture(e);
+      if (!WINDOW && state().captureOnClick && driving() && document.pointerLockElement !== canvas) {
+        pointerPosition = toDesktop(e);
+        captureClick = e.button;
+        requestLock();
+        return;
+      }
+      if (wantLock && driving()) requestLock();
+    }
+    if (!mouseEnabled(e)) return;
     onPointerMove(e);
     sendButton(btn, e.type === 'pointerdown');
   }
@@ -866,7 +928,7 @@ export function createViewer() {
   }
   function onWheel(e) {
     e.preventDefault();
-    if (!driving()) return;
+    if (!mouseEnabled(e)) return;
     send(AXIS, 9, dv => { dv.setUint8(1, e.deltaMode); dv.setFloat32(2, e.deltaX, true); dv.setFloat32(6, e.deltaY, true); });
   }
 
@@ -1008,8 +1070,21 @@ export function createViewer() {
 
   // Keys go to the desktop from anywhere in the page except its own controls (a focused button keeps Enter and Space).
   const isFormField = t => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLButtonElement || t instanceof HTMLSelectElement;
+  const releaseKeys = new Set();
   function onKey(e) {
     if (isFormField(e.target) || !driving()) return;
+    if (e.type === 'keyup') releaseKeys.delete(e.code);
+    else if (e.code === 'ControlLeft' || e.code === 'AltLeft') releaseKeys.add(e.code);
+    if (e.type === 'keydown' && !e.repeat && releaseKeys.has('ControlLeft') && releaseKeys.has('AltLeft')
+        && !e.shiftKey && !e.metaKey && (document.pointerLockElement === canvas || document.fullscreenElement)) {
+      e.preventDefault();
+      releaseKeys.clear();
+      releaseInput(); // release the first modifier and any other held input on the desktop
+      if (wantLock) { wantLock = false; send(POINTER_LOCK_LOST, 0); }
+      navigator.keyboard?.unlock?.();
+      if (document.pointerLockElement === canvas) document.exitPointerLock();
+      return;
+    }
     const code = KEYCODES[e.code];
     if (!code || e.repeat) return; // clients repeat keys themselves (wl_keyboard.repeat_info)
     if (e.type === 'keydown' && isPasteKey(e)) {
@@ -1031,7 +1106,8 @@ export function createViewer() {
   window.addEventListener('keyup', onKey);
   // a deferred paste chord must not fire after its modifier was released; no key is held during a native
   // drag, and the release would let go of the drag while its files are still uploading
-  const blur = () => { pendingPaste = null; if (!dragging) send(BLUR, 0); };
+  const releaseInput = () => { pendingPaste = null; clearTimeout(pasteTimer); send(BLUR, 0); };
+  const blur = () => { releaseKeys.clear(); pendingPaste = null; if (!dragging) releaseInput(); };
   window.addEventListener('blur', blur);
   document.addEventListener('visibilitychange', () => { if (document.hidden) blur(); });
   if (WINDOW) window.addEventListener('focus', () => sendControl({ id: +WINDOW, op: 'activate' })); // keyboard focus follows the tab
@@ -1075,6 +1151,12 @@ export function createViewer() {
     if (attached) return;
     attached = true;
     canvas = el;
+    capturedCursor = document.createElement('img');
+    capturedCursor.alt = '';
+    capturedCursor.hidden = true;
+    capturedCursor.className = 'pointer-events-none absolute z-10 max-w-none';
+    capturedCursor.dataset.capturedCursor = '';
+    canvas.parentElement.append(capturedCursor);
     const byType = (mouse, touch) => e => (e.pointerType === 'touch' ? touch : mouse)(e);
     canvas.addEventListener('pointermove', byType(onPointerMove, onTouch));
     canvas.addEventListener('pointerdown', byType(onPointerButton, onTouch));
@@ -1108,9 +1190,15 @@ export function createViewer() {
     spawn: cmd => sendControl({ op: 'spawn', cmd }),
     launch: app => control({ op: 'launch', app }),
     quit: () => control({ op: 'quit' }).then(r => { quitting = r.ok; }), // only an accepted quit explains the socket's end
+    setCaptureOnClick(on) {
+      pref.set('captureOnClick', on);
+      store.set({ captureOnClick: on });
+      if (on && !WINDOW && document.pointerLockElement !== canvas) releaseInput();
+      if (!on && !wantLock && document.pointerLockElement === canvas) document.exitPointerLock();
+    },
     setElementsOn(on) { store.set({ elementsOn: on }); fetchElements(); },
     setStatsOn(on) { store.set({ statsOn: on }); inflight.clear(); stage_.decode.length = stage_.paint.length = stage_.interval.length = 0; lastPaint = 0; },
-    releaseInput: () => send(BLUR, 0), // a key held on the canvas must not stay held while a text field has the keyboard
+    releaseInput, // a key held on the canvas must not stay held while a text field has the keyboard
     // the on-screen keyboard: text through the desktop's keyboard layout, and key chords (`ctrl+c`, `Left`)
     type: text => sendText(INPUT, JSON.stringify({ type: 'text', text })),
     key: keys => sendText(INPUT, JSON.stringify({ type: 'key', keys })),

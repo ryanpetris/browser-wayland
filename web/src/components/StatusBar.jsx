@@ -46,7 +46,6 @@ function Choice({ viewer }) {
 
 export function StatusBar({ viewer, audioPanel, onAudioPanel, mixerPanel, onMixer }) {
   const s = useStore(viewer.store, st => st.stats);
-  const locked = useStore(viewer.store, st => st.locked);
   const clipboardText = useStore(viewer.store, st => st.clipboardText);
   const clipboardFiles = useStore(viewer.store, st => st.clipboardFiles);
   const renderer = useStore(viewer.store, st => st.renderer);
@@ -68,7 +67,8 @@ export function StatusBar({ viewer, audioPanel, onAudioPanel, mixerPanel, onMixe
   const bad = s.lost + s.dropped + s.decodeErrors;
   // Fixed readout widths keep live statistics from resizing the stage.
   return (
-    <footer className="flex min-h-7 shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-zinc-800 bg-zinc-900 px-3 py-0.5 font-mono text-[11px] text-zinc-500">
+    <footer className="relative flex min-h-7 shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-zinc-800 bg-zinc-900 px-3 py-0.5 font-mono text-[11px] text-zinc-500">
+      <MouseCaptureHint viewer={viewer} className="absolute inset-0 z-20 flex" />
       <span className="flex w-[10ch] shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap" title={`${s.fps} fps`}><Activity className="size-3" /> {s.fps} fps</span>
       <span className="w-[17ch] shrink-0 truncate" title={`Measured video throughput: ${s.mbps.toFixed(1)} Mbit/s`}>{s.mbps.toFixed(1)} Mbit/s</span>
       <span className="hidden w-[10ch] shrink-0 truncate sm:inline" title={`Input to the next painted frame: ${s.latencyMs.toFixed(0)} ms`}>{s.latencyMs.toFixed(0)} ms</span>
@@ -83,7 +83,6 @@ export function StatusBar({ viewer, audioPanel, onAudioPanel, mixerPanel, onMixe
             <Download className="size-3 shrink-0" /><span className="truncate">{clipboardText} copied</span>
           </button>
         ) : clipboardText && <span className="flex max-w-48 items-center gap-1 truncate" title={`Clipboard: ${clipboardText}`}><ClipboardCheck className="size-3 shrink-0" /><span className="truncate">{clipboardText}</span></span>}
-        {locked && <span className="flex items-center gap-1 text-indigo-300"><Lock className="size-3" /> pointer locked</span>}
         {onMixer && <button id="session-mixer-toggle" type="button" aria-label="Session audio mixer" aria-expanded={mixerPanel} onClick={onMixer} className="text-indigo-300 hover:text-indigo-200">Mixer</button>}
         {onAudioPanel && <button type="button" aria-label="Audio visualiser" aria-expanded={audioPanel} onClick={onAudioPanel} className="text-indigo-300 hover:text-indigo-200">Visualiser</button>}
         <span className="flex items-center gap-1" title={s.audio ? `audio ${s.audio.state}` : 'no audio yet'}>
@@ -104,4 +103,12 @@ export function StatusBar({ viewer, audioPanel, onAudioPanel, mixerPanel, onMixe
       </span>
     </footer>
   );
+}
+
+export function MouseCaptureHint({ viewer, className = '' }) {
+  const locked = useStore(viewer.store, s => s.locked);
+  if (!locked) return null;
+  return <div role="status" className={`mouse-capture-hint pointer-events-none items-center justify-center gap-2 bg-amber-300 px-3 py-1 font-sans text-sm font-semibold text-zinc-950 ${className}`}>
+    <Lock className="size-4 shrink-0" /> Press Left Ctrl + Left Alt to release mouse
+  </div>;
 }

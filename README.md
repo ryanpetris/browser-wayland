@@ -149,6 +149,13 @@ in the Dockerfile's header.
 The page says when the server closed its socket with a token dialog ("wrong token" or "token
 rotated"; the tokens change with the data directory, e.g. a fresh container without a volume).
 
+In Settings, enable **Capture mouse on click** for games that use edge scrolling. The first click
+captures the mouse; movement, clicks, and the mouse wheel reach the desktop only while captured.
+Press **Left Ctrl + Left Alt** to release capture. The remote cursor stays where you left it.
+A highlighted capture hint appears in the status bar, or over the picture in fullscreen. The setting
+is remembered in your browser and starts off. Games that request pointer lock still capture automatically.
+Browsers may also release capture through their own Escape gesture.
+
 ## Transport
 
 The video travels on the WebSocket. A viewer can move it to a WebRTC data channel (UDP, ordered and

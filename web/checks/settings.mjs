@@ -55,6 +55,7 @@ try {
   const panel = page.getByRole('dialog', { name: 'Settings', exact: true });
   const borders = panel.getByRole('checkbox', { name: 'Window borders', exact: true });
   const elements = panel.getByRole('checkbox', { name: 'UI elements', exact: true });
+  const capture = panel.getByRole('checkbox', { name: 'Capture mouse on click', exact: true });
   assert.equal(await page.getByRole('button', { name: 'Window borders', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: 'UI elements of the focused window', exact: true }).count(), 0);
   await trigger.click();
@@ -71,12 +72,15 @@ try {
   assert.equal(await page.evaluate(() => localStorage.getItem('bw.elements')), '1');
   assert.equal(await page.evaluate(() => sent.filter(p => [0x83, 0x84, 0x85, 0x86, 0x87, 0x91, 0x92].includes(p[0])).length), 0);
   await elements.press('Tab');
+  assert(await capture.evaluate(el => el === document.activeElement));
+  assert.equal(await capture.isChecked(), false);
+  await capture.press('Tab');
   assert(await borders.evaluate(el => el === document.activeElement));
   await borders.press('Shift+Tab');
-  assert(await elements.evaluate(el => el === document.activeElement));
+  assert(await capture.evaluate(el => el === document.activeElement));
   await panel.getByRole('heading', { name: 'Overlays' }).click();
   await page.keyboard.press('Shift+Tab');
-  assert(await elements.evaluate(el => el === document.activeElement));
+  assert(await capture.evaluate(el => el === document.activeElement));
   await panel.getByRole('heading', { name: 'Overlays' }).click();
   await page.keyboard.press('Tab');
   assert(await borders.evaluate(el => el === document.activeElement));
