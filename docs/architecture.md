@@ -178,14 +178,18 @@ H.264, VP9, HEVC, AV1). `--codec` wins when both sides can, else the first the b
 hardware, else any it decodes; a browser with none in common is closed. The AV1 and VP9 codec strings carry a level chosen from the picture size, not read
 from the stream. A resize, size or codec change tears the pipeline down and rebuilds it with a new
 stream id; the page resets its decoder when it sees a new id. Each session also has a quality: a preset's
-bitrate and frame cap, or Auto, which starts at `--bitrate` and, per second of frames, drops the bitrate
-by a quarter when more than a third of the frames found the socket behind (a backlog in the encoder's
-channel, or a send over two frame times) or a ping's answer came back 200 ms later than the quickest
-(it queues behind the video the kernel still holds), capping the rate at 30 fps under 3 Mbit/s, and
-climbs a tenth after five clean seconds with frames. The refine frame is encoded at four times the
-bitrate only by the CPU encoders; the VA encoders open a new GOP on any rate change. The bitrate changes on the running encoder where the element allows (the VA
-encoders, x264, x265, libvpx); the frame cap holds frames in the sink (`Submit::Held`), which the
-compositor treats like a failed frame. 150 ms after the picture settles the compositor renders it once
+bitrate (Auto's is `--bitrate`), the ceiling a rate controller works under. Per second of frames it halves
+the bitrate when more than a third of the frames found the transport behind (a backlog in the encoder's
+channel or the data channel's queue, a channel drop, or a send over two frame times), when a ping's
+answer came back 200 ms later than the quickest (it queues behind the video the kernel still holds), or
+when the page's once-a-second report (`0x96`) says frames arrived a hundred milliseconds later than at
+their best over ten seconds or its decoder dropped some; the new rate then holds two seconds. Five clean
+seconds with frames raise it a quarter, up to the ceiling; under 3 Mbit/s the rate is capped at 30 fps.
+The steps are few and large because the VA encoders open a new GOP on any rate change, so each is a
+keyframe, and keyframes are otherwise only on request: the encoders' periodic keyframe is pushed out
+of reach. The refine frame is encoded at four times the bitrate only by the CPU encoders. The bitrate
+changes on the running encoder where the element allows (the VA encoders, x264, x265, libvpx); the
+frame cap holds frames in the sink (`Submit::Held`), which the compositor treats like a failed frame. 150 ms after the picture settles the compositor renders it once
 more as a refine frame, which the sink encodes at four times the bitrate before restoring it. Pipeline errors reach the server through a bus
 sync handler (freed with the pipeline; a watching thread would outlive it).
 

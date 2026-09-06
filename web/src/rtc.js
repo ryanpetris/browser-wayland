@@ -39,6 +39,7 @@ export function openRtc({ iceServers, g, signal, onMessage, onOpen, onClose }) {
   return {
     answer: sdp => pc.setRemoteDescription({ type: 'answer', sdp }).catch(e => console.warn('WebRTC answer:', e)),
     close: () => { closed = true; pc.close(); },
+    incomplete: () => incomplete,
     // the numbers the Statistics tab shows: the path's round trip, what the channel carried, frames lost to it
     stats: async () => {
       const out = { incomplete, rttMs: null, bytes: 0, messages: 0 };

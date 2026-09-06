@@ -6,9 +6,11 @@ import { codecName } from './ui.jsx';
 import { downloadClipboardFile } from '../api.js';
 
 const PRESET_LABEL = { low: 'Low (2 Mbit/s, 30 fps)', medium: 'Medium (5 Mbit/s)', high: 'High (12 Mbit/s)', max: 'Max (25 Mbit/s)' };
+const PRESET_KBPS = { low: 2000, medium: 5000, high: 12000, max: 25000 };
 const mbit = kbps => `${(kbps / 1000).toFixed(kbps % 1000 ? 1 : 0)} Mbit/s`;
 
 // "Auto (HEVC)" and "Auto (5 Mbit/s)" show what Auto picked; the other entries are what both sides can do.
+// Every quality is a ceiling, and the picked one says what the link left under it.
 function Choice({ viewer }) {
   const st = useStore(viewer.store, s => s.streamState);
   const choice = useStore(viewer.store, s => s.choice);
@@ -29,8 +31,8 @@ function Choice({ viewer }) {
         {both.map(c => <option key={c.codec} value={c.codec}>{codecName(c.codec)}{c.hardware ? '' : ' (software)'}</option>)}
       </select>
       <select value={choice.quality} onChange={e => viewer.setChoice({ quality: e.target.value })} className={cls} title="Quality">
-        <option value="auto">Auto{st?.auto_quality ? ` (${mbit(st.bitrate_kbps)}${st.max_fps ? `, ${st.max_fps} fps` : ''})` : ''}</option>
-        {PRESETS.filter(p => p !== 'auto').map(p => <option key={p} value={p}>{PRESET_LABEL[p]}</option>)}
+        <option value="auto">Auto{st ? ` (${mbit(st.bitrate_kbps)}${st.max_fps ? `, ${st.max_fps} fps` : ''})` : ''}</option>
+        {PRESETS.filter(p => p !== 'auto').map(p => <option key={p} value={p}>{PRESET_LABEL[p]}{p === choice.quality && st && st.bitrate_kbps < PRESET_KBPS[p] ? `, now ${mbit(st.bitrate_kbps)}` : ''}</option>)}
       </select>
       {rtcAvailable && (
         <select value={transport} onChange={e => viewer.setTransport(e.target.value)} className={cls} title="Transport: how the video travels (the socket unless the data channel is picked and opens)">

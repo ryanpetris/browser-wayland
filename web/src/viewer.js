@@ -7,7 +7,7 @@ import { createStore } from './store.js';
 import { startMic, stopMic } from './mic.js';
 import { startCam, stopCam } from './cam.js';
 import { openRtc } from './rtc.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, BTN } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -28,7 +28,7 @@ export function createViewer() {
     notice: '', // what the server just told us about our last action, shown for a few seconds
     notifications: [], // open desktop notifications, oldest first
     upload: null, // { name, index, count } while files dropped on the page go up
-    streamState: null, // { codec, hardware, auto_codec, bitrate_kbps, max_fps, auto_quality } from the server
+    streamState: null, // { codec, auto_codec, bitrate_kbps, max_fps } from the server
     choice: { codec: pref.getStr('codec', 'auto'), quality: pref.getStr('quality', 'auto') }, // this viewer's picks
     touchMouse: pref.get('touchmouse', false), // fingers as a mouse with gestures, instead of real touch points
     mic: false, // the local microphone is going to the desktop
@@ -64,6 +64,7 @@ export function createViewer() {
   const stage_ = { decode: [], paint: [], interval: [] };
   const inflight = new Map(); // pts -> {at, output}
   let lastPaint = 0, sinceKey = 0, audioUnderruns = 0;
+  let videoLost = 0, lastLost = 0, lossy = [], lastDropped = 0, delaySec = Infinity, delayBase = []; // the second's report to the server, and the channel's record
   const pct = (a, p) => (a.length ? a.slice().sort((x, y) => x - y)[Math.max(0, Math.ceil(a.length * p) - 1)] : null);
 
   // --- rendering ----------------------------------------------------------------
@@ -316,6 +317,7 @@ export function createViewer() {
         const v = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
         if (v.ice_servers) { iceServers = v.ice_servers; store.set({ rtcAvailable: true }); maybeRtc(); }
         if (v.answer && v.g === rtcGen) rtc?.answer(v.answer); // an answer to an attempt since given up is no use
+        if (v.close && rtc) { closeRtc(); store.set({ transport: 'websocket' }); notice('The data channel stalled; the video is back on the socket.'); }
         break;
       }
       case STREAM_STATE:
@@ -328,9 +330,7 @@ export function createViewer() {
         onClipboard(new TextDecoder().decode(new Uint8Array(buf, 1)));
         break;
       case NOTICE:
-        store.set({ notice: new TextDecoder().decode(new Uint8Array(buf, 1)) });
-        clearTimeout(noticeTimer);
-        noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
+        notice(new TextDecoder().decode(new Uint8Array(buf, 1)));
         break;
       case ROLE: {
         const role = ROLES[dv.getUint8(1)] ?? 'viewer';
@@ -354,7 +354,7 @@ export function createViewer() {
         // A gap in seq means the server dropped frames for us; a delta after a gap can't be decoded.
         const gap = videoSeq >= 0 ? (seq - videoSeq - 1) & 0xffff : 0;
         videoSeq = seq;
-        if (!awaitingKey) lost += gap; // while we wait for a keyframe we asked for, the skipped deltas are expected
+        if (!awaitingKey) { lost += gap; videoLost += gap; } // while we wait for a keyframe we asked for, the skipped deltas are expected
         if (!key && (gap || awaitingKey || decoder.decodeQueueSize > 4)) {
           dropped++;
           if (!awaitingKey) { awaitingKey = true; send(REQUEST_KEYFRAME, 0); }
@@ -362,6 +362,7 @@ export function createViewer() {
         }
         try {
           const pts = Number(dv.getBigUint64(4, true));
+          delaySec = Math.min(delaySec, performance.now() - pts / 1000); // how late the frame is against its stamp; the second's least is what the link added
           if (state().statsOn) inflight.set(pts, { at: performance.now(), output: 0 });
           decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: pts, data: new Uint8Array(buf, 12), transfer: [buf] }));
           awaitingKey = false;
@@ -386,7 +387,34 @@ export function createViewer() {
     stage_.decode.length = stage_.paint.length = stage_.interval.length = 0;
     store.set({ stats: { fps: windowFrames, mbps: windowBytes * 8 / 1e6, latencyMs, lost, dropped, decodeErrors, keyframes, sinceKey, frames, received, connects, closes, audio: audioStats(), queue: decoder?.decodeQueueSize ?? 0, timings, lockRequests, lockError, underruns: audioUnderruns, rtc: rtcStats } });
     windowFrames = 0; windowBytes = 0;
+    // the second's report to the server's rate controller: how much later frames arrived than at their
+    // best over the last ten seconds (the link queueing, which comes before it loses) and what the decoder dropped
+    if (delaySec < Infinity) {
+      delayBase.push(delaySec);
+      if (delayBase.length > 10) delayBase.shift();
+      const late = Math.min(65535, Math.round(delaySec - Math.min(...delayBase)));
+      send(REPORT, 4, dv => { dv.setUint16(1, late, true); dv.setUint16(3, Math.min(65535, dropped - lastDropped), true); });
+    }
+    lastDropped = dropped; delaySec = Infinity;
+    // a channel that loses frames in three of five seconds gives the video back to the socket
+    const lostNow = videoLost + (rtc?.incomplete() ?? 0);
+    lossy.push(s.videoVia === 'webrtc' && lostNow > lastLost);
+    if (lossy.length > 5) lossy.shift();
+    lastLost = lostNow;
+    if (lossy.filter(Boolean).length >= 3) {
+      lossy = [];
+      closeRtc();
+      store.set({ transport: 'websocket' });
+      notice('The data channel kept losing frames; the video is back on the socket.');
+    }
   }, 1000);
+
+  /// A line over the stage for a few seconds.
+  function notice(text) {
+    store.set({ notice: text });
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
+  }
 
   // --- pointer lock -----------------------------------------------------------------
   // Needs a user gesture: called on the lock event (usually right after the click that caused it) and retried on clicks.
@@ -478,7 +506,7 @@ export function createViewer() {
       },
       onMessage,
       onOpen: () => { if (rtc === mine) { clearTimeout(rtcTimer); store.set({ videoVia: 'webrtc' }); } },
-      onClose: () => { if (rtc === mine) { closeRtc(); } },
+      onClose: () => { if (rtc === mine) { closeRtc(); store.set({ transport: 'websocket' }); notice('The data channel closed; the video is back on the socket.'); } },
     }));
   }
   // back to the socket: the server is told (the channel may still look open to it); a frame lost on the

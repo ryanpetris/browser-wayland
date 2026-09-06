@@ -46,9 +46,10 @@ connect with the control token drives the pointer and keyboard; anyone else with
 "Take control" button, and the desktop then takes their window's size. Whoever opens the view-only URL
 can watch, read the window list and elements, and take snapshots, but not act.
 Each viewer picks its own codec and quality in the status bar: the codec list is what both the server
-and that browser can do ("Auto (HEVC)" shows the pick), and the quality is Low (2 Mbit/s, 30 fps), Medium,
-High, Max, or Auto, which starts at `--bitrate` and backs off while the connection can't keep up, then
-climbs back; `GET /api/codecs` lists the server's side. After the picture stops changing one more frame
+and that browser can do ("Auto (HEVC)" shows the pick), and the quality is a ceiling: Low (2 Mbit/s,
+30 fps), Medium, High, Max, or Auto (`--bitrate`). The stream starts there, and while the connection or
+the browser can't keep up the server halves the bitrate and holds it, then climbs back a quarter at a
+time ("High (12 Mbit/s), now 6 Mbit/s"); `GET /api/codecs` lists the server's side. After the picture stops changing one more frame
 goes out, at four times the bitrate with the software encoders, so text left rough by motion sharpens.
 Frames are painted on a 2D canvas. `?renderer=webgpu` in the URL uses a WebGPU external-texture path
 instead; it is opt-in because Chromium on Linux occasionally presents a blank frame that way, which looks like flicker.
@@ -129,22 +130,26 @@ rotated"; the tokens change with the data directory, e.g. a fresh container with
 
 The video travels on the WebSocket. A viewer can move it to a WebRTC data channel (UDP, unordered but
 reliable) with the Transport select in the status bar: the page offers, the server answers with its own
-addresses, and the frames move to the channel once it opens; input, audio and events stay on the
-WebSocket either way. Measured against each other on a container link with an unloaded 4 Mbit/s desktop
-stream, the two are even on a clean link and the channel is behind under packet loss, which is why the
-socket is what carries the video unless the channel is picked:
+addresses, and the frames move to the channel once it opens; input, audio, events and the signalling
+stay on the WebSocket either way, so the socket is needed whatever carries the video. Measured against
+each other on a container link with a 4 Mbit/s desktop stream under an 8 Mbit/s Auto ceiling, the two
+are even on a clean link and the channel is behind under packet loss, which is why the socket carries
+the video unless the channel is picked:
 
 | link | WebSocket | data channel |
 | --- | --- | --- |
-| clean, or 20 ms delay | 56 fps, 22 ms longest gap | 56 fps, 23 ms |
-| 0.5 % loss | 56 fps, no frame lost | 54 fps, 15 frames lost |
-| 2 % loss, 20 ms delay | 56 fps, 72 ms longest gap | 19–24 fps, gaps over a second |
-| 1 % loss, 100 ms delay | 27 fps, 199 ms longest gap | 8 fps, gaps over a second |
+| clean, or 20 ms delay | 56 fps, 23–37 ms longest gap | 56 fps, 23 ms |
+| 0.5 % loss | 56 fps, 37 ms, settles at 6 Mbit/s | 39 fps, 109 ms, falls to 1 Mbit/s |
+| 2 % loss, 20 ms delay | 56 fps, 60 ms, 5 Mbit/s | 29 fps, then given up: the socket takes over |
+| 1 % loss, 100 ms delay | 20–38 fps, 244 ms, 1 Mbit/s | 9–22 fps, gaps up to seconds, then given up |
 
-TCP retransmits a lost packet and the picture barely notices; the channel loses whole frames, each of
-which costs a keyframe, and the keyframes are what the link then spends itself on. Where the channel
-does earn its place is a network the WebSocket can't cross: with the server behind NAT and a TURN
-server given to the browsers, the video flows through the relay at full rate.
+TCP retransmits a lost packet and the picture barely notices; the channel's SCTP recovers slowly, its
+send buffer fills, and a keyframe behind it is a stall of seconds. So a channel that loses frames in
+three of five seconds, or holds one frame at the front of its queue for three seconds, is given up:
+the video goes back to the socket, the Transport select says so, and picking the channel again tries
+again. What the channel offers is smoother pacing on a clean link (the socket's frames bunch behind
+TCP's acknowledgements; Firefox showed a 58 ms longest gap on the socket against 23 ms on the channel)
+and a path through a TURN relay when direct UDP is blocked.
 
 The server listens on UDP on the listen port's number (`--rtc-port` for another; Docker needs `-p
 8443:8443/udp`) on every local address. In Docker's bridge network the container's own address is not

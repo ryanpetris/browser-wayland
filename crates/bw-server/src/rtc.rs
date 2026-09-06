@@ -8,13 +8,16 @@
 //! messages: the browser's offer, our answer); the frame path in `ws.rs` hands frames to the hub while
 //! the session's channel is open and to the socket otherwise. A frame goes as numbered fragments the page
 //! reassembles, written as the SCTP send buffer (128 kB, freed by the browser's acknowledgements) has
-//! room: a keyframe of a few hundred kB takes a few rounds, and frames that arrive meanwhile are dropped
-//! (a keyframe replaces whatever waits, though what was written of it still has to go out), which the
-//! session's rate controller hears of. A fragment on its way is retransmitted if it is lost, so what the
-//! page misses is what was dropped here, never what the network ate.
+//! room; frames wait their turn in a queue as they would for the socket, and the queue's depth is
+//! congestion to the session's rate controller. A keyframe replaces whatever waits (the page needs it
+//! whatever else it gets, and a keyframe behind a queue on a lossy link is a stall of seconds; what was
+//! written of the frame in flight still has to go out), and a frame arriving at a full queue is dropped
+//! rather than waiting longer; either is a seq gap the page answers with a keyframe request. A fragment
+//! on its way is retransmitted if it is lost, so what the page misses is what was dropped here, never
+//! what the network ate.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -54,8 +57,9 @@ enum Msg {
 #[derive(Clone)]
 pub struct Hub {
     tx: mpsc::Sender<Msg>,
-    /// Sessions whose `video` channel is open right now, with the frames dropped for each since it last asked.
-    open: Arc<Mutex<HashMap<u64, u32>>>,
+    /// Sessions whose `video` channel is open right now, with the frames dropped for each since it last asked
+    /// and the frames waiting in its queue.
+    open: Arc<Open>,
     pub ice_servers: Arc<Vec<serde_json::Value>>,
 }
 
@@ -92,9 +96,10 @@ impl Hub {
         self.open.lock().unwrap().contains_key(&session)
     }
 
-    /// Frames of the session dropped since the last call: congestion, to its rate controller.
-    pub fn take_dropped(&self, session: u64) -> u32 {
-        self.open.lock().unwrap().get_mut(&session).map(std::mem::take).unwrap_or(0)
+    /// The session's channel under pressure: frames dropped since the last call, and frames waiting in its
+    /// queue now; congestion, to its rate controller.
+    pub fn pressure(&self, session: u64) -> (u32, usize) {
+        self.open.lock().unwrap().get_mut(&session).map_or((0, 0), |(dropped, queued)| (std::mem::take(dropped), *queued))
     }
 
     /// Signalling waits for room in the queue: an offer without an answer, or a close that never arrives,
@@ -103,13 +108,11 @@ impl Hub {
         let _ = self.tx.send(Msg::Offer { session, sdp, g, reply }).await;
     }
 
-    /// A frame for the session's channel; one that doesn't fit the hub's queue is dropped (the page asks
+    /// A frame for the session's channel; one that doesn't fit the hub's mailbox is dropped (the page asks
     /// for a keyframe when it sees the gap).
     pub fn frame(&self, session: u64, data: Bytes) {
-        if self.tx.try_send(Msg::Frame { session, data }).is_err()
-            && let Some(dropped) = self.open.lock().unwrap().get_mut(&session)
-        {
-            *dropped += 1;
+        if self.tx.try_send(Msg::Frame { session, data }).is_err() {
+            dropped(&self.open, session, 1);
         }
     }
 
@@ -134,14 +137,29 @@ struct Peer {
     channel: Option<ChannelId>,
     /// Numbers the fragmented messages, so the page can tell one frame's fragments from the next's.
     frame_id: u32,
-    /// The frame being written, and how many of its fragments are down the channel.
-    pending: Option<(Bytes, usize)>,
+    /// Frames waiting for the send buffer, the front one `sent` fragments in since `front_since`.
+    queue: VecDeque<Bytes>,
+    sent: usize,
+    front_since: Instant,
+    /// The session's socket, for the word that the channel is given up.
+    reply: mpsc::Sender<Bytes>,
 }
+
+/// A frame at the front of the queue this long means the link can't move one: the channel is given up
+/// and the socket takes the video.
+const STALL: Duration = Duration::from_secs(3);
+
+/// Frames a channel's queue holds before a new one is dropped: half a second at 60 fps.
+// ponytail: a cap; blocking the session as the socket does if a viewer wants the latency bounded tighter
+const QUEUE: usize = 30;
+
+/// Per open channel: frames dropped since the session last asked, frames waiting in the queue.
+type Open = Mutex<HashMap<u64, (u32, usize)>>;
 
 /// One datagram in: the candidate address it came to, from where, the bytes.
 type Datagram = (SocketAddr, SocketAddr, Vec<u8>);
 
-async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receiver<Msg>, open: Arc<Mutex<HashMap<u64, u32>>>) {
+async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receiver<Msg>, open: Arc<Open>) {
     let (dtx, mut drx) = mpsc::channel::<Datagram>(1024);
     for (addr, socket) in &sockets {
         let (addr, socket, dtx) = (*addr, socket.clone(), dtx.clone());
@@ -161,7 +179,12 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
         // a frame waiting for room in the send buffer goes on first (acknowledgements came in as datagrams)
         let mut deadline = Instant::now() + Duration::from_secs(1);
         for (id, peer) in peers.iter_mut() {
-            flush(peer);
+            if !peer.queue.is_empty() && peer.front_since.elapsed() > STALL {
+                tracing::info!(session = id, "WebRTC: a frame stuck for {STALL:?}; the socket takes the video");
+                let _ = peer.reply.try_send(protocol::rtc(&serde_json::json!({ "close": true })));
+                peer.rtc.disconnect(); // and the peer goes below, with its channel's claim on the frames
+            }
+            flush(peer, &open, *id);
             loop {
                 match peer.rtc.poll_output() {
                     Ok(Output::Timeout(t)) => {
@@ -217,17 +240,21 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
                 }
                 Some(Msg::Frame { session, data }) => {
                     if let Some(peer) = peers.get_mut(&session) && peer.channel.is_some() {
-                        // a frame still on its way keeps its place unless a keyframe comes (the page needs that one)
-                        let key = data.get(1).is_some_and(|f| f & 1 != 0);
-                        if peer.pending.is_none() || key {
-                            if peer.pending.take().is_some() {
-                                dropped(&open, session);
-                            }
+                        // a keyframe replaces what waits, the frame in flight included (its number is spent)
+                        if data.get(1).is_some_and(|f| f & 1 != 0) {
+                            dropped(&open, session, peer.queue.len() as u32);
+                            peer.queue.clear();
+                            peer.sent = 0;
                             peer.frame_id = peer.frame_id.wrapping_add(1);
-                            peer.pending = Some((data, 0));
-                            flush(peer);
+                        }
+                        if peer.queue.len() < QUEUE {
+                            peer.queue.push_back(data);
+                            if peer.queue.len() == 1 {
+                                peer.front_since = Instant::now();
+                            }
+                            flush(peer, &open, session);
                         } else {
-                            dropped(&open, session);
+                            dropped(&open, session, 1);
                         }
                     }
                 }
@@ -253,20 +280,21 @@ fn answer(sdp: &str, g: serde_json::Value, addrs: &[SocketAddr], reply: mpsc::Se
     }
     let answer = rtc.sdp_api().accept_offer(offer).context("accept offer")?;
     let _ = reply.try_send(protocol::rtc(&serde_json::json!({ "answer": answer.to_sdp_string(), "g": g })));
-    Ok(Peer { rtc, channel: None, frame_id: 0, pending: None })
+    Ok(Peer { rtc, channel: None, frame_id: 0, queue: VecDeque::new(), sent: 0, front_since: Instant::now(), reply })
 }
 
-fn event(session: u64, peer: &mut Peer, e: Event, open: &Mutex<HashMap<u64, u32>>) {
+fn event(session: u64, peer: &mut Peer, e: Event, open: &Open) {
     match e {
         Event::ChannelOpen(cid, label) => {
             tracing::info!(session, label, "WebRTC: data channel open");
             peer.channel = Some(cid);
-            open.lock().unwrap().insert(session, 0);
+            open.lock().unwrap().insert(session, (0, 0));
         }
         Event::ChannelClose(cid) => {
             if peer.channel == Some(cid) {
                 peer.channel = None;
-                peer.pending = None;
+                peer.queue.clear();
+                peer.sent = 0;
                 open.lock().unwrap().remove(&session);
             }
         }
@@ -280,32 +308,40 @@ fn event(session: u64, peer: &mut Peer, e: Event, open: &Mutex<HashMap<u64, u32>
     }
 }
 
-fn dropped(open: &Mutex<HashMap<u64, u32>>, session: u64) {
-    if let Some(n) = open.lock().unwrap().get_mut(&session) {
-        *n += 1;
+fn dropped(open: &Open, session: u64, count: u32) {
+    if let Some((n, _)) = open.lock().unwrap().get_mut(&session) {
+        *n += count;
     }
 }
 
-/// The pending frame's remaining fragments, `[FRAGMENT][u32 id][u16 index][u16 count]` then the bytes, as
-/// far as the send buffer takes them; the rest waits for the next round.
-fn flush(peer: &mut Peer) {
-    let (Some(cid), Some((data, next))) = (peer.channel, peer.pending.as_mut()) else { return };
-    let count = data.chunks(FRAGMENT).count();
+/// The queue's frames, front first, as fragments `[FRAGMENT][u32 id][u16 index][u16 count]` then the bytes,
+/// as far as the send buffer takes them; the rest waits for the next round. The depth left is the
+/// session's to see.
+fn flush(peer: &mut Peer, open: &Open, session: u64) {
     let mut msg = Vec::with_capacity(FRAGMENT + 9);
-    while *next < count {
-        let chunk = &data[*next * FRAGMENT..data.len().min((*next + 1) * FRAGMENT)];
-        msg.clear();
-        msg.push(protocol::FRAGMENT);
-        msg.extend_from_slice(&peer.frame_id.to_le_bytes());
-        msg.extend_from_slice(&(*next as u16).to_le_bytes());
-        msg.extend_from_slice(&(count as u16).to_le_bytes());
-        msg.extend_from_slice(chunk);
-        let Some(mut channel) = peer.rtc.channel(cid) else { break };
-        match channel.write(true, &msg) {
-            Ok(true) => *next += 1,
-            Ok(false) => return, // no room: the browser's acknowledgements make some
-            Err(_) => break,
+    'frames: while let (Some(cid), Some(data)) = (peer.channel, peer.queue.front()) {
+        let count = data.chunks(FRAGMENT).count();
+        while peer.sent < count {
+            let chunk = &data[peer.sent * FRAGMENT..data.len().min((peer.sent + 1) * FRAGMENT)];
+            msg.clear();
+            msg.push(protocol::FRAGMENT);
+            msg.extend_from_slice(&peer.frame_id.to_le_bytes());
+            msg.extend_from_slice(&(peer.sent as u16).to_le_bytes());
+            msg.extend_from_slice(&(count as u16).to_le_bytes());
+            msg.extend_from_slice(chunk);
+            let Some(mut channel) = peer.rtc.channel(cid) else { break 'frames };
+            match channel.write(true, &msg) {
+                Ok(true) => peer.sent += 1,
+                Ok(false) => break 'frames, // no room: the browser's acknowledgements make some
+                Err(_) => break,            // this frame is lost to the channel; the next may do better
+            }
         }
+        peer.queue.pop_front();
+        peer.sent = 0;
+        peer.front_since = Instant::now();
+        peer.frame_id = peer.frame_id.wrapping_add(1);
     }
-    peer.pending = None;
+    if let Some((_, queued)) = open.lock().unwrap().get_mut(&session) {
+        *queued = peer.queue.len();
+    }
 }

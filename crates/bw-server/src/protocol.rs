@@ -24,8 +24,8 @@ pub const NOTICE: u8 = 0x09;
 pub const CLIPBOARD_DATA: u8 = 0x0A;
 /// The open desktop notifications, as a JSON array of `Notification`, whenever they change (and in the replay).
 pub const NOTIFICATIONS: u8 = 0x0B;
-/// JSON `{"codec","auto_codec","bitrate_kbps","max_fps","auto_quality"}`: what this session's
-/// encoder does right now; after every `Config` and whenever the automatic quality changes.
+/// JSON `{"codec","auto_codec","bitrate_kbps","max_fps"}`: what this session's encoder does right now;
+/// after every `Config` and whenever the rate controller steps the quality.
 pub const STREAM_STATE: u8 = 0x0C;
 /// `[RTC][JSON]`: WebRTC signalling, server side: `{"ice_servers": [...]}` once the session is up (the
 /// browser may then offer), `{"answer": "<sdp>"}` to its offer.
@@ -80,6 +80,10 @@ pub const CAM: u8 = 0x94;
 /// channel (`g` numbers the attempt and comes back with the answer, so a late one is known for what it is),
 /// `{"close": true}` to go back to the socket. Any session (a window tab too), each its own connection only.
 pub const RTC_CLIENT: u8 = 0x95;
+/// `u16 delay_ms` `u16 dropped`: the page's last second of video, once a second while frames come: how much
+/// later they arrived than at their best lately (the link queueing, which comes before it loses) and how
+/// many its decoder dropped. The rate controller's ear on the far end.
+pub const REPORT: u8 = 0x96;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,7 +169,7 @@ pub fn codec_named(name: &str) -> Option<Codec> {
     CODECS.iter().find(|(_, n)| *n == name).map(|(c, _)| *c)
 }
 
-/// A viewer's quality choice: a fixed bitrate and rate, or automatic (`--bitrate` as the ceiling, adapting).
+/// A viewer's quality choice: the ceiling its bitrate adapts under (`--bitrate` for Auto).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Preset {
     #[default]
@@ -187,7 +191,7 @@ impl Preset {
         Self::NAMES.get(id as usize).map_or(Preset::Auto, |(p, _)| *p)
     }
 
-    /// The preset's target; Auto starts at the ceiling with no frame cap.
+    /// The preset's ceiling, where its stream starts; under 3 Mbit/s the frame rate is capped at 30.
     pub fn quality(self, ceiling_kbps: u32) -> Quality {
         match self {
             Preset::Auto => Quality { bitrate_kbps: ceiling_kbps, max_fps: if ceiling_kbps < 3000 { 30 } else { 0 } },
@@ -199,9 +203,9 @@ impl Preset {
     }
 }
 
-/// What a session's encoder does, for the page's "Auto (…)" labels.
-pub fn stream_state(codec: Codec, auto_codec: bool, quality: Quality, auto_quality: bool) -> Bytes {
-    let json = serde_json::json!({ "codec": codec_name(codec), "auto_codec": auto_codec, "bitrate_kbps": quality.bitrate_kbps, "max_fps": quality.max_fps, "auto_quality": auto_quality });
+/// What a session's encoder does, for the page's quality labels.
+pub fn stream_state(codec: Codec, auto_codec: bool, quality: Quality) -> Bytes {
+    let json = serde_json::json!({ "codec": codec_name(codec), "auto_codec": auto_codec, "bitrate_kbps": quality.bitrate_kbps, "max_fps": quality.max_fps });
     let mut b = vec![STREAM_STATE];
     b.extend_from_slice(json.to_string().as_bytes());
     b.into()
@@ -263,6 +267,8 @@ pub enum ClientMsg {
     Cam(Bytes),
     /// `{"offer": "<sdp>"}` or `{"close": true}` (see `RTC_CLIENT`).
     Rtc(serde_json::Value),
+    /// The page's second of video (see `REPORT`).
+    Report { delay_ms: u16, dropped: u16 },
 }
 
 #[derive(Debug, PartialEq, serde::Deserialize)]
@@ -320,6 +326,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         MIC => ClientMsg::Mic(Bytes::copy_from_slice(b.get(1..)?)),
         CAM => ClientMsg::Cam(Bytes::copy_from_slice(b.get(1..)?)),
         RTC_CLIENT => ClientMsg::Rtc(serde_json::from_slice(&b[1..]).ok()?),
+        REPORT => ClientMsg::Report { delay_ms: u16_at(1)?, dropped: u16_at(3)? },
         _ => return None,
     })
 }
@@ -341,6 +348,7 @@ mod tests {
         assert_eq!(decode(&[0x89]), Some(ClientMsg::Blur));
         assert_eq!(decode(&[0x92, 0, 3, 0, 0, 0x80, 0x3f, 0, 0, 0, 0x40]), Some(ClientMsg::Touch { kind: 0, id: 3, x: 1.0, y: 2.0 }));
         assert_eq!(decode(&[0x8D]), Some(ClientMsg::TakeControl));
+        assert_eq!(decode(&[0x96, 0x64, 0, 2, 0]), Some(ClientMsg::Report { delay_ms: 100, dropped: 2 }));
         assert_eq!(role(Role::Controller, FEATURE_CAM).as_ref(), &[0x08, 2, 2]);
         let control = |json: &str| decode(&[&[CONTROL][..], json.as_bytes()].concat());
         assert_eq!(

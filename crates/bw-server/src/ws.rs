@@ -151,7 +151,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     control.set_codec(codec);
     let quality = preset.quality(app.bitrate_kbps);
     control.set_quality(quality);
-    let mut auto = AutoRate::new(app.bitrate_kbps, preset == Preset::Auto);
+    let mut auto = AutoRate::new(quality.bitrate_kbps);
     let (etx, mut erx) = mpsc::channel::<Bytes>(32);
     let (atx, mut arx) = mpsc::channel::<Bytes>(4);
     let notifications = protocol::notifications(&app.notifications()); // its own lock: never inside the viewers'
@@ -165,7 +165,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         }
         let id = v.next_id;
         v.next_id += 1;
-        v.sessions.insert(id, ViewerSession { key, events: etx.clone(), audio: atx, audio_seq: 0, size: None, control, hw, sw, want_codec, codec, preset, quality, cam_wait_key: false });
+        v.sessions.insert(id, ViewerSession { key, events: etx.clone(), audio: atx, audio_seq: 0, size: None, control, hw, sw, want_codec, codec, quality, cam_wait_key: false });
         if key == Key::Control && v.controller.is_none() {
             v.controller = Some(id);
         }
@@ -198,7 +198,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                     if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
                         // sent in order, waiting for the socket: the pipeline drops raw frames upstream of the encoder
                         // while we do, so nothing goes missing between encoder and page (no keyframe dance)
-                        let (backlog, dropped) = (rx.len(), app.rtc.as_ref().map_or(0, |hub| hub.take_dropped(id))); // channel drops are congestion too
+                        let (backlog, (dropped, queued)) = (rx.len(), app.rtc.as_ref().map_or((0, 0), |hub| hub.pressure(id))); // the channel's drops and queue are congestion too
                         let t = Instant::now();
                         match &app.rtc {
                             // the data channel, while the page has one open: unordered, so a retransmit holds up
@@ -207,7 +207,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                             _ => if !send(&mut socket, protocol::video(&f, seq)).await { break None },
                         }
                         seq = seq.wrapping_add(1);
-                        if let Some(q) = auto.frame(backlog, dropped, t.elapsed()) {
+                        if let Some(q) = auto.frame(backlog + queued, dropped, t.elapsed()) {
                             app.set_quality(id, q);
                             let Some(state) = app.stream_state(id) else { break Some((UNAUTHORIZED, "token rotated")) };
                             if !send(&mut socket, state).await { break None }
@@ -242,7 +242,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                         Some(ClientMsg::Stream(choice)) => {
                             let (new_codec, preset) = app.apply_choice(id, &choice);
                             if let Some(preset) = preset {
-                                auto = AutoRate::new(app.bitrate_kbps, preset == Preset::Auto);
+                                auto = AutoRate::new(preset.quality(app.bitrate_kbps).bitrate_kbps);
                             }
                             if new_codec {
                                 let _ = app.commands.send(Command::RequestFullFrame); // the new pipeline starts with a frame
@@ -255,6 +255,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                             (Some(hub), None) => hub.close(id).await,
                             (None, _) => {}
                         },
+                        Some(ClientMsg::Report { delay_ms, dropped }) => auto.report(delay_ms, dropped),
                         Some(m) => app.viewer_message(id, key, m),
                         None => {}
                     }
@@ -310,7 +311,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     if !app.viewers.lock().unwrap().window_list.iter().any(|w| w.id == id) {
         return close(&mut socket, GONE, "no such window").await;
     }
-    let Some((hw, sw, mut want_codec, mut preset)) = hello(&mut socket).await else { return };
+    let Some((hw, sw, mut want_codec, preset)) = hello(&mut socket).await else { return };
     let (tx, mut rx) = mpsc::channel::<StreamMsg>(16);
     let (sink, control) = match (app.sinks)(tx) {
         Ok(x) => x,
@@ -323,8 +324,8 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     control.set_codec(codec);
     let mut quality = preset.quality(app.bitrate_kbps);
     control.set_quality(quality);
-    let mut auto = AutoRate::new(app.bitrate_kbps, preset == Preset::Auto);
-    let state = |codec, quality, preset: Preset, want: Option<Codec>| protocol::stream_state(codec, want.is_none(), quality, preset == Preset::Auto);
+    let mut auto = AutoRate::new(quality.bitrate_kbps);
+    let state = |codec, quality, want: Option<Codec>| protocol::stream_state(codec, want.is_none(), quality);
     static KEY: AtomicU64 = AtomicU64::new(1);
     let stream = KEY.fetch_add(1, Ordering::Relaxed);
     let (etx, mut erx) = mpsc::channel::<Bytes>(32);
@@ -361,21 +362,21 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                     seq = 0;
                     if !send(&mut socket, protocol::config(&i)).await { break None }
                     info = Some(i);
-                    if !send(&mut socket, state(codec, quality, preset, want_codec)).await { break None }
+                    if !send(&mut socket, state(codec, quality, want_codec)).await { break None }
                 }
                 Some(StreamMsg::Frame(f)) => {
                     if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
-                        let (backlog, dropped) = (rx.len(), app.rtc.as_ref().map_or(0, |hub| hub.take_dropped(rtc_key)));
+                        let (backlog, (dropped, queued)) = (rx.len(), app.rtc.as_ref().map_or((0, 0), |hub| hub.pressure(rtc_key)));
                         let t = Instant::now();
                         match &app.rtc {
                             Some(hub) if hub.is_open(rtc_key) => hub.frame(rtc_key, protocol::video(&f, seq)),
                             _ => if !send(&mut socket, protocol::video(&f, seq)).await { break None },
                         }
                         seq = seq.wrapping_add(1);
-                        if let Some(q) = auto.frame(backlog, dropped, t.elapsed()) {
+                        if let Some(q) = auto.frame(backlog + queued, dropped, t.elapsed()) {
                             quality = q;
                             control.set_quality(q);
-                            if !send(&mut socket, state(codec, quality, preset, want_codec)).await { break None }
+                            if !send(&mut socket, state(codec, quality, want_codec)).await { break None }
                         }
                     }
                 }
@@ -425,12 +426,11 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                                 }
                             }
                             if let Some(p) = choice.quality.as_deref().and_then(Preset::named) {
-                                preset = p;
                                 quality = p.quality(app.bitrate_kbps);
-                                auto = AutoRate::new(app.bitrate_kbps, p == Preset::Auto);
+                                auto = AutoRate::new(quality.bitrate_kbps);
                                 control.set_quality(quality);
                             }
-                            let _ = etx.try_send(state(codec, quality, preset, want_codec));
+                            let _ = etx.try_send(state(codec, quality, want_codec));
                             cmd
                         }
                         Some(ClientMsg::Rtc(v)) => {
@@ -452,6 +452,10 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                             None
                         }
                         Some(ClientMsg::Touch { .. }) => None, // tab coordinates aren't the desktop's; the page sends fingers as a pointer here
+                        Some(ClientMsg::Report { delay_ms, dropped }) => {
+                            auto.report(delay_ms, dropped);
+                            None
+                        }
                         Some(m) => input_command(m),
                         None => None,
                     };
@@ -469,7 +473,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                     if let Some(q) = rtt_of(&p, started).and_then(|rtt| auto.rtt(rtt)) {
                         quality = q;
                         control.set_quality(q);
-                        if !send(&mut socket, state(codec, quality, preset, want_codec)).await { break None }
+                        if !send(&mut socket, state(codec, quality, want_codec)).await { break None }
                     }
                 }
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break None,
@@ -569,7 +573,6 @@ impl App {
         }
         let preset = choice.quality.as_deref().and_then(Preset::named);
         if let Some(p) = preset {
-            s.preset = p;
             s.quality = p.quality(self.bitrate_kbps);
             s.control.set_quality(s.quality);
         }
@@ -580,7 +583,7 @@ impl App {
     fn stream_state(&self, id: u64) -> Option<Bytes> {
         let v = self.viewers.lock().unwrap();
         let s = v.sessions.get(&id)?;
-        Some(protocol::stream_state(s.codec, s.want_codec.is_none(), s.quality, s.preset == Preset::Auto))
+        Some(protocol::stream_state(s.codec, s.want_codec.is_none(), s.quality))
     }
 
     /// Pick the codec for a browser whose `hw` mask passed the prefer-hardware probe and `sw` the plain one
@@ -762,27 +765,29 @@ fn bit(c: Codec) -> u8 {
     }
 }
 
-/// The automatic quality: a second is congested when more than a third of its frames found the socket
-/// behind (frames queued behind them, or the send taking over two frame times) or a ping's answer took
-/// 200 ms longer than the quickest one seen (it queues behind the video the kernel is still holding; the
-/// quickest is the link's own latency). Then the bitrate drops by a quarter, to a floor, and the rate to
-/// 30 fps under 3 Mbit/s; after five clean seconds it climbs a tenth toward the ceiling (`--bitrate`),
-/// and the rate cap goes once over 3 Mbit/s.
+/// The rate controller: a viewer's quality is a ceiling, and the bitrate lives under it by what the link
+/// and the browser show. A second with a third of its frames congested (two waiting behind one, a channel
+/// drop or a channel queue, a slow send), a pong 200 ms over the link's best, or the page reporting frames
+/// a hundred milliseconds later than they were or its decoder dropping some, halves the bitrate, which then
+/// holds two seconds; five clean seconds raise it by a quarter. Every change is a keyframe with the VA
+/// encoders (a new rate opens a new GOP), so the steps are few and large rather than many and small.
 struct AutoRate {
-    on: bool,
     ceiling: u32,
     quality: bw_core::Quality,
     frames: u32,
     congested: u32,
-    slow_pongs: u32,
+    /// Signs of a slow path this second: a late pong, the page's delay, the page's drops.
+    slow: u32,
     best_rtt: Duration,
     clean_secs: u32,
+    /// Seconds still to wait after a step down before the next verdict.
+    hold: u32,
     window: Instant,
 }
 
 impl AutoRate {
-    fn new(ceiling: u32, on: bool) -> AutoRate {
-        AutoRate { on, ceiling, quality: Preset::Auto.quality(ceiling), frames: 0, congested: 0, slow_pongs: 0, best_rtt: Duration::MAX, clean_secs: 0, window: Instant::now() }
+    fn new(ceiling: u32) -> AutoRate {
+        AutoRate { ceiling, quality: Preset::Auto.quality(ceiling), frames: 0, congested: 0, slow: 0, best_rtt: Duration::MAX, clean_secs: 0, hold: 0, window: Instant::now() }
     }
 
     /// One frame went out; `backlog` frames were waiting behind it and the send took `took`.
@@ -798,27 +803,39 @@ impl AutoRate {
     fn rtt(&mut self, rtt: Duration) -> Option<bw_core::Quality> {
         self.best_rtt = self.best_rtt.min(rtt);
         if rtt > self.best_rtt + Duration::from_millis(200) {
-            self.slow_pongs += 1;
+            self.slow += 1;
         }
         self.evaluate()
     }
 
+    /// The page's second: how much later its frames arrived than at their best lately, and how many it dropped.
+    fn report(&mut self, delay_ms: u16, dropped: u16) {
+        if delay_ms > 100 || dropped > 0 {
+            self.slow += 1;
+        }
+    }
+
     /// Once a second: step the quality by what the second showed.
     fn evaluate(&mut self) -> Option<bw_core::Quality> {
-        if !self.on || self.window.elapsed() < Duration::from_secs(1) {
+        if self.window.elapsed() < Duration::from_secs(1) {
             return None;
         }
-        let (frames, congested, slow) = (std::mem::take(&mut self.frames), std::mem::take(&mut self.congested), std::mem::take(&mut self.slow_pongs));
+        let (frames, congested, slow) = (std::mem::take(&mut self.frames), std::mem::take(&mut self.congested), std::mem::take(&mut self.slow));
         self.window = Instant::now();
-        tracing::debug!(frames, congested, slow_pongs = slow, kbps = self.quality.bitrate_kbps, "auto quality: a second of frames");
+        tracing::debug!(frames, congested, slow, kbps = self.quality.bitrate_kbps, "auto quality: a second of frames");
+        if self.hold > 0 {
+            self.hold -= 1; // the step before is still taking effect
+            return None;
+        }
         let mut q = self.quality;
         if congested * 3 > frames || slow > 0 {
             self.clean_secs = 0;
-            q.bitrate_kbps = (q.bitrate_kbps * 3 / 4).max(1000.min(self.ceiling));
+            q.bitrate_kbps = (q.bitrate_kbps / 2).max(1000.min(self.ceiling));
+            self.hold = 2;
         } else if frames > 0 {
             self.clean_secs += 1;
             if self.clean_secs >= 5 && q.bitrate_kbps < self.ceiling {
-                q.bitrate_kbps = (q.bitrate_kbps * 11 / 10).min(self.ceiling);
+                q.bitrate_kbps = (q.bitrate_kbps * 5 / 4).min(self.ceiling);
                 self.clean_secs = 0;
             }
         }
@@ -829,6 +846,7 @@ impl AutoRate {
         })
     }
 }
+
 
 /// CSS size × devicePixelRatio, rounded down to even (4:2:0 encoders), capped at 8K.
 fn geometry(css_w: u16, css_h: u16, dpr: f64, refresh_mhz: i32) -> OutputGeometry {
@@ -861,29 +879,36 @@ mod tests {
 
     #[test]
     fn auto_rate_backs_off_and_recovers() {
-        let mut a = AutoRate::new(8000, true);
-        assert_eq!(second(&mut a, 60, 30).unwrap().bitrate_kbps, 6000); // half the frames waited: a quarter off
+        let mut a = AutoRate::new(8000);
+        assert_eq!(second(&mut a, 60, 30).unwrap().bitrate_kbps, 4000); // half the frames waited: halved
+        assert!(second(&mut a, 60, 30).is_none()); // the two seconds after a step are the step's own
+        assert!(second(&mut a, 60, 30).is_none());
         assert!(second(&mut a, 60, 10).is_none()); // a sixth: fine
-        // five clean seconds climb a tenth; the sixth waits again
+        // five clean seconds climb a quarter; the sixth waits again
         for _ in 0..3 {
             assert!(second(&mut a, 60, 0).is_none());
         }
-        assert_eq!(second(&mut a, 60, 0).unwrap().bitrate_kbps, 6600);
+        assert_eq!(second(&mut a, 60, 0).unwrap().bitrate_kbps, 5000);
         assert!(second(&mut a, 60, 0).is_none());
         // the floor and the frame cap under 3 Mbit/s
-        let mut a = AutoRate::new(2000, true);
+        let mut a = AutoRate::new(2000);
         let q = second(&mut a, 1, 1).unwrap();
-        assert_eq!((q.bitrate_kbps, q.max_fps), (1500, 30));
-        assert!(AutoRate::new(8000, false).frame(5, 0, Duration::from_secs(1)).is_none());
+        assert_eq!((q.bitrate_kbps, q.max_fps), (1000, 30));
         // a pong slower than the link's best by 200 ms congests the second on its own; a steady slow link doesn't
-        let mut a = AutoRate::new(8000, true);
+        let mut a = AutoRate::new(8000);
         a.rtt(Duration::from_millis(300));
         a.window = Instant::now() - Duration::from_secs(2);
         assert!(a.rtt(Duration::from_millis(320)).is_none());
         a.window = Instant::now() - Duration::from_secs(2);
-        assert_eq!(a.rtt(Duration::from_millis(600)).unwrap().bitrate_kbps, 6000);
+        assert_eq!(a.rtt(Duration::from_millis(600)).unwrap().bitrate_kbps, 4000);
+        // the page's word counts the same: frames a hundred milliseconds later than they were, or dropped
+        let mut a = AutoRate::new(8000);
+        a.report(50, 0);
+        assert!(second(&mut a, 60, 0).is_none());
+        a.report(0, 1);
+        assert_eq!(second(&mut a, 60, 0).unwrap().bitrate_kbps, 4000);
         // the floor never passes a low ceiling: nothing to step down to
-        let mut a = AutoRate::new(500, true);
+        let mut a = AutoRate::new(500);
         assert!(second(&mut a, 1, 1).is_none());
         assert_eq!((a.quality.bitrate_kbps, a.quality.max_fps), (500, 30));
     }

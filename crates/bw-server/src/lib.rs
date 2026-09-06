@@ -164,7 +164,6 @@ pub(crate) struct ViewerSession {
     sw: u8,
     want_codec: Option<Codec>,
     codec: Codec,
-    preset: protocol::Preset,
     quality: bw_core::Quality,
     /// A webcam frame of this session was dropped: the next ones are too, until a keyframe (a VP8 delta
     /// without its reference would corrupt the picture until the next one anyway).
