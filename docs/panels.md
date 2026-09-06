@@ -1,12 +1,12 @@
 # Panels, taskbars and minimize
 
-waybar and xfce4-panel run as ordinary clients of browser-wayland with working taskbars. Both are
+waybar and xfce4-panel run as ordinary clients of Elsewhere with working taskbars. Both are
 GTK 3 applications on gtk-layer-shell; xfce's window-aware plugins go through libxfce4windowing, which
 binds wlr-foreign-toplevel-management, ext-workspace, wl_seat, wl_output and xdg-output.
 
 ```sh
-browser-wayland --exec 'waybar & exec foot'
-browser-wayland --exec 'dbus-run-session -- sh -c "xfce4-panel & exec foot"'
+elsewhere --exec 'waybar & exec foot'
+elsewhere --exec 'dbus-run-session -- sh -c "xfce4-panel & exec foot"'
 ```
 
 ## What the panels need and what we did
@@ -85,5 +85,5 @@ desktop has nowhere to come back from.
 - **Waybar icons.** The default config draws with Font Awesome glyphs (`otf-font-awesome`); without the
   font they render as hex boxes. Add `"wlr/taskbar"` to `modules-left` for a taskbar.
 - **GTK rendering.** For GTK 4 Vulkan artifacts, set `GSK_RENDERER=ngl` in the environment launching
-  browser-wayland. GTK 3 panels do not need this setting.
+  Elsewhere. GTK 3 panels do not need this setting.
 

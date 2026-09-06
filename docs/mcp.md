@@ -2,7 +2,7 @@
 
 Coding agents drive the desktop through the same operations as the HTTP API, so an agent can find a
 button by name, click it, type, and check the result without interpreting pixels. This document covers
-the design; [protocol.md](protocol.md) has the wire shapes and `skills/browser-wayland/reference.md` the
+the design; [protocol.md](protocol.md) has the wire shapes and `skills/elsewhere/reference.md` the
 generated schemas.
 
 ## Decisions
@@ -11,7 +11,7 @@ generated schemas.
 |---|---|
 | Protocol | MCP over Streamable HTTP at `/mcp` on the existing server, with the `rmcp` SDK. No second port or process; works remotely and from the container. Agents that only speak stdio use the standard `mcp-remote` bridge. |
 | Auth | The bearer tokens, through the same middleware as `/api`; `401` otherwise. The middleware tags the request with which token it carried (rmcp hands tools the HTTP request parts), so the tools that act answer `read-only token` as a tool error to the viewer token. rmcp's host allow-list (DNS-rebinding protection) is off because the tokens already gate every request. No OAuth. |
-| Shape of the tools | One tool per operation, each a few lines calling an `App` method. The generated [tool reference](../skills/browser-wayland/reference.md#mcp-tools) lists every tool from the router. Arguments use the API's own types where they exist (`Button`, the control ops) so the vocabulary is shared. |
+| Shape of the tools | One tool per operation, each a few lines calling an `App` method. The generated [tool reference](../skills/elsewhere/reference.md#mcp-tools) lists every tool from the router. Arguments use the API's own types where they exist (`Button`, the control ops) so the vocabulary is shared. |
 | Results | JSON as text content for lists and elements, `image/png` content for snapshots, `ok` for fire-and-forget actions, and `isError` results carrying the API's error text so the model can react. |
 | Documentation | The manual is the server's `instructions` at `initialize` and both skill files are MCP resources, so a client gets the documentation with the connection. |
 | Screenshots for models | `snapshot` and `screenshot` default to native dimensions. Supply one of `width`, `height`, or `percentage` for previews; [sizing limits](desktop-api.md#screenshot-sizing). |
@@ -19,7 +19,7 @@ generated schemas.
 ## Input
 
 The compositor could always move the pointer, click and press keys: that is how the viewer works. What
-was missing was a way in other than the viewer's binary WebSocket. `InputMsg` in `bw-core` is that way:
+was missing was a way in other than the viewer's binary WebSocket. `InputMsg` in `elsewhere-core` is that way:
 `move`, `click`, `button`, `scroll`, `key`, `text`, served as `POST /api/input` and as tools.
 
 - The server only checks that a named window exists (for the `404`) and forwards the message as one
@@ -48,7 +48,7 @@ Two files, both compiled in with `include_str!` and served at `/skill/`:
   `InputMsg` and the elements page (from `schemars`, the same derive rmcp uses for tool arguments),
   and every MCP tool with its description and input schema (from the tool router). The
   `reference_is_current` test compares the checked-in file with what the code generates, so it is
-  regenerated with `UPDATE_REFERENCE=1 cargo test -p bw-server reference` (after `make web`, which
+  regenerated with `UPDATE_REFERENCE=1 cargo test -p elsewhere-server reference` (after `make web`, which
 the embedded viewer needs) and cannot silently drift.
 
 ## Verification

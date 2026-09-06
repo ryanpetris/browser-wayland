@@ -42,13 +42,13 @@ try {
   await page.route('**/assets/visualiser-*.js', async route => {
     requestedChunk(); await chunkGate; await route.continue();
   });
-  await page.goto(process.env.BW_TEST_URL || `http://127.0.0.1:${server.address().port}`);
-  await page.waitForFunction(() => !!window.bw?.store);
-  await page.evaluate(() => window.bw.store.set({ status: 'connected', role: 'viewer', audioAvailable: true, micAvailable: false }));
+  await page.goto(process.env.ELSEWHERE_TEST_URL || `http://127.0.0.1:${server.address().port}`);
+  await page.waitForFunction(() => !!window.elsewhere?.store);
+  await page.evaluate(() => window.elsewhere.store.set({ status: 'connected', role: 'viewer', audioAvailable: true, micAvailable: false }));
   assert.equal(chunks.length, 0, 'renderer must not load until opened');
   const aboutButton = page.getByRole('button', { name: 'About / Licenses & source', exact: true });
   await aboutButton.click();
-  const about = page.getByRole('dialog', { name: 'About browser-wayland' });
+  const about = page.getByRole('dialog', { name: 'About Elsewhere' });
   await about.waitFor();
   assert.equal(await about.locator('a').count(), 2, 'About offers licenses and the source repository');
   assert(!files.some(f => /viewer-source|audiomotion-source|audiomotion-LICENSE/.test(f)), 'source downloads are not embedded');
@@ -91,9 +91,9 @@ try {
       const samples = new Float32Array(source.fftSize);
       source.getFloatTimeDomainData(samples);
       const signalPeak = Math.max(...samples.map(Math.abs));
-      bw.store.set({ stats: { ...bw.store.get().stats, audio: { packets: 1, decoded: 1, lead: 0, state: context.state, signalPeak, level: signalPeak > .0001 ? 200 : 0 } } });
+      elsewhere.store.set({ stats: { ...elsewhere.store.get().stats, audio: { packets: 1, decoded: 1, lead: 0, state: context.state, signalPeak, level: signalPeak > .0001 ? 200 : 0 } } });
     }, 50);
-    window.bw.store.set({ playback: { context, source }, stats: { ...window.bw.store.get().stats, audio: { packets: 1, decoded: 1, lead: 0, state: 'running', signalPeak: .1, level: 200 } } });
+    window.elsewhere.store.set({ playback: { context, source }, stats: { ...window.elsewhere.store.get().stats, audio: { packets: 1, decoded: 1, lead: 0, state: 'running', signalPeak: .1, level: 200 } } });
   });
   const panel = page.getByRole('region', { name: 'Session audio' });
   await chunkRequested;
@@ -175,7 +175,7 @@ try {
   const signalImage = await panel.locator('canvas').evaluate(c => c.toDataURL());
   await page.evaluate(() => {
     window.testPlayback.oscillator.stop();
-    window.bw.store.set({ stats: { ...window.bw.store.get().stats, audio: { packets: 1, decoded: 1, lead: 0, state: 'running', signalPeak: 0, level: 0 } } });
+    window.elsewhere.store.set({ stats: { ...window.elsewhere.store.get().stats, audio: { packets: 1, decoded: 1, lead: 0, state: 'running', signalPeak: 0, level: 0 } } });
   });
   await panel.getByText('Connected, but silent.', { exact: false }).waitFor();
   await page.waitForTimeout(1000);
@@ -186,7 +186,7 @@ try {
     const context = new AudioContext(), source = context.createAnalyser();
     source.connect(context.destination);
     window.testPlayback = { context, source };
-    window.bw.store.set({ playback: { context, source } });
+    window.elsewhere.store.set({ playback: { context, source } });
   });
   await page.waitForTimeout(200);
   await checkEdges(2);
@@ -198,12 +198,12 @@ try {
   assert.equal(errors.length, 0, errors.join('\n'));
   await page.route('**/assets/visualiser-*.js', route => route.abort());
   await page.reload();
-  await page.waitForFunction(() => !!window.bw?.store);
+  await page.waitForFunction(() => !!window.elsewhere?.store);
   await page.evaluate(async () => {
     const context = new AudioContext(); await context.resume();
     const source = context.createAnalyser(); source.connect(context.destination);
     window.testPlayback = { context, source };
-    bw.store.set({ status: 'connected', role: 'viewer', audioAvailable: true, micAvailable: false, playback: { context, source } });
+    elsewhere.store.set({ status: 'connected', role: 'viewer', audioAvailable: true, micAvailable: false, playback: { context, source } });
   });
   await page.getByRole('button', { name: 'Audio visualiser', exact: true }).click();
   await page.getByRole('alert').filter({ hasText: 'Visualiser unavailable' }).waitFor();

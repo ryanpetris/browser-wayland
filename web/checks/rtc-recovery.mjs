@@ -6,17 +6,17 @@ import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
 
 const medium = 8000;
-const chain = `BW_RTC_${process.pid}`;
+const chain = `ELSEWHERE_RTC_${process.pid}`;
 const iptables = (...args) => { const r = spawnSync('iptables', args, { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); };
 iptables('-N', chain);
 iptables('-I', 'OUTPUT', '-p', 'udp', '--dport', '8089', '-j', chain);
 const block = () => iptables('-A', chain, '-j', 'DROP');
 const unblock = () => iptables('-F', chain);
-const root = await mkdtemp(tmpdir() + '/bw-rtc-recovery-');
+const root = await mkdtemp(tmpdir() + '/elsewhere-rtc-recovery-');
 await mkdir(root + '/home'); await mkdir(root + '/runtime', { mode: 0o700 });
 const log = await open(root + '/desktop.log', 'w');
 const origin = 'http://127.0.0.1:8089';
-const desktop = spawn('/src/target/release/browser-wayland', ['--no-audio', '--no-tls', '--render-node', 'none', '--codec', 'vp8', '--bitrate', String(medium), '--listen', '127.0.0.1:8089', '--socket-name', 'wayland-rtc-check'], {
+const desktop = spawn('/src/target/release/elsewhere', ['--no-audio', '--no-tls', '--render-node', 'none', '--codec', 'vp8', '--bitrate', String(medium), '--listen', '127.0.0.1:8089', '--socket-name', 'wayland-rtc-check'], {
   env: { ...process.env, HOME: root + '/home', XDG_CONFIG_HOME: root + '/config', XDG_RUNTIME_DIR: root + '/runtime' },
   stdio: ['ignore', log.fd, log.fd],
 });
@@ -26,8 +26,8 @@ const waitFor = async predicate => {
 };
 let browser;
 try {
-  await waitFor(async () => { try { await readFile(root + '/config/browser-wayland/token'); return (await fetch(origin)).ok; } catch { return false; } });
-  const token = (await readFile(root + '/config/browser-wayland/token', 'utf8')).trim();
+  await waitFor(async () => { try { await readFile(root + '/config/elsewhere/token'); return (await fetch(origin)).ok; } catch { return false; } });
+  const token = (await readFile(root + '/config/elsewhere/token', 'utf8')).trim();
   browser = await chromium.launch({ executablePath: '/usr/bin/chromium', env: { ...process.env, XDG_CONFIG_HOME: root + '/browser-config' }, args: ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
   const errors = [];
   const connect = async id => {
@@ -86,32 +86,32 @@ try {
     const page = await context.newPage();
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(`${origin}/${id ? '?window=' + id : ''}#token=${token}`);
-    await page.waitForFunction(() => bw.store.get().status === 'connected' && bw.store.get().rtcAvailable);
+    await page.waitForFunction(() => elsewhere.store.get().status === 'connected' && elsewhere.store.get().rtcAvailable);
     await page.evaluate(() => {
-      bw.setChoice({ quality: 'low' });
-      bw.store.subscribe(() => {
-        const r = bw.store.get().rtcRecovery;
+      elsewhere.setChoice({ quality: 'low' });
+      elsewhere.store.subscribe(() => {
+        const r = elsewhere.store.get().rtcRecovery;
         if (rtcTest.states.at(-1)?.state !== r.state) rtcTest.states.push({ ...r, at: Date.now() });
       });
     });
     return page;
   };
   const main = await connect();
-  await main.evaluate(() => bw.spawn('foot --app-id=rtc-check'));
-  await main.waitForFunction(() => bw.store.get().windows.some(w => w.app_id === 'rtc-check'));
-  const id = await main.evaluate(() => bw.store.get().windows.find(w => w.app_id === 'rtc-check').id);
+  await main.evaluate(() => elsewhere.spawn('foot --app-id=rtc-check'));
+  await main.waitForFunction(() => elsewhere.store.get().windows.some(w => w.app_id === 'rtc-check'));
+  const id = await main.evaluate(() => elsewhere.store.get().windows.find(w => w.app_id === 'rtc-check').id);
   const popup = await connect(id);
-  const active = page => page.waitForFunction(() => bw.store.get().rtcRecovery.state === 'active');
-  const waiting = page => page.waitForFunction(() => bw.store.get().rtcRecovery.state === 'waiting');
+  const active = page => page.waitForFunction(() => elsewhere.store.get().rtcRecovery.state === 'active');
+  const waiting = page => page.waitForFunction(() => elsewhere.store.get().rtcRecovery.state === 'waiting');
   const keyframe = page => page.evaluate(() => rtcTest.socket.send(new Uint8Array([0x88])));
   const selected = async page => {
-    assert.deepEqual(await page.evaluate(() => [bw.store.get().transport, localStorage.getItem('bw.transport'), bw.store.get().choice.quality, bw.store.get().streamState.ceiling_kbps]), ['webrtc', 'webrtc', 'low', 5000]);
-    assert.equal(await page.evaluate(() => bw.store.get().statsOn), false);
+    assert.deepEqual(await page.evaluate(() => [elsewhere.store.get().transport, localStorage.getItem('elsewhere.transport'), elsewhere.store.get().choice.quality, elsewhere.store.get().streamState.ceiling_kbps]), ['webrtc', 'webrtc', 'low', 5000]);
+    assert.equal(await page.evaluate(() => elsewhere.store.get().statsOn), false);
   };
   let pathCheck = 0;
   const socketPaths = async page => {
-    const marker = `rtc-path-${++pathCheck}`, output = `/tmp/bw-rtc-input-${process.pid}-${pathCheck}`;
-    await page.evaluate(id => bw.activate(id), id);
+    const marker = `rtc-path-${++pathCheck}`, output = `/tmp/elsewhere-rtc-input-${process.pid}-${pathCheck}`;
+    await page.evaluate(id => elsewhere.activate(id), id);
     await page.locator('canvas').focus();
     await page.keyboard.type(`touch ${output}`);
     await page.keyboard.press('Enter');
@@ -121,12 +121,12 @@ try {
     }, { marker, output });
     await waitFor(async () => { try { return (await readFile(output, 'utf8')) === ''; } catch { return false; } });
     await rm(output, { force: true });
-    await page.waitForFunction(async marker => (await bw.clipboard.read()) === marker, marker);
+    await page.waitForFunction(async marker => (await elsewhere.clipboard.read()) === marker, marker);
     assert(await page.evaluate(() => rtcTest.sent.includes(0x87) && rtcTest.sent.includes(0x8c)));
   };
   for (const page of [main, popup]) {
     // A failed offer falls back without changing either selection and automatically recovers.
-    await page.evaluate(() => { rtcTest.failOffers = 1; bw.setTransport('webrtc'); });
+    await page.evaluate(() => { rtcTest.failOffers = 1; elsewhere.setTransport('webrtc'); });
     await waiting(page); await selected(page);
     assert.match(await page.locator('[data-transport-status]').textContent(), /WebSocket.*retrying WebRTC/);
     await page.evaluate(() => { rtcTest.socketFrames = 0; }); await keyframe(page);
@@ -153,20 +153,20 @@ try {
     const previous = await page.evaluate(() => rtcTest.offers.at(-1));
     await page.evaluate(() => rtcInject({ close: true, g: rtcTest.offers.at(-1) }));
     await waiting(page); await selected(page);
-    assert.equal(await page.evaluate(() => bw.store.get().rtcRecovery.reason), 'Server queue stalled');
+    assert.equal(await page.evaluate(() => elsewhere.store.get().rtcRecovery.reason), 'Server queue stalled');
     await page.getByRole('button', { name: 'Retry now', exact: true }).click();
     await active(page);
     const count = await page.evaluate(() => rtcTest.peers.length);
     await page.evaluate(g => { rtcInject({ close: true, g }); rtcInject({ answer: 'late invalid answer', g }); }, previous);
     await page.waitForTimeout(250);
     assert.equal(await page.evaluate(() => rtcTest.peers.length), count);
-    assert.equal(await page.evaluate(() => bw.store.get().rtcRecovery.state), 'active');
+    assert.equal(await page.evaluate(() => elsewhere.store.get().rtcRecovery.state), 'active');
 
     // Loss near the healthy deadline must postpone the backoff reset.
     await page.waitForTimeout(6000);
     // Three separate seconds with dropped video trigger the shared loss fallback.
     for (let i = 0; i < 3; i++) {
-      await page.evaluate(() => { bw.dropNext(); rtcTest.socket.send(new Uint8Array([0x88])); });
+      await page.evaluate(() => { elsewhere.dropNext(); rtcTest.socket.send(new Uint8Array([0x88])); });
       await page.waitForTimeout(150); await keyframe(page); await page.waitForTimeout(1800);
     }
     assert(await page.evaluate(() => rtcTest.states.some(r => r.reason === 'Repeated frame loss or stalls')));
@@ -177,17 +177,17 @@ try {
     await page.waitForTimeout(11000);
     assert.equal(await page.evaluate(() => rtcTest.peers.length), peersBeforeIdle);
     await page.evaluate(() => rtcTest.channel.close()); await waiting(page);
-    assert(await page.evaluate(() => { const r = bw.store.get().rtcRecovery; return r.nextAt - Date.now() <= 1000; }));
-    await page.evaluate(() => bw.setTransport('websocket'));
+    assert(await page.evaluate(() => { const r = elsewhere.store.get().rtcRecovery; return r.nextAt - Date.now() <= 1000; }));
+    await page.evaluate(() => elsewhere.setTransport('websocket'));
     const stopped = await page.evaluate(() => rtcTest.peers.length);
     await page.waitForTimeout(1300);
     assert.equal(await page.evaluate(() => rtcTest.peers.length), stopped);
 
-    await page.evaluate(() => { rtcTest.rejectOffers = 1; bw.setTransport('webrtc'); });
+    await page.evaluate(() => { rtcTest.rejectOffers = 1; elsewhere.setTransport('webrtc'); });
     await waiting(page);
-    assert.equal(await page.evaluate(() => bw.store.get().rtcRecovery.reason), 'Offer rejected');
+    assert.equal(await page.evaluate(() => elsewhere.store.get().rtcRecovery.reason), 'Offer rejected');
     await selected(page); await active(page);
-    await page.evaluate(() => bw.setTransport('websocket'));
+    await page.evaluate(() => elsewhere.setTransport('websocket'));
     await page.evaluate(() => { rtcTest.lastVideo = null; }); await keyframe(page);
     await page.waitForFunction(() => rtcTest.lastVideo !== null);
     assert.equal(await page.evaluate(() => {
@@ -197,40 +197,40 @@ try {
     }), 0, 'duplicate frames never reach the decoder');
 
     // Selecting WebSocket during gathering cancels a late offer and all retries.
-    await page.evaluate(() => { rtcTest.holdOffers = true; bw.setTransport('webrtc'); });
+    await page.evaluate(() => { rtcTest.holdOffers = true; elsewhere.setTransport('webrtc'); });
     await page.waitForFunction(() => rtcTest.held.length > 0);
     const offers = await page.evaluate(() => rtcTest.offers.length);
-    await page.evaluate(() => { bw.setTransport('websocket'); rtcTest.holdOffers = false; rtcTest.held.splice(0).forEach(resolve => resolve()); });
+    await page.evaluate(() => { elsewhere.setTransport('websocket'); rtcTest.holdOffers = false; rtcTest.held.splice(0).forEach(resolve => resolve()); });
     await page.waitForTimeout(250);
     assert.equal(await page.evaluate(() => rtcTest.offers.length), offers);
     assert(await page.evaluate(() => rtcTest.peers.every(p => p.connectionState === 'closed')));
     console.log(`${page === main ? 'desktop' : 'window'} offer/close/stall/loss recovery, idle health, late signaling and cancellation passed`);
   }
 
-  await main.evaluate(() => bw.spawn("foot --app-id=rtc-static sh -c 'printf static; sleep 1000'"));
-  await main.waitForFunction(() => bw.store.get().windows.some(w => w.app_id === 'rtc-static'));
-  const staticId = await main.evaluate(() => bw.store.get().windows.find(w => w.app_id === 'rtc-static').id);
+  await main.evaluate(() => elsewhere.spawn("foot --app-id=rtc-static sh -c 'printf static; sleep 1000'"));
+  await main.waitForFunction(() => elsewhere.store.get().windows.some(w => w.app_id === 'rtc-static'));
+  const staticId = await main.evaluate(() => elsewhere.store.get().windows.find(w => w.app_id === 'rtc-static').id);
   const staticWindow = await connect(staticId);
   for (const page of [main, staticWindow]) {
-    await page.evaluate(() => { rtcTest.hideOpen = true; rtcTest.rtcFrames = 0; bw.setTransport('webrtc'); });
+    await page.evaluate(() => { rtcTest.hideOpen = true; rtcTest.rtcFrames = 0; elsewhere.setTransport('webrtc'); });
     await page.waitForFunction(() => rtcTest.channel.readyState === 'open');
     await keyframe(page);
     await page.waitForFunction(() => rtcTest.rtcFrames > 0);
-    assert.equal(await page.evaluate(() => bw.store.get().videoVia), 'websocket');
+    assert.equal(await page.evaluate(() => elsewhere.store.get().videoVia), 'websocket');
     await page.waitForTimeout(1500);
     const before = await page.evaluate(() => rtcTest.socketFrames);
     await page.waitForTimeout(500);
     assert.equal(await page.evaluate(() => rtcTest.socketFrames), before, 'server claimed the static picture while browser still waited for open');
-    await page.evaluate(() => { rtcTest.socketFrames = 0; bw.setTransport('websocket'); rtcTest.hideOpen = false; });
-    await page.waitForFunction(() => rtcTest.socketFrames > 0 && !bw().awaitingKey);
+    await page.evaluate(() => { rtcTest.socketFrames = 0; elsewhere.setTransport('websocket'); rtcTest.hideOpen = false; });
+    await page.waitForFunction(() => rtcTest.socketFrames > 0 && !elsewhere().awaitingKey);
   }
   await staticWindow.context().close();
-  await main.evaluate(id => bw.control({ id, op: 'close' }), staticId);
+  await main.evaluate(id => elsewhere.control({ id, op: 'close' }), staticId);
   console.log('pending browser attempts with server claims refresh static desktop/window pictures on close');
 
   // Block only this rig server's UDP port; socket input/video/signaling stay usable.
   block();
-  await main.evaluate(() => bw.setTransport('webrtc'));
+  await main.evaluate(() => elsewhere.setTransport('webrtc'));
   await waiting(main); await selected(main);
   await socketPaths(main);
   await main.evaluate(() => { rtcTest.socketFrames = 0; }); await keyframe(main);
@@ -238,35 +238,35 @@ try {
   const before = await main.evaluate(() => rtcTest.peers.length);
   await main.waitForFunction(n => rtcTest.peers.length > n, before);
   await waiting(main);
-  assert.equal(await popup.evaluate(() => bw.store.get().transport), 'websocket');
+  assert.equal(await popup.evaluate(() => elsewhere.store.get().transport), 'websocket');
   unblock();
   await active(main); await keyframe(main);
-  assert.equal(await main.evaluate(() => bw.store.get().status), 'connected');
+  assert.equal(await main.evaluate(() => elsewhere.store.get().status), 'connected');
   await selected(main);
   console.log('real UDP block preserved socket video and automatic recovery after unblocking passed');
 
-  await main.evaluate(() => bw.spawn("foot --app-id=rtc-motion sh -c 'while :; do date +%s%N; sleep .02; done'"));
-  await main.waitForFunction(() => bw.store.get().windows.some(w => w.app_id === 'rtc-motion'));
-  const motion = await main.evaluate(() => bw.store.get().windows.find(w => w.app_id === 'rtc-motion').id);
+  await main.evaluate(() => elsewhere.spawn("foot --app-id=rtc-motion sh -c 'while :; do date +%s%N; sleep .02; done'"));
+  await main.waitForFunction(() => elsewhere.store.get().windows.some(w => w.app_id === 'rtc-motion'));
+  const motion = await main.evaluate(() => elsewhere.store.get().windows.find(w => w.app_id === 'rtc-motion').id);
   await main.waitForTimeout(500);
   const statesBeforeStall = await main.evaluate(() => rtcTest.states.length);
   block();
   await main.waitForFunction(n => rtcTest.states.slice(n).some(r => r.reason === 'Server queue stalled'), statesBeforeStall);
   unblock(); await active(main);
-  await main.evaluate(id => bw.control({ id, op: 'close' }), motion);
+  await main.evaluate(id => elsewhere.control({ id, op: 'close' }), motion);
   console.log('real blocked-UDP server queue stall and recovery passed');
 
   // A new socket retries with fresh capabilities; callbacks from the old socket are inert.
   await main.evaluate(() => { rtcTest.oldSocket = rtcTest.socket; rtcTest.oldClose = rtcTest.socket.onclose; rtcTest.oldMessage = rtcTest.socket.onmessage; rtcTest.socket.close(); });
-  await main.waitForFunction(() => rtcTest.socket !== rtcTest.oldSocket && bw.store.get().status === 'connected');
+  await main.waitForFunction(() => rtcTest.socket !== rtcTest.oldSocket && elsewhere.store.get().status === 'connected');
   await active(main);
   await main.evaluate(() => { rtcTest.oldClose({ code: 4001, reason: 'late auth failure' }); rtcTest.oldMessage({ data: new Uint8Array([0x0d, ...new TextEncoder().encode(JSON.stringify({ close: true, g: rtcTest.offers.at(-1) }))]).buffer }); });
-  assert.equal(await main.evaluate(() => bw.store.get().rtcRecovery.state), 'active');
-  await main.evaluate(async () => { await bw.mic.start(); await bw.cam.start(); });
+  assert.equal(await main.evaluate(() => elsewhere.store.get().rtcRecovery.state), 'active');
+  await main.evaluate(async () => { await elsewhere.mic.start(); await elsewhere.cam.start(); });
   assert(await main.evaluate(() => rtcTest.tracks.length >= 2 && rtcTest.tracks.every(t => t.readyState === 'live')));
-  await main.evaluate(() => bw.dispose());
+  await main.evaluate(() => elsewhere.dispose());
   assert(await main.evaluate(() => rtcTest.tracks.every(t => t.readyState === 'ended')));
-  assert.deepEqual(await main.evaluate(() => [bw.store.get().mic, bw.store.get().cam, bw.store.get().playback]), [false, false, null]);
+  assert.deepEqual(await main.evaluate(() => [elsewhere.store.get().mic, elsewhere.store.get().cam, elsewhere.store.get().playback]), [false, false, null]);
   const disposed = await main.evaluate(() => rtcTest.peers.length);
   await main.waitForTimeout(1500);
   assert.equal(await main.evaluate(() => rtcTest.peers.length), disposed);
@@ -278,17 +278,17 @@ try {
   });
   await congestion.waitForFunction(() => rtcTest.reports.length >= 2);
   const reportCount = await congestion.evaluate(() => rtcTest.reports.length);
-  await congestion.evaluate(() => { rtcTest.shiftMs = 500; rtcTest.failOffers = 100; bw.setTransport('webrtc'); });
+  await congestion.evaluate(() => { rtcTest.shiftMs = 500; rtcTest.failOffers = 100; elsewhere.setTransport('webrtc'); });
   await congestion.waitForFunction(n => rtcTest.reports.slice(n).some(delay => delay > 300), reportCount);
-  await congestion.evaluate(() => { clearInterval(rtcTest.frameTimer); bw.setTransport('websocket'); });
+  await congestion.evaluate(() => { clearInterval(rtcTest.frameTimer); elsewhere.setTransport('websocket'); });
   await congestion.context().close();
   console.log('failed attempts preserve the socket congestion baseline');
   const bounded = await connect();
   await bounded.clock.install();
   const initialKeyframes = await bounded.evaluate(() => rtcTest.sent.filter(t => t === 0x88).length);
-  await bounded.evaluate(() => { rtcTest.failOffers = 100; bw.setTransport('webrtc'); });
+  await bounded.evaluate(() => { rtcTest.failOffers = 100; elsewhere.setTransport('webrtc'); });
   for (let i = 0; i < 8; i++) {
-    await bounded.waitForFunction(n => rtcTest.peers.length === n && bw.store.get().rtcRecovery.state === 'waiting', i + 1);
+    await bounded.waitForFunction(n => rtcTest.peers.length === n && elsewhere.store.get().rtcRecovery.state === 'waiting', i + 1);
     const delay = await bounded.evaluate(() => { const r = rtcTest.states.at(-1); return r.nextAt - r.at; });
     const ceiling = Math.min(30000, 1000 * 2 ** i);
     assert(delay >= ceiling * 0.8 - 5 && delay <= ceiling + 5, `retry ${i}: ${delay} ms`);
@@ -296,31 +296,31 @@ try {
     if (i < 7) await bounded.clock.fastForward(delay + 50);
   }
   assert.equal(await bounded.evaluate(() => rtcTest.sent.filter(t => t === 0x88).length), initialKeyframes, 'unclaimed failed attempts do not request keyframes');
-  await bounded.evaluate(() => bw.setTransport('websocket'));
+  await bounded.evaluate(() => elsewhere.setTransport('websocket'));
   await bounded.clock.fastForward(60000);
   assert.equal(await bounded.evaluate(() => rtcTest.peers.length), 8);
-  await bounded.evaluate(() => { rtcTest.failOffers = 0; rtcTest.holdOffers = true; bw.setTransport('webrtc'); });
+  await bounded.evaluate(() => { rtcTest.failOffers = 0; rtcTest.holdOffers = true; elsewhere.setTransport('webrtc'); });
   await bounded.waitForFunction(() => rtcTest.held.length === 1);
   await bounded.clock.fastForward(10050);
   await waiting(bounded);
-  assert.equal(await bounded.evaluate(() => bw.store.get().rtcRecovery.reason), 'Connection attempt timed out');
-  await bounded.evaluate(() => { bw.setTransport('websocket'); rtcTest.held.splice(0).forEach(resolve => resolve()); });
+  assert.equal(await bounded.evaluate(() => elsewhere.store.get().rtcRecovery.reason), 'Connection attempt timed out');
+  await bounded.evaluate(() => { elsewhere.setTransport('websocket'); rtcTest.held.splice(0).forEach(resolve => resolve()); });
   assert.equal(await bounded.evaluate(() => rtcTest.offers.length), 0);
-  await bounded.evaluate(() => { window.RTCPeerConnection = undefined; bw.setTransport('webrtc'); });
-  assert.equal(await bounded.evaluate(() => bw.store.get().rtcRecovery.state), 'unavailable');
+  await bounded.evaluate(() => { window.RTCPeerConnection = undefined; elsewhere.setTransport('webrtc'); });
+  assert.equal(await bounded.evaluate(() => elsewhere.store.get().rtcRecovery.state), 'unavailable');
   await bounded.clock.fastForward(60000);
   assert.equal(await bounded.evaluate(() => rtcTest.peers.length), 9);
-  assert.equal(await bounded.evaluate(() => localStorage.getItem('bw.transport')), 'webrtc');
+  assert.equal(await bounded.evaluate(() => localStorage.getItem('elsewhere.transport')), 'webrtc');
   await bounded.context().close();
-  await popup.evaluate(() => { rtcTest.holdOffers = true; bw.setTransport('webrtc'); });
-  await popup.waitForFunction(() => bw.store.get().rtcRecovery.state === 'connecting');
-  await popup.evaluate(id => bw.control({ id, op: 'close' }), id);
-  await popup.waitForFunction(() => bw.store.get().status === 'gone');
+  await popup.evaluate(() => { rtcTest.holdOffers = true; elsewhere.setTransport('webrtc'); });
+  await popup.waitForFunction(() => elsewhere.store.get().rtcRecovery.state === 'connecting');
+  await popup.evaluate(id => elsewhere.control({ id, op: 'close' }), id);
+  await popup.waitForFunction(() => elsewhere.store.get().status === 'gone');
   assert(await popup.evaluate(() => rtcTest.peers.every(p => p.connectionState === 'closed')));
   const revoked = await connect();
-  await revoked.evaluate(() => { rtcTest.holdOffers = true; bw.setTransport('webrtc'); });
+  await revoked.evaluate(() => { rtcTest.holdOffers = true; elsewhere.setTransport('webrtc'); });
   await fetch(origin + '/api/token/rotate', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
-  await revoked.waitForFunction(() => bw.store.get().status === 'unauthorized');
+  await revoked.waitForFunction(() => elsewhere.store.get().status === 'unauthorized');
   const revokedCount = await revoked.evaluate(() => rtcTest.peers.length);
   await revoked.waitForTimeout(1500);
   assert.equal(await revoked.evaluate(() => rtcTest.peers.length), revokedCount);
@@ -332,7 +332,7 @@ try {
   console.log('socket replacement, stale callbacks and viewer disposal passed');
 } catch (error) {
   console.error(error);
-  await writeFile('/tmp/bw40-recovery-server-failure.log', await readFile(root + '/desktop.log'));
+  await writeFile('/tmp/elsewhere40-recovery-server-failure.log', await readFile(root + '/desktop.log'));
   throw error;
 } finally {
   unblock(); iptables('-D', 'OUTPUT', '-p', 'udp', '--dport', '8089', '-j', chain); iptables('-X', chain);

@@ -161,7 +161,7 @@ PNG with `spawn_blocking`, and answers `image/png` with `Cache-Control: no-store
 
 ## Decorations
 
-`decor.rs`. A title bar (32 logical px, the layout in `bw_core::decoration` so the server agrees on
+`decor.rs`. A title bar (32 logical px, the layout in `elsewhere_core::decoration` so the server agrees on
 it) above windows that don't draw their own: X11 windows without the Motif "no decorations" hint,
 Wayland toplevels that asked for server-side decorations through xdg-decoration (libdecor apps do) or
 never said anything; GTK, Qt, Firefox and Chromium say they draw their own, GTK and Firefox through
@@ -199,7 +199,7 @@ target an element instead of interpreting a screenshot; the feature is named for
 the mechanism.
 
 - **Bus.** `AT_SPI_BUS_ADDRESS`, else the session bus (`org.a11y.Bus.GetAddress`) of the D-Bus session
-  browser-wayland runs in. Nothing is launched: without a session the route answers `503`, and the
+  Elsewhere runs in. Nothing is launched: without a session the route answers `503`, and the
   container's start script already wraps everything in `dbus-run-session`. Hand-declared `zbus` proxies
   for the four interfaces used (`Accessible`, `Component`, `Application`, the launcher), property caching
   off so that hundreds of short-lived proxies don't each subscribe to signals.
@@ -238,7 +238,7 @@ the mechanism.
   Both variables are added to the `--exec` environment when the flag is on, and they propagate to
   everything a panel launches. Chromium registers only an empty toplevel unless started with
   `--force-renderer-accessibility` (the bus's screen-reader flag does nothing for it), so that stays a
-  documented requirement rather than something browser-wayland tries to inject (the Docker image sets
+  documented requirement rather than something Elsewhere tries to inject (the Docker image sets
   it in Chromium's flags file).
 
 ## Files
@@ -407,7 +407,7 @@ session's peer connection over one UDP socket per local address, and fragments f
 channel messages; `Hub::is_open` says whether a session's channel is up; window sessions use the same
 hub under keys with the top bit set); a channel that closes, a `{"close": true}`, or the session's end
 drops the peer. The controller's `Mic` packets
-go to `Config::mic`, the channel `bw-stream`'s `audio_sink` plays into the microphone sink (`bw`
+go to `Config::mic`, the channel `elsewhere-stream`'s `audio_sink` plays into the microphone sink (`elsewhere`
 creates the sink and the remapped source next to the audio sink), and its `Cam` frames to `Config::cam`,
 which `video_sink` decodes (VP8) and scales to 720p YUY2 for the `--webcam` loopback device (which keeps
 the first format it is given); a session whose frame didn't fit the channel sends nothing more until a
@@ -431,7 +431,7 @@ session's senders, which ends them with `4001`.
 
 `window_stream.rs`. `Command::WindowStream { key, window, sink }` starts (or, with no sink, stops) one
 stream: a `WindowStream` holds the window, a dmabuf swapchain and damage tracker of its own, and the
-encoder sink the server made for it (`SinkFactory` in `bw-server`, a `GstSink` per stream). After every
+encoder sink the server made for it (`SinkFactory` in `elsewhere-server`, a `GstSink` per stream). After every
 output frame, `render_window_streams` renders each streamed window's elements (popups too, within the
 geometry) with the geometry's corner at the origin, at the output's scale, into its swapchain, and
 submits the frame only if its damage tracker saw a change, so an idle window costs nothing; a size
@@ -503,7 +503,7 @@ a window between monitors. Pointer-lock failure notices are exercised with error
 
 Chromium's clipboard-event check delivered text to the remote clipboard. In Firefox's headed native
 Ctrl+Shift+V check, no paste event reached the focused canvas and remote clipboard text stayed empty,
-both in the normal viewer and PiP. This is tracked in [#61](https://github.com/ryanpetris/browser-wayland/issues/61).
+both in the normal viewer and PiP. This is tracked in [#61](https://github.com/ryanpetris/elsewhere/issues/61).
 Copied-file download controls and microphone/camera controls remain in the normal viewer; Return takes
 you there. Pointer capture has an indicator and reports failure, but PiP cannot capture fullscreen
 browser shortcuts. The checks live in `web/checks/picture-in-picture.mjs` and
@@ -599,8 +599,8 @@ read it with `useSyncExternalStore` and send actions back through the engine.
   (`501`, `503`, or the `level`).
 - **Banners** on the stage: reconnecting, a window stream whose window is gone; a modal asks for the
   token when there is none or it was rejected.
-- `window.bw()` returns the numbers; `bw.windows()`, `bw.control()`, `bw.activate()`, `bw.spawn()`,
-  `bw.snapshot()`, `bw.elements()` and `bw.clipboard.read()/write()` act on the desktop.
+- `window.elsewhere()` returns the numbers; `elsewhere.windows()`, `elsewhere.control()`, `elsewhere.activate()`, `elsewhere.spawn()`,
+  `elsewhere.snapshot()`, `elsewhere.elements()` and `elsewhere.clipboard.read()/write()` act on the desktop.
 
 ## Security model
 

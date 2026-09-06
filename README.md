@@ -1,4 +1,4 @@
-# browser-wayland
+# Elsewhere
 
 A headless Wayland compositor whose screen is a browser tab. Clients render on the GPU, the
 composited frame is hardware-encoded with VA-API (AV1, HEVC, VP9 or H.264, whichever the browser
@@ -14,7 +14,7 @@ Releases (made from `vX.Y.Z` tags; the tag is the version) carry a Debian packag
 stable that also installs on Ubuntu 24.04 and later, an Arch package, and a tarball with the binary.
 Building from source needs Rust stable, Node 24 (for the viewer) and the development packages for
 GStreamer (core and base), libgbm, libEGL and libxkbcommon; `make` builds the viewer and then
-`target/release/browser-wayland`, which reports `0.0.0-dev` unless `BW_VERSION` is set. The Arch
+`target/release/elsewhere`, which reports `0.0.0-dev` unless `ELSEWHERE_VERSION` is set. The Arch
 `PKGBUILD` is in `packaging/arch`.
 
 ## Requirements
@@ -90,7 +90,7 @@ separately, use the connection variables printed in the log. See [session audio]
 for the device names, environment and lifecycle.
 
 The browser's webcam works the same way through a `v4l2loopback` device, the one kind of camera every
-application understands: on the host, `modprobe v4l2loopback exclusive_caps=1 card_label=browser-wayland`
+application understands: on the host, `modprobe v4l2loopback exclusive_caps=1 card_label=elsewhere`
 (the package is `v4l2loopback-dkms` on most distributions) and start the server with `--webcam
 /dev/videoN` (the device it made; in Docker add `--device /dev/videoN --group-add $(stat -c %g /dev/videoN)`
 to `docker run`). The camera button in the status bar then sends the webcam as VP8, scaled to 720p, to
@@ -99,7 +99,7 @@ advertises only video output until it receives frames. Turn the browser camera o
 call so the application can discover it.
 In the Docker image, the guvcview menu entry uses the device selected by `--webcam`. Enable the
 browser camera before launching guvcview. If it was opened early, close it and relaunch after enabling
-the camera. Applications launched by the compositor receive the configured device in `BW_WEBCAM_DEVICE`.
+the camera. Applications launched by the compositor receive the configured device in `ELSEWHERE_WEBCAM_DEVICE`.
 Without `--webcam` (or if the device can't be opened, which the log says) there is no button.
 
 `--exec` runs at startup with the environment of a Wayland session (`XDG_SESSION_TYPE`, the toolkits'
@@ -111,10 +111,10 @@ cargo run --release -- --kiosk --exec 'dbus-run-session -- gnome-shell --devkit'
 ```
 
 Applications launched by the desktop inherit `GSK_RENDERER` and `QT_QPA_PLATFORM` from the
-browser-wayland process. Set them in its launcher environment when needed:
+Elsewhere process. Set them in its launcher environment when needed:
 
 ```sh
-GSK_RENDERER=ngl QT_QPA_PLATFORM='wayland;xcb' browser-wayland
+GSK_RENDERER=ngl QT_QPA_PLATFORM='wayland;xcb' elsewhere
 ```
 
 `GSK_RENDERER=ngl` selects GTK's GL renderer to work around intermittent thin dark triangles
@@ -147,9 +147,9 @@ a desktop that sets it, minimize and maximize are missing until you do:
 gsettings set org.gnome.desktop.wm.preferences button-layout 'menu:minimize,maximize,close'
 ```
 
-The `Dockerfile` packages all of that on Arch Linux: browser-wayland, the Xfce panel and apps,
+The `Dockerfile` packages all of that on Arch Linux: Elsewhere, the Xfce panel and apps,
 Firefox and Chromium, applications for what the desktop can do (guvcview for the webcam, Audacity, GIMP,
-mpv with VA-API decode, Ristretto, pavucontrol), nano and a passwordless sudo for the `bw` user, with PipeWire for audio and
+mpv with VA-API decode, Ristretto, pavucontrol), nano and a passwordless sudo for the `elsewhere` user, with PipeWire for audio and
 Mesa's OpenGL and Vulkan drivers for Intel and AMD (`glxgears`, `vkcube` and the info tools are included
 to check them), and the two GTK settings above. Programs launched from the desktop start in the home folder.
 The desktop starts empty; the viewer's menu launches the applications, and `--exec xfce4-panel` after
@@ -214,7 +214,7 @@ For browsers behind a strict NAT give them a STUN server (`--stun stun:host:3478
 
 ```sh
 docker run -d --name turn -p 3478:3478/udp -p 3478:3478 -p 49160-49200:49160-49200/udp coturn/coturn \
-  -n --lt-cred-mech --user=USER:PASS --realm=browser-wayland --listening-port=3478 \
+  -n --lt-cred-mech --user=USER:PASS --realm=elsewhere --listening-port=3478 \
   --min-port=49160 --max-port=49200 --relay-ip=<the address the server reaches it at>
 ```
 
@@ -243,7 +243,7 @@ token, including the API; read-only viewers have no Files tab or file download c
 Drag a file over the desktop itself and the application under the pointer sees a drag coming; let go and,
 once the file is uploaded, it is dropped there as a `file://` URI, to copy or to move. Since the
 application picks the folder, such a file is not uploaded to Downloads but staged under the cache
-directory (`~/.cache/browser-wayland/drops`, a folder with a random name per drop): Thunar moves it out into
+directory (`~/.cache/elsewhere/drops`, a folder with a random name per drop): Thunar moves it out into
 the folder shown, Nautilus copies, an editor opens it where it is, and whatever is left there is swept after
 a day (an editor still showing the file loses it then).
 A drop no application took is copied to the transfer folder. The result shows saved names and offers
@@ -297,7 +297,7 @@ gets `403` for everything that acts. `POST /api/token/rotate` (with the control 
 tokens: the files, the API and every viewer switch at once and the server prints the new URLs.
 
 ```sh
-T=$(cat ~/.config/browser-wayland/token)
+T=$(cat ~/.config/elsewhere/token)
 curl -s -H "Authorization: Bearer $T" http://host:8443/api/windows | jq        # the window list
 curl -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
      http://host:8443/api/control -d '{"id":3,"op":"minimize"}'                # act on a window
@@ -318,7 +318,7 @@ application draws its own), its stacking index `z` (`null` while minimized), `ma
 `unmaximize`, `fullscreen`, `unfullscreen`, `move` (`x`, `y`), `resize` (`w`, `h`), `spawn` (`cmd`, run
 with `sh -c` in the same environment as `--exec`), `launch` (`app`, an id from `GET /api/applications`,
 the installed `.desktop` launchers, whose icons are at `/api/applications/{id}/icon`) and `quit`, which
-ends browser-wayland. Requests are fire-and-forget; unknown ids are ignored.
+ends Elsewhere. Requests are fire-and-forget; unknown ids are ignored.
 Snapshots are lossless PNGs of a window's own buffers, so they include covered and minimized windows.
 Omitted sizing returns native dimensions. Supply one of `width`, `height`, or
 `percentage`; see [sizing limits](docs/desktop-api.md#screenshot-sizing).
@@ -326,7 +326,7 @@ Omitted sizing returns native dimensions. Supply one of `width`, `height`, or
 With `--elements`, `/api/windows/{id}/elements` lists a window's UI elements (buttons, links, text fields,
 tabs, menu items, …) with role, name and rectangle relative to the window, so a script or an agent can
 target a control instead of interpreting pixels. It reads the toolkits' accessibility trees over the D-Bus
-session browser-wayland was started in (`dbus-run-session -- browser-wayland --elements …` if there is
+session Elsewhere was started in (`dbus-run-session -- elsewhere --elements …` if there is
 none; the container does this). GTK and Qt applications and Firefox publish their trees when started from
 `--exec` or `spawn`; Chromium and Electron apps need `--force-renderer-accessibility`. Without the flag
 the route answers `501`; `503` means the tree couldn't be read (no bus, or the application went away).
@@ -345,11 +345,11 @@ drive the desktop: `windows`, `elements`, `snapshot`, `screenshot`, `window_cont
 `type`, `clipboard_read`, `clipboard_write`.
 
 ```sh
-claude mcp add --transport http bw https://host:8443/mcp --header "Authorization: Bearer $T"
-BW_TOKEN=$T codex mcp add bw --url https://host:8443/mcp --bearer-token-env-var BW_TOKEN
+claude mcp add --transport http elsewhere https://host:8443/mcp --header "Authorization: Bearer $T"
+ELSEWHERE_TOKEN=$T codex mcp add elsewhere --url https://host:8443/mcp --bearer-token-env-var ELSEWHERE_TOKEN
 ```
 
-The server hands the agent its manual on connection (`skills/browser-wayland/SKILL.md`) and the
+The server hands the agent its manual on connection (`skills/elsewhere/SKILL.md`) and the
 generated `reference.md` with every route, body and tool schema; both are also served at `/skill/`
 without a token and can be copied into an agent's skills directory. With a self-signed certificate,
 point the agent at the fingerprint the server prints, or run `--no-tls` behind a reverse proxy.
@@ -361,10 +361,10 @@ forward, type in the box at the top to run a command), its Statistics tab shows 
 (per-stage timings, drops, audio lead) once a second. **Settings → Overlays** in the top bar controls
 local coloured window outlines and the focused window's accessibility-element outlines. Both apply
 immediately and are remembered. UI elements requires server accessibility support (`--elements`).
-The power menu quits browser-wayland. Desktop notifications appear as toasts with their actions;
-browser-wayland is the session's notification daemon when no other runs. A panel is optional. In the browser console,
-`bw.windows()`, `bw.activate(id)`, `bw.control({...})`, `bw.spawn(cmd)`, `bw.snapshot(id)` and
-`bw.elements(id)` do the same.
+The power menu quits Elsewhere. Desktop notifications appear as toasts with their actions;
+Elsewhere is the session's notification daemon when no other runs. A panel is optional. In the browser console,
+`elsewhere.windows()`, `elsewhere.activate(id)`, `elsewhere.control({...})`, `elsewhere.spawn(cmd)`, `elsewhere.snapshot(id)` and
+`elsewhere.elements(id)` do the same.
 
 The viewer lives in `web/` (React, Tailwind CSS, Vite) and is built into `web/dist`, which the binary
 embeds at compile time; `make` builds the viewer (Node 24) and then the binary, `make web` only the
@@ -382,7 +382,7 @@ lists them all.
 Games and other clients that lock the pointer get raw mouse deltas: the page mirrors the lock with the
 Pointer Lock API; Escape releases it.
 
-Certificate and tokens live in `$XDG_CONFIG_HOME/browser-wayland/`; delete them to regenerate.
+Certificate and tokens live in `$XDG_CONFIG_HOME/elsewhere/`; delete them to regenerate.
 
 The [session audio visualiser](docs/audio-visualiser.md) loads when opened.
 The About dialog links to license notices and the source repository.
@@ -390,8 +390,8 @@ The About dialog links to license notices and the source repository.
 ## Source code
 
 Source and build instructions are available in the
-[GitHub repository](https://github.com/ryanpetris/browser-wayland).
-For a release, run `browser-wayland --version` and check out the matching
+[GitHub repository](https://github.com/ryanpetris/elsewhere).
+For a release, run `elsewhere --version` and check out the matching
 `vX.Y.Z` tag. For a development or modified build, use the revision and any local
 changes supplied by its distributor; the current default branch may differ.
 

@@ -12,7 +12,7 @@ const waitFor = async predicate => {
 const viewers = [];
 try {
   for (const [index, home] of process.argv.slice(2).entries()) {
-    const token = (await readFile(home + '/config/browser-wayland/token', 'utf8')).trim();
+    const token = (await readFile(home + '/config/elsewhere/token', 'utf8')).trim();
     const socket = new WebSocket(`ws://127.0.0.1:${8090 + index}/ws`);
     socket.binaryType = 'arraybuffer';
     const viewer = { socket, state: null, error: '' };

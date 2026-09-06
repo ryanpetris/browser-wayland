@@ -1,6 +1,6 @@
 // The streaming engine: WebSocket, WebCodecs decode onto the canvas, input, clipboard, audio.
 // React only draws the chrome around it (App.jsx) and reads what it publishes on `store`.
-// Wire format mirrors crates/bw-server/src/protocol.rs.
+// Wire format mirrors crates/elsewhere-server/src/protocol.rs.
 import { createPip } from './pip.js';
 import { KEYCODES } from './keycodes.js';
 import { TOKEN, WINDOW, PIP, api, elementsOf, snapshot, control, uploadFile, clipboardFiles, pref, codecs as serverCodecs } from './api.js';
@@ -200,7 +200,7 @@ export function createViewer() {
       reconnectTimer = setTimeout(() => { if (ws === socket) connect(); }, 1000);
     };
   }
-  function forgetToken() { try { sessionStorage.removeItem('bw.token'); } catch {} }
+  function forgetToken() { try { sessionStorage.removeItem('elsewhere.token'); } catch {} }
 
   function send(type, size, fill) {
     if (ws?.readyState !== WebSocket.OPEN) return;
@@ -463,7 +463,7 @@ export function createViewer() {
         break;
       }
       case VIDEO: {
-        if (dropNext) { dropNext = false; return; } // debug: bw.dropNext() simulates a lost message
+        if (dropNext) { dropNext = false; return; } // debug: elsewhere.dropNext() simulates a lost message
         if (!decoder) return;
         received++;
         const key = (dv.getUint8(1) & 1) !== 0, seq = dv.getUint16(2, true), pts = Number(dv.getBigUint64(4, true)), now = performance.now();
@@ -1219,7 +1219,7 @@ export function createViewer() {
     uploadFiles,
     cancelUpload: () => uploadAbort?.abort(),
     openFiles(path) {
-      if (PIP && window.parent.bwOpenFiles) return window.parent.bwOpenFiles(path);
+      if (PIP && window.parent.elsewhereOpenFiles) return window.parent.elsewhereOpenFiles(path);
       store.set({ filesPath: path, filesOpen: state().filesOpen + 1 });
     },
     // a click ('default'), an action key, or nothing to dismiss; a session that can't act only hides it for itself
@@ -1232,8 +1232,8 @@ export function createViewer() {
     dropNext: () => { dropNext = true; },
   };
   viewer.pip = createPip(viewer);
-  // Console helpers, as documented: bw() for the numbers, bw.windows() and friends for the desktop.
-  window.bw = () => ({ ...state().stats, stream, renderer: state().renderer, awaitingKey, locked: !!document.pointerLockElement, decoder: decoder?.state, clipboardText: state().clipboardText, videoSeq, audioSeq });
-  Object.assign(window.bw, viewer);
+  // Console helpers, as documented: elsewhere() for the numbers, elsewhere.windows() and friends for the desktop.
+  window.elsewhere = () => ({ ...state().stats, stream, renderer: state().renderer, awaitingKey, locked: !!document.pointerLockElement, decoder: decoder?.state, clipboardText: state().clipboardText, videoSeq, audioSeq });
+  Object.assign(window.elsewhere, viewer);
   return viewer;
 }

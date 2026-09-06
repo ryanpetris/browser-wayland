@@ -5,13 +5,13 @@ export const TOKEN = (() => {
   const url = new URL(location);
   const t = new URLSearchParams(url.hash.slice(1)).get('token');
   if (t) {
-    try { sessionStorage.setItem('bw.token', t); } catch {}
+    try { sessionStorage.setItem('elsewhere.token', t); } catch {}
     url.hash = '';
   }
   url.searchParams.delete('token');
   try { history.replaceState(null, '', url); } catch {}
   if (t) return t;
-  try { return sessionStorage.getItem('bw.token') ?? ''; } catch { return ''; }
+  try { return sessionStorage.getItem('elsewhere.token') ?? ''; } catch { return ''; }
 })();
 
 /// `?window=ID`: this tab shows one application window as its own stream.
@@ -19,7 +19,7 @@ export const WINDOW = new URLSearchParams(location.search).get('window');
 
 // Compact viewer hosted in our same-origin Document PiP iframe.
 export const PIP = (() => {
-  try { return window !== window.parent && typeof window.parent.bwReturn === 'function' && new URLSearchParams(location.search).has('pip'); }
+  try { return window !== window.parent && typeof window.parent.elsewhereReturn === 'function' && new URLSearchParams(location.search).has('pip'); }
   catch { return false; }
 })();
 
@@ -84,9 +84,9 @@ export const queueSnapshot = run => (queue = queue.then(run, run));
 
 /// A remembered UI preference.
 export const pref = {
-  get: (key, fallback) => { try { const v = localStorage.getItem(`bw.${key}`); return v === null ? fallback : v === '1'; } catch { return fallback; } },
-  set: (key, on) => { try { localStorage.setItem(`bw.${key}`, on ? '1' : '0'); } catch {} },
-  getStr: (key, fallback) => { try { return localStorage.getItem(`bw.${key}`) ?? fallback; } catch { return fallback; } },
-  setStr: (key, v) => { try { localStorage.setItem(`bw.${key}`, v); } catch {} },
+  get: (key, fallback) => { try { const v = localStorage.getItem(`elsewhere.${key}`); return v === null ? fallback : v === '1'; } catch { return fallback; } },
+  set: (key, on) => { try { localStorage.setItem(`elsewhere.${key}`, on ? '1' : '0'); } catch {} },
+  getStr: (key, fallback) => { try { return localStorage.getItem(`elsewhere.${key}`) ?? fallback; } catch { return fallback; } },
+  setStr: (key, v) => { try { localStorage.setItem(`elsewhere.${key}`, v); } catch {} },
 };
 export const codecs = async () => (await api('/api/codecs')).json();

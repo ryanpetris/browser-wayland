@@ -47,16 +47,16 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   const url = `http://127.0.0.1:${server.address().port}/#token=test`;
   const ready = async () => {
-    await page.waitForFunction(() => !!window.bw?.store);
-    await page.evaluate(() => { bw.store.set({ status: 'connected', role: 'controller', stream: { codec: 'vp8', width: 900, height: 600, scale: 1 } }); windowsFrame(); });
+    await page.waitForFunction(() => !!window.elsewhere?.store);
+    await page.evaluate(() => { elsewhere.store.set({ status: 'connected', role: 'controller', stream: { codec: 'vp8', width: 900, height: 600, scale: 1 } }); windowsFrame(); });
   };
   await page.goto(url.replace('#token=test', '?token=test'));
-  await page.waitForFunction(() => bw.store.get().status === 'no-token');
-  assert.equal(await page.evaluate(() => sessionStorage.getItem('bw.token')), null);
+  await page.waitForFunction(() => elsewhere.store.get().status === 'no-token');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('elsewhere.token')), null);
   assert.equal(new URL(page.url()).search, '');
   assert.equal(await page.evaluate(() => sent.length), 0);
   await page.goto(url.replace('/#', '/?token=ignored#')); await ready();
-  assert.equal(await page.evaluate(() => sessionStorage.getItem('bw.token')), 'test');
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('elsewhere.token')), 'test');
   assert.equal(new URL(page.url()).search + new URL(page.url()).hash, '');
   const trigger = page.getByRole('button', { name: 'Settings', exact: true });
   const panel = page.getByRole('dialog', { name: 'Settings', exact: true });
@@ -74,9 +74,9 @@ try {
   await borders.press('Tab');
   assert(await elements.evaluate(el => el === document.activeElement));
   await elements.press('Space');
-  await page.waitForFunction(() => bw.store.get().elements?.status === 200 && document.querySelectorAll('.box-border').length === 2);
-  assert.equal(await page.evaluate(() => localStorage.getItem('bw.borders')), '1');
-  assert.equal(await page.evaluate(() => localStorage.getItem('bw.elements')), '1');
+  await page.waitForFunction(() => elsewhere.store.get().elements?.status === 200 && document.querySelectorAll('.box-border').length === 2);
+  assert.equal(await page.evaluate(() => localStorage.getItem('elsewhere.borders')), '1');
+  assert.equal(await page.evaluate(() => localStorage.getItem('elsewhere.elements')), '1');
   assert.equal(await page.evaluate(() => sent.filter(p => [0x83, 0x84, 0x85, 0x86, 0x87, 0x91, 0x92].includes(p[0])).length), 0);
   await elements.press('Tab');
   assert(await capture.evaluate(el => el === document.activeElement));
@@ -96,7 +96,7 @@ try {
   assert.equal(await page.evaluate(() => sent.filter(p => [0x83, 0x84, 0x85, 0x86, 0x87, 0x91, 0x92].includes(p[0])).length), 0, 'panel heading keeps keyboard input local');
   await page.keyboard.press('Escape');
   assert.equal(await panel.count(), 0); assert(await trigger.evaluate(el => el === document.activeElement));
-  assert(await page.evaluate(() => bw.store.get().elementsOn && bw.store.get().elements !== null));
+  assert(await page.evaluate(() => elsewhere.store.get().elementsOn && elsewhere.store.get().elements !== null));
   await trigger.click(); assert(await borders.isChecked() && await elements.isChecked());
   await page.getByRole('button', { name: 'Applications', exact: true }).click();
   assert.equal(await panel.count(), 0);
@@ -121,9 +121,9 @@ try {
   await search.waitFor({ state: 'detached' });
   assert.equal(await search.count(), 0);
   assert(await page.evaluate(() => controlRequests.some(p => p.op === 'launch' && p.app === 'local-test.desktop')), 'search Enter launches the selected application');
-  await page.getByRole('button', { name: 'Quit browser-wayland', exact: true }).click();
-  await page.getByRole('button', { name: 'Quit browser-wayland', exact: true }).last().click();
-  await page.getByText('Quit browser-wayland? Every window closes with it, and the desktop is gone until it is started again.', { exact: true }).click();
+  await page.getByRole('button', { name: 'Quit Elsewhere', exact: true }).click();
+  await page.getByRole('button', { name: 'Quit Elsewhere', exact: true }).last().click();
+  await page.getByText('Quit Elsewhere? Every window closes with it, and the desktop is gone until it is started again.', { exact: true }).click();
   await page.keyboard.press('a');
   assert.equal(await page.evaluate(() => sent.filter(p => [0x83, 0x84, 0x85, 0x86, 0x87, 0x91, 0x92].includes(p[0])).length), 0, 'application and power menu keys stay local');
   await trigger.click(); await panel.waitFor();
@@ -156,7 +156,7 @@ try {
   const power = page.locator('#power-toggle');
   for (const action of ['Cancel', 'Quit']) {
     await power.click();
-    await page.getByRole('button', { name: 'Quit browser-wayland', exact: true }).last().click();
+    await page.getByRole('button', { name: 'Quit Elsewhere', exact: true }).last().click();
     await page.evaluate(() => { window.sent = []; });
     const button = page.getByRole('button', { name: action, exact: true });
     await button.press('Enter');
@@ -174,7 +174,7 @@ try {
   await elements.uncheck();
   await page.evaluate(() => { for (const request of elementRequests) request.finish?.(); });
   await page.waitForTimeout(400);
-  assert.equal(await page.evaluate(() => bw.store.get().elements), null, 'late response body cannot restore disabled elements');
+  assert.equal(await page.evaluate(() => elsewhere.store.get().elements), null, 'late response body cannot restore disabled elements');
   const beforeRestart = await page.evaluate(() => elementRequests.length);
   await elements.check();
   await page.waitForFunction(count => elementRequests.length > count && !!elementRequests.at(-1).finish, beforeRestart);
@@ -182,11 +182,11 @@ try {
   await elements.uncheck();
   await page.evaluate(() => { window.holdElements = false; });
   await elements.check();
-  await page.waitForFunction(index => bw.store.get().elements?.page.request > index + 1, staleIndex);
-  const newest = await page.evaluate(() => bw.store.get().elements.page.request);
+  await page.waitForFunction(index => elsewhere.store.get().elements?.page.request > index + 1, staleIndex);
+  const newest = await page.evaluate(() => elsewhere.store.get().elements.page.request);
   await page.evaluate(index => elementRequests[index].finish(), staleIndex);
   await page.waitForTimeout(100);
-  assert.equal(await page.evaluate(() => bw.store.get().elements.page.request), newest, 'off/on cannot let an old response replace the new tree');
+  assert.equal(await page.evaluate(() => elsewhere.store.get().elements.page.request), newest, 'off/on cannot let an old response replace the new tree');
   await elements.uncheck();
   const stopped = await page.evaluate(() => elementRequests.length);
   await page.evaluate(() => windowsFrame(2, 'Another focused application'));
@@ -194,12 +194,12 @@ try {
   assert.equal(await page.evaluate(() => elementRequests.length), stopped, 'disabled elements schedule no requests');
   await page.evaluate(() => { window.holdElements = false; window.elementStatus = 501; });
   await elements.check();
-  await page.waitForFunction(() => bw.store.get().elements?.id === 2 && bw.store.get().elements?.status === 501);
+  await page.waitForFunction(() => elsewhere.store.get().elements?.id === 2 && elsewhere.store.get().elements?.status === 501);
   await page.getByText('Accessibility support is disabled.', { exact: true }).waitFor();
   await page.evaluate(() => { window.elementStatus = 200; windowsFrame(3, 'New focused application'); });
-  await page.waitForFunction(() => bw.store.get().elements?.id === 3 && bw.store.get().elements.status === 200);
+  await page.waitForFunction(() => elsewhere.store.get().elements?.id === 3 && elsewhere.store.get().elements.status === 200);
 
-  await page.evaluate(() => bw.store.set({ role: 'viewer' }));
+  await page.evaluate(() => elsewhere.store.set({ role: 'viewer' }));
   await borders.uncheck(); await elements.uncheck();
   assert.equal(await borders.isDisabled(), false);
   await page.getByRole('button', { name: 'Fullscreen (browser shortcuts go to the desktop)', exact: true }).click();
@@ -215,19 +215,19 @@ try {
   await phoneContext.addInitScript(fixture);
   const phone = await phoneContext.newPage();
   await phone.goto(url);
-  await phone.waitForFunction(() => !!window.bw?.store);
-  await phone.evaluate(() => bw.store.set({ status: 'connected', role: 'controller' }));
+  await phone.waitForFunction(() => !!window.elsewhere?.store);
+  await phone.evaluate(() => elsewhere.store.set({ status: 'connected', role: 'controller' }));
   await phone.getByRole('button', { name: 'Settings', exact: true }).tap();
   const phoneBorders = phone.getByRole('checkbox', { name: 'Window borders', exact: true });
   await phoneBorders.tap(); assert(await phoneBorders.isChecked());
   assert.equal(await borders.isChecked(), false, 'another viewer keeps its own overlays');
   assert.equal(await phone.evaluate(() => sent.filter(p => [0x83, 0x84, 0x85, 0x86, 0x87, 0x91, 0x92].includes(p[0])).length), 0);
-  await phone.screenshot({ path: '/tmp/bw45-settings-narrow.png' });
+  await phone.screenshot({ path: '/tmp/elsewhere45-settings-narrow.png' });
   const popup = await context.newPage();
   await popup.goto(url.replace('/#', '/?window=1#'));
-  await popup.waitForFunction(() => !!window.bw?.store);
+  await popup.waitForFunction(() => !!window.elsewhere?.store);
   assert.equal(await popup.getByRole('button', { name: 'Settings', exact: true }).count(), 0);
-  assert.equal(await popup.evaluate(() => bw.store.get().elementsOn), false);
+  assert.equal(await popup.evaluate(() => elsewhere.store.get().elementsOn), false);
   assert.deepEqual(errors, []);
   console.log('settings defaults/persistence, overlays, local keyboard, menus, late responses, unavailable support, read-only, fullscreen, narrow layout and window popup checks passed');
 } finally {

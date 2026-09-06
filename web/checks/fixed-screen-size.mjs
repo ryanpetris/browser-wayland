@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
 import { MOTION_ABS } from '../src/protocol.js';
 
-const binary = '/src/target/release/browser-wayland';
+const binary = '/src/target/release/elsewhere';
 for (const size of ['0x1080', '1921x1080', '1920x1', '8194x1080', '1920', 'ax1080', '1920x1080x2']) {
   const result = spawnSync(binary, ['--screen-size', size], { encoding: 'utf8' });
   assert.equal(result.status, 2, size);
@@ -20,7 +20,7 @@ const wait = async fn => {
   throw new Error('timed out');
 };
 for (const fixed of [true, false]) {
-  const root = await mkdtemp(tmpdir() + '/bw-fixed-size-');
+  const root = await mkdtemp(tmpdir() + '/elsewhere-fixed-size-');
   await mkdir(root + '/runtime', { mode: 0o700 });
   const log = await open(root + '/server.log', 'w');
   const origin = 'http://127.0.0.1:8093';
@@ -29,8 +29,8 @@ for (const fixed of [true, false]) {
   });
   let browser;
   try {
-    await wait(async () => { try { return (await fetch(origin)).ok && !!await readFile(root + '/config/browser-wayland/token'); } catch { return false; } });
-    const token = (await readFile(root + '/config/browser-wayland/token', 'utf8')).trim();
+    await wait(async () => { try { return (await fetch(origin)).ok && !!await readFile(root + '/config/elsewhere/token'); } catch { return false; } });
+    const token = (await readFile(root + '/config/elsewhere/token', 'utf8')).trim();
     const nativeSize = async () => {
       const response = await fetch(origin + '/api/screenshot.png', { headers: { Authorization: `Bearer ${token}` } });
       assert.equal(response.status, 200);
@@ -54,13 +54,13 @@ for (const fixed of [true, false]) {
       }, MOTION_ABS);
       const page = await context.newPage();
       await page.goto(origin + '/#token=' + token);
-      await page.waitForFunction(() => !!bw.store.get().stream);
+      await page.waitForFunction(() => !!elsewhere.store.get().stream);
       pages.push(page);
     }
     const checkController = async page => {
-      await page.waitForFunction(() => bw.store.get().role === 'controller');
+      await page.waitForFunction(() => elsewhere.store.get().role === 'controller');
       await page.waitForTimeout(700);
-      const stream = await page.evaluate(() => bw.store.get().stream);
+      const stream = await page.evaluate(() => elsewhere.store.get().stream);
       assert.deepEqual(await nativeSize(), fixed ? [1280, 720] : [stream.width, stream.height]);
       if (fixed) {
         assert.deepEqual([stream.width, stream.height, stream.scale], [1280, 720, 1]);
@@ -76,10 +76,10 @@ for (const fixed of [true, false]) {
     await pages[0].setViewportSize({ width: 1500, height: 1000 });
     await checkController(pages[0]);
     if (!fixed) assert.notDeepEqual(await nativeSize(), before);
-    await pages[1].evaluate(() => bw.takeControl());
+    await pages[1].evaluate(() => elsewhere.takeControl());
     await checkController(pages[1]);
-    const id = await pages[0].evaluate(() => bw.store.get().sessionId.toString());
-    await pages[1].evaluate(id => bw.handoff(id), id);
+    const id = await pages[0].evaluate(() => elsewhere.store.get().sessionId.toString());
+    await pages[1].evaluate(id => elsewhere.handoff(id), id);
     await checkController(pages[0]);
     await pages[0].close();
     await checkController(pages[1]);

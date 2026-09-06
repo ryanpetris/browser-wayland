@@ -6,12 +6,12 @@ import {mkdir, mkdtemp, open, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {chromium} from 'playwright-core';
 
-const root = await mkdtemp(tmpdir() + '/bw-pip-probe-');
+const root = await mkdtemp(tmpdir() + '/elsewhere-pip-probe-');
 await mkdir(root + '/runtime', {mode: 0o700});
 const log = await open(root + '/server.log', 'w');
 const origin = 'http://127.0.0.1:8093';
 const server = spawn(
-    '/src/target/release/browser-wayland',
+    '/src/target/release/elsewhere',
     [
       '--no-rtc', '--no-tls', '--render-node', 'none', '--codec', 'vp8', '--listen', '127.0.0.1:8093',
       '--socket-name', 'wayland-pip-probe'
@@ -22,7 +22,7 @@ const server = spawn(
         HOME: root,
         XDG_CONFIG_HOME: root + '/config',
         XDG_RUNTIME_DIR: root + '/runtime',
-        RUST_LOG: 'bw_server::api=debug'
+        RUST_LOG: 'elsewhere_server::api=debug'
       },
       stdio: ['ignore', log.fd, log.fd],
     });
@@ -37,12 +37,12 @@ let browser, inputClient, inputLog;
 try {
   await wait(async () => {
     try {
-      return (await fetch(origin)).ok && !!await readFile(root + '/config/browser-wayland/token')
+      return (await fetch(origin)).ok && !!await readFile(root + '/config/elsewhere/token')
     } catch {
       return false
     }
   });
-  const token = (await readFile(root + '/config/browser-wayland/token', 'utf8')).trim();
+  const token = (await readFile(root + '/config/elsewhere/token', 'utf8')).trim();
   browser = await chromium.launch({
     headless: false,
     executablePath: '/usr/bin/chromium',
@@ -78,32 +78,32 @@ try {
   });
   const page = await context.newPage();
   await page.goto(origin + '/#token=' + token);
-  await page.waitForFunction(() => !!window.bw?.store.get().stream);
-  await page.evaluate(() => bw.takeControl());
+  await page.waitForFunction(() => !!window.elsewhere?.store.get().stream);
+  await page.evaluate(() => elsewhere.takeControl());
   await page.evaluate(
-      () => bw.spawn(
+      () => elsewhere.spawn(
           'gst-launch-1.0 -q audiotestsrc is-live=true freq=440 volume=0.1 ! audioconvert ! audio/x-raw,rate=48000,channels=2 ! pipewiresink sync=false'));
-  await page.waitForFunction(() => !!bw.store.get().playback);
-  await page.evaluate(() => bw.mic.start());
-  await page.waitForFunction(() => bw.store.get().mic);
+  await page.waitForFunction(() => !!elsewhere.store.get().playback);
+  await page.evaluate(() => elsewhere.mic.start());
+  await page.waitForFunction(() => elsewhere.store.get().mic);
   await page.evaluate(
-      cmd => bw.spawn(cmd),
+      cmd => elsewhere.spawn(cmd),
       'foot --app-id=pip-probe sh -c ' +
           '\'while true; do date +%s%N; sleep 0.2; done & while read line; do echo "$line" >> ' + root +
           '/typed; done\'');
-  await page.waitForFunction(() => bw.store.get().windows.some(w => w.app_id === 'pip-probe'));
-  const id = await page.evaluate(() => bw.store.get().windows.find(w => w.app_id === 'pip-probe').id);
+  await page.waitForFunction(() => elsewhere.store.get().windows.some(w => w.app_id === 'pip-probe'));
+  const id = await page.evaluate(() => elsewhere.store.get().windows.find(w => w.app_id === 'pip-probe').id);
   const nextPage = context.waitForEvent('page');
   await page.getByRole('button', {name: 'Picture-in-picture', exact: true}).first().click();
   const pipPage = await nextPage;
   await pipPage.waitForTimeout(300);
   let frame = pipPage.frames().find(f => f.parentFrame());
-  await frame.waitForFunction(() => window.bw?.store.get().role === 'controller' && !!bw.store.get().stream);
-  await page.waitForFunction(() => window.bw?.store.get().role === 'participant');
-  await frame.waitForFunction(() => !!bw.store.get().playback);
-  assert.equal(await page.evaluate(() => bw.store.get().playback), null);
-  assert.equal(await page.evaluate(() => bw.store.get().mic), false);
-  assert.equal(await frame.evaluate(() => bw.store.get().mic), false);
+  await frame.waitForFunction(() => window.elsewhere?.store.get().role === 'controller' && !!elsewhere.store.get().stream);
+  await page.waitForFunction(() => window.elsewhere?.store.get().role === 'participant');
+  await frame.waitForFunction(() => !!elsewhere.store.get().playback);
+  assert.equal(await page.evaluate(() => elsewhere.store.get().playback), null);
+  assert.equal(await page.evaluate(() => elsewhere.store.get().mic), false);
+  assert.equal(await frame.evaluate(() => elsewhere.store.get().mic), false);
   console.log('single audio owner; old microphone stopped, child microphone off');
   await frame.locator('canvas').click();
   await pipPage.keyboard.type('desktop input');
@@ -115,32 +115,32 @@ try {
       return false
     }
   });
-  const before = await frame.evaluate(() => bw().videoSeq);
+  const before = await frame.evaluate(() => elsewhere().videoSeq);
   const other = await context.newPage();
   await other.goto(origin + '/#token=' + token);
-  await other.waitForFunction(() => window.bw?.store.get().role === 'participant');
+  await other.waitForFunction(() => window.elsewhere?.store.get().role === 'participant');
   await other.bringToFront();
-  await frame.waitForFunction(before => bw().videoSeq !== before, before);
+  await frame.waitForFunction(before => elsewhere().videoSeq !== before, before);
   const cdp = await context.newCDPSession(page);
   const {windowId} = await cdp.send('Browser.getWindowForTarget');
-  const preMin = await frame.evaluate(() => bw().videoSeq);
+  const preMin = await frame.evaluate(() => elsewhere().videoSeq);
   await cdp.send('Browser.setWindowBounds', {windowId, bounds: {windowState: 'minimized'}});
   await frame.waitForTimeout(1500);
-  await frame.waitForFunction(n => bw().videoSeq !== n, preMin);
+  await frame.waitForFunction(n => elsewhere().videoSeq !== n, preMin);
   console.log('minimized opener still renders', await frame.evaluate(() => document.hidden));
   await cdp.send('Browser.setWindowBounds', {windowId, bounds: {windowState: 'normal'}});
   console.log('desktop PiP background', await frame.evaluate(() => ({
-                                                               status: bw.store.get().status,
-                                                               role: bw.store.get().role,
+                                                               status: elsewhere.store.get().status,
+                                                               role: elsewhere.store.get().role,
                                                                hidden: document.hidden,
-                                                               frames: bw().videoSeq
+                                                               frames: elsewhere().videoSeq
                                                              })));
-  await other.evaluate(() => bw.takeControl());
-  await other.waitForFunction(() => window.bw?.store.get().role === 'controller');
+  await other.evaluate(() => elsewhere.takeControl());
+  await other.waitForFunction(() => window.elsewhere?.store.get().role === 'controller');
   await frame.getByRole('button', {name: 'Return to main viewer'}).click();
   await wait(() => Promise.resolve(pipPage.isClosed()));
-  assert.equal(await other.evaluate(() => window.bw?.store.get().role), 'controller');
-  assert.equal(await page.evaluate(() => window.bw?.store.get().role), 'participant');
+  assert.equal(await other.evaluate(() => window.elsewhere?.store.get().role), 'controller');
+  assert.equal(await page.evaluate(() => window.elsewhere?.store.get().role), 'participant');
   console.log('return preserves third-party controller');
   await page.bringToFront();
   const mainClaimNext = context.waitForEvent('page');
@@ -150,28 +150,28 @@ try {
   await page.bringToFront();
   await page.getByRole('button', {name: 'Take control', exact: true}).click();
   await wait(() => Promise.resolve(claimPip.isClosed()));
-  await page.waitForFunction(() => window.bw?.store.get().role === 'controller');
+  await page.waitForFunction(() => window.elsewhere?.store.get().role === 'controller');
   console.log('opener Take control returns desktop presentation');
 
   await page.bringToFront();
-  await page.evaluate(() => bw.takeControl());
-  await page.waitForFunction(() => window.bw?.store.get().role === 'controller');
+  await page.evaluate(() => elsewhere.takeControl());
+  await page.waitForFunction(() => window.elsewhere?.store.get().role === 'controller');
   const next = context.waitForEvent('page');
   await page.getByRole('button', {name: 'Picture-in-picture', exact: true}).first().click();
   const pip2 = await next;
   await pip2.waitForTimeout(300);
   frame = pip2.frames().find(f => f.parentFrame());
-  await frame.waitForFunction(() => window.bw?.store.get().role === 'controller');
+  await frame.waitForFunction(() => window.elsewhere?.store.get().role === 'controller');
   await frame.getByRole('button', {name: 'Return to main viewer'}).click();
-  await page.waitForFunction(() => window.bw?.store.get().role === 'controller');
-  await page.waitForFunction(() => !!bw.store.get().playback);
-  assert.equal(await page.evaluate(() => bw.store.get().mic), false);
+  await page.waitForFunction(() => window.elsewhere?.store.get().role === 'controller');
+  await page.waitForFunction(() => !!elsewhere.store.get().playback);
+  assert.equal(await page.evaluate(() => elsewhere.store.get().mic), false);
   console.log('return restores opener controller and playback without microphone');
   await page.evaluate(id => {
     const b = document.createElement('button');
     b.id = 'open-window-pip';
     b.textContent = 'Open test window';
-    b.onclick = () => bw.pip.open(id);
+    b.onclick = () => elsewhere.pip.open(id);
     document.body.append(b);
     b.style = 'position:fixed;top:0;left:0;z-index:9999'
   }, id);
@@ -180,7 +180,7 @@ try {
   const pip3 = await nextWindow;
   await pip3.waitForTimeout(300);
   frame = pip3.frames().find(f => f.parentFrame());
-  await frame.waitForFunction(() => !!window.bw?.store.get().stream);
+  await frame.waitForFunction(() => !!window.elsewhere?.store.get().stream);
   await frame.locator('canvas').click();
   await pip3.keyboard.type('window input');
   await pip3.keyboard.press('Enter');
@@ -198,7 +198,7 @@ try {
   assert.equal(pip3.isClosed(), false);
   frame = pip3.frames().find(f => f.parentFrame());
   await frame.waitForFunction(
-      () => window.bw?.store.get().role === 'controller' && bw.store.get().sessionId != null);
+      () => window.elsewhere?.store.get().role === 'controller' && elsewhere.store.get().sessionId != null);
   console.log('window to desktop reuses PiP');
   await frame.locator('canvas').click();
   await pip3.keyboard.press('Control+Shift+V');
@@ -208,7 +208,7 @@ try {
     document.dispatchEvent(
         new ClipboardEvent('paste', {clipboardData: data, bubbles: true, cancelable: true}))
   });
-  await frame.waitForFunction(async () => await bw.clipboard.read() === 'pip clipboard');
+  await frame.waitForFunction(async () => await elsewhere.clipboard.read() === 'pip clipboard');
   console.log('PiP clipboard event reaches remote clipboard');
   await frame.getByRole('button', {name: 'On-screen keyboard', exact: true}).click();
   await frame.locator('[data-keyboard]')
@@ -237,15 +237,15 @@ try {
   await frame.evaluate(() => document.exitPointerLock());
   inputLog = await open(root + '/wev.log', 'w');
   inputClient = spawn('stdbuf', ['-oL', 'wev'], { env: { ...process.env, XDG_RUNTIME_DIR: root + '/runtime', WAYLAND_DISPLAY: 'wayland-pip-probe' }, stdio: ['ignore', inputLog.fd, inputLog.fd] });
-  await frame.waitForFunction(() => bw.store.get().windows.some(w => w.app_id === 'wev'));
+  await frame.waitForFunction(() => elsewhere.store.get().windows.some(w => w.app_id === 'wev'));
   await frame.evaluate(() => {
-    const w = bw.store.get().windows.find(w => w.app_id === 'wev');
-    bw.control({op: 'maximize', id: w.id});
-    bw.activate(w.id)
+    const w = elsewhere.store.get().windows.find(w => w.app_id === 'wev');
+    elsewhere.control({op: 'maximize', id: w.id});
+    elsewhere.activate(w.id)
   });
   await frame.locator('canvas').click({position: {x: 100, y: 100}});
   await pip3.mouse.wheel(0, 90);
-  await frame.evaluate(() => bw.setTouchMouse(false));
+  await frame.evaluate(() => elsewhere.setTouchMouse(false));
   const touchSession = await context.newCDPSession(pip3);
   await touchSession.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x: 100, y: 100}]});
   await touchSession.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
@@ -268,38 +268,38 @@ try {
       el.dispatchEvent(new DragEvent(
           type, {dataTransfer: data, bubbles: true, cancelable: true, clientX: 100, clientY: 100}))
   });
-  await frame.waitForFunction(() => !bw.store.get().upload);
+  await frame.waitForFunction(() => !elsewhere.store.get().upload);
   await frame.waitForTimeout(500);
-  await frame.waitForFunction(() => bw.store.get().notice?.path?.endsWith('/Downloads') && bw.store.get().notice.text.includes('pip-drop.txt'));
+  await frame.waitForFunction(() => elsewhere.store.get().notice?.path?.endsWith('/Downloads') && elsewhere.store.get().notice.text.includes('pip-drop.txt'));
   console.log('PiP unclaimed drop saved to transfer folder');
 
   await frame.getByRole('button', { name: 'Open folder', exact: true }).click();
-  await page.waitForFunction(() => window.bw?.store.get().role === 'controller');
+  await page.waitForFunction(() => window.elsewhere?.store.get().role === 'controller');
   await page.locator('[data-file-name="pip-drop.txt"]').waitFor();
-  const viewerToken = (await readFile(root + '/config/browser-wayland/viewer-token', 'utf8')).trim();
+  const viewerToken = (await readFile(root + '/config/elsewhere/viewer-token', 'utf8')).trim();
   const readOnly = await context.newPage();
   await readOnly.goto(origin + '/#token=' + viewerToken);
-  await readOnly.waitForFunction(() => window.bw?.store.get().role === 'viewer');
-  const roId = await readOnly.evaluate(() => bw.store.get().sessionId);
-  await page.evaluate(id => bw.handoff(id), roId);
-  await readOnly.evaluate(() => bw.handoff(1n));
+  await readOnly.waitForFunction(() => window.elsewhere?.store.get().role === 'viewer');
+  const roId = await readOnly.evaluate(() => elsewhere.store.get().sessionId);
+  await page.evaluate(id => elsewhere.handoff(id), roId);
+  await readOnly.evaluate(() => elsewhere.handoff(1n));
   await page.waitForTimeout(200);
-  assert.equal(await page.evaluate(() => window.bw?.store.get().role), 'controller');
+  assert.equal(await page.evaluate(() => window.elsewhere?.store.get().role), 'controller');
   const roNext = context.waitForEvent('page');
   await readOnly.getByRole('button', {name: 'Picture-in-picture', exact: true}).first().click();
   const roPip = await roNext;
   await roPip.waitForTimeout(300);
   const roFrame = roPip.frames().find(f => f.parentFrame());
-  await roFrame.waitForFunction(() => window.bw?.store.get().role === 'viewer');
+  await roFrame.waitForFunction(() => window.elsewhere?.store.get().role === 'viewer');
   await roFrame.evaluate(() => {
-    bw.takeControl();
-    bw.handoff(1n)
+    elsewhere.takeControl();
+    elsewhere.handoff(1n)
   });
   await page.waitForTimeout(300);
-  assert.equal(await roFrame.evaluate(() => window.bw?.store.get().role), 'viewer');
-  assert.equal(await page.evaluate(() => window.bw?.store.get().role), 'controller');
+  assert.equal(await roFrame.evaluate(() => window.elsewhere?.store.get().role), 'viewer');
+  assert.equal(await page.evaluate(() => window.elsewhere?.store.get().role), 'controller');
   assert.equal(await roFrame.getByRole('button', {name: 'Take control', exact: true}).count(), 0);
-  await readOnly.evaluate(() => bw.pip.close());
+  await readOnly.evaluate(() => elsewhere.pip.close());
   console.log('read-only PiP stays read-only');
   await page.evaluate(() => {
     window.originalPipRequest = documentPictureInPicture.requestWindow;
@@ -308,15 +308,15 @@ try {
   });
   await page.bringToFront();
   await page.getByRole('button', {name: 'Picture-in-picture', exact: true}).first().click();
-  await page.waitForFunction(() => bw.store.get().notice?.text.includes('could not open'));
-  assert.equal(await page.evaluate(() => window.bw?.store.get().role), 'controller');
+  await page.waitForFunction(() => elsewhere.store.get().notice?.text.includes('could not open'));
+  assert.equal(await page.evaluate(() => window.elsewhere?.store.get().role), 'controller');
   await page.evaluate(() => documentPictureInPicture.requestWindow = window.originalPipRequest);
   console.log('rejected request preserves viewer');
   const unsupported = await context.newPage();
   await unsupported.addInitScript(
       () => Object.defineProperty(window, 'documentPictureInPicture', {value: undefined}));
   await unsupported.goto(origin + '/#token=' + token);
-  await unsupported.waitForFunction(() => !!window.bw?.store.get().stream);
+  await unsupported.waitForFunction(() => !!window.elsewhere?.store.get().stream);
   assert.equal(await unsupported.getByRole('button', {name: 'Picture-in-picture', exact: true}).count(), 0);
   assert.equal(
       await unsupported
@@ -327,7 +327,7 @@ try {
   const popNext = context.waitForEvent('page');
   await page.evaluate(id => window.open('/?window=' + id, 'normal-test', 'popup,width=500,height=400'), id);
   const normal = await popNext;
-  await normal.waitForFunction(() => !!window.bw?.store.get().stream);
+  await normal.waitForFunction(() => !!window.elsewhere?.store.get().stream);
   await normal.close();
   console.log('unsupported API and ordinary popup');
   await page.bringToFront();
@@ -340,19 +340,19 @@ try {
   const lifePip = await reopen;
   await lifePip.waitForTimeout(300);
   let lifeFrame = lifePip.frames().find(f => f.parentFrame());
-  await lifeFrame.waitForFunction(() => window.bw?.store.get().role === 'controller');
-  const oldId = await lifeFrame.evaluate(() => bw.store.get().sessionId);
+  await lifeFrame.waitForFunction(() => window.elsewhere?.store.get().role === 'controller');
+  const oldId = await lifeFrame.evaluate(() => elsewhere.store.get().sessionId);
   await lifeFrame.evaluate(() => testSocket.close());
   await lifeFrame.waitForFunction(
-      old => bw.store.get().status === 'connected' && bw.store.get().sessionId !== old, oldId);
-  await lifeFrame.waitForFunction(() => window.bw?.store.get().role === 'controller');
+      old => elsewhere.store.get().status === 'connected' && elsewhere.store.get().sessionId !== old, oldId);
+  await lifeFrame.waitForFunction(() => window.elsewhere?.store.get().role === 'controller');
   console.log('child socket reconnect restores presentation control');
   const lifeCdp = await context.newCDPSession(lifePip);
   const lifeWin = await lifeCdp.send('Browser.getWindowForTarget');
   await lifeCdp.send(
       'Browser.setWindowBounds', {windowId: lifeWin.windowId, bounds: {width: 480, height: 360}});
   await lifeFrame.waitForFunction(
-      () => bw.store.get().stream.width ===
+      () => elsewhere.store.get().stream.width ===
           Math.round(document.querySelector('canvas').getBoundingClientRect().width * devicePixelRatio));
   console.log('PiP viewport drives output');
   for (const deviceScaleFactor of [1.5, 2, 1]) {
@@ -365,14 +365,14 @@ try {
       if (!query.matches) query.dispatchEvent(new Event('change'));
     });
     await lifeFrame.waitForFunction(
-        dpr => devicePixelRatio === dpr && Math.abs(bw.store.get().stream.scale - dpr) < 0.01,
+        dpr => devicePixelRatio === dpr && Math.abs(elsewhere.store.get().stream.scale - dpr) < 0.01,
         deviceScaleFactor);
   }
   console.log('PiP DPR variants and media-query rearm');
   await lifeFrame.evaluate(() => document.dispatchEvent(new Event('pointerlockerror')));
-  await lifeFrame.waitForFunction(() => bw.store.get().notice?.text.startsWith('Pointer capture failed.'));
+  await lifeFrame.waitForFunction(() => elsewhere.store.get().notice?.text.startsWith('Pointer capture failed.'));
   console.log('pointer lock error event reports failure');
-  await lifeFrame.evaluate(() => bw.activate(bw.store.get().windows.find(w => w.app_id === 'wev').id));
+  await lifeFrame.evaluate(() => elsewhere.activate(elsewhere.store.get().windows.find(w => w.app_id === 'wev').id));
   const inputOffset = (await readFile(root + '/wev.log', 'utf8')).length;
   await lifeFrame.locator('canvas').click();
   await lifePip.keyboard.down('Shift');
@@ -380,8 +380,8 @@ try {
     const tail = (await readFile(root + '/wev.log', 'utf8')).slice(inputOffset);
     return tail.includes('Shift_L')
   });
-  await page.evaluate(() => bw.pip.close());
-  await page.waitForFunction(() => window.bw?.store.get().role === 'controller');
+  await page.evaluate(() => elsewhere.pip.close());
+  await page.waitForFunction(() => window.elsewhere?.store.get().role === 'controller');
   await wait(async () => {
     const tail = (await readFile(root + '/wev.log', 'utf8')).slice(inputOffset);
     return tail.includes('Shift_L') && tail.includes('state: 0 (released)')
@@ -391,7 +391,7 @@ try {
   await page.click('#open-window-pip');
   const gonePip = await goneNext;
   await gonePip.waitForTimeout(300);
-  await page.evaluate(id => bw.control({op: 'close', id}), id);
+  await page.evaluate(id => elsewhere.control({op: 'close', id}), id);
   await wait(() => Promise.resolve(gonePip.isClosed()));
   console.log('remote window closure closes PiP');
   const navNext = context.waitForEvent('page');
@@ -400,7 +400,7 @@ try {
   await navPip.waitForTimeout(300);
   await page.goto(origin + '/?navigation-check=1#token=' + token);
   await wait(() => Promise.resolve(navPip.isClosed()));
-  await page.waitForFunction(() => !!window.bw?.store.get().stream);
+  await page.waitForFunction(() => !!window.elsewhere?.store.get().stream);
   console.log('opener navigation closes PiP');
   await page.evaluate(() => {
     window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}));
@@ -414,7 +414,7 @@ try {
       origin + '/api/token/rotate', {method: 'POST', headers: {Authorization: 'Bearer ' + token}});
   assert.equal(rotated.status, 200);
   await wait(() => Promise.resolve(authPip.isClosed()));
-  await page.waitForFunction(() => bw.store.get().status === 'unauthorized');
+  await page.waitForFunction(() => elsewhere.store.get().status === 'unauthorized');
   console.log('token rotation closes PiP');
 
 

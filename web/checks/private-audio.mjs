@@ -6,10 +6,10 @@ import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
 
 const rtc = process.argv.includes('--rtc');
-const root = await mkdtemp(tmpdir() + '/bw-private-check-');
+const root = await mkdtemp(tmpdir() + '/elsewhere-private-check-');
 await mkdir(root + '/home'); await mkdir(root + '/runtime', { mode: 0o700 });
 const log = await open(root + '/desktop.log', 'w');
-const desktop = spawn('/src/target/release/browser-wayland', ['--no-tls', ...(rtc ? [] : ['--no-rtc']), '--render-node', 'none', '--listen', '127.0.0.1:8088', '--socket-name', 'wayland-private-check'], {
+const desktop = spawn('/src/target/release/elsewhere', ['--no-tls', ...(rtc ? [] : ['--no-rtc']), '--render-node', 'none', '--listen', '127.0.0.1:8088', '--socket-name', 'wayland-private-check'], {
   env: { ...process.env, HOME: root + '/home', XDG_RUNTIME_DIR: root + '/runtime', XDG_CONFIG_HOME: root + '/config', PULSE_SINK: 'inherited-wrong-sink', PULSE_SOURCE: 'inherited-wrong-source', PIPEWIRE_NODE: '99999' },
   stdio: ['ignore', log.fd, log.fd],
 });
@@ -32,11 +32,11 @@ try {
   await waitFor(async () => (await readFile(root + '/desktop.log', 'utf8')).includes('compositor ready'));
   await waitFor(async () => {
     try {
-      await readFile(root + '/config/browser-wayland/token');
+      await readFile(root + '/config/elsewhere/token');
       return (await fetch('http://127.0.0.1:8088/')).ok;
     } catch { return false; }
   });
-  const token = (await readFile(root + '/config/browser-wayland/token', 'utf8')).trim();
+  const token = (await readFile(root + '/config/elsewhere/token', 'utf8')).trim();
   browser = await chromium.launch({ executablePath: '/usr/bin/chromium', env: { ...process.env, HOME: root + '/home', XDG_CONFIG_HOME: root + '/browser-config', XDG_RUNTIME_DIR: root + '/runtime' }, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-audio-capture=' + root + '/microphone.wav'] });
   const page = await browser.newPage();
   await page.addInitScript(() => {
@@ -51,14 +51,14 @@ try {
     };
   });
   await page.goto('http://127.0.0.1:8088/#token=' + token);
-  await page.waitForFunction(() => window.bw?.store.get().status === 'connected');
-  assert.equal(await page.evaluate(() => bw.store.get().audioAvailable), true);
+  await page.waitForFunction(() => window.elsewhere?.store.get().status === 'connected');
+  assert.equal(await page.evaluate(() => elsewhere.store.get().audioAvailable), true);
   if (!rtc) {
-    await page.evaluate(() => bw.setTransport('webrtc'));
-    assert.deepEqual(await page.evaluate(() => [bw.store.get().rtcAvailable, bw.store.get().rtcRecovery.state, localStorage.getItem('bw.transport')]), [false, 'unavailable', 'webrtc']);
+    await page.evaluate(() => elsewhere.setTransport('webrtc'));
+    assert.deepEqual(await page.evaluate(() => [elsewhere.store.get().rtcAvailable, elsewhere.store.get().rtcRecovery.state, localStorage.getItem('elsewhere.transport')]), [false, 'unavailable', 'webrtc']);
     await page.waitForTimeout(1200);
     assert.equal(await page.evaluate(() => window.audioCheckChannel), undefined);
-    await page.evaluate(() => bw.setTransport('websocket'));
+    await page.evaluate(() => elsewhere.setTransport('websocket'));
     console.log('disabled server preserves WebRTC preference without attempts');
   }
 
@@ -70,16 +70,16 @@ try {
     }
   });
   await page.waitForTimeout(500);
-  assert.equal(await page.evaluate(() => bw.store.get().audioAvailable), true);
+  assert.equal(await page.evaluate(() => elsewhere.store.get().audioAvailable), true);
   console.log('invalid microphone lengths leave audio available');
-  await page.evaluate(() => bw.spawn('gst-launch-1.0 -q audiotestsrc is-live=true num-buffers=900 freq=440 volume=0.1 ! audioconvert ! audio/x-raw,rate=48000,channels=2 ! pipewiresink sync=false'));
+  await page.evaluate(() => elsewhere.spawn('gst-launch-1.0 -q audiotestsrc is-live=true num-buffers=900 freq=440 volume=0.1 ! audioconvert ! audio/x-raw,rate=48000,channels=2 ! pipewiresink sync=false'));
   await page.waitForTimeout(2000);
-  console.log('native audio stats', await page.evaluate(() => bw.store.get().stats.audio));
+  console.log('native audio stats', await page.evaluate(() => elsewhere.store.get().stats.audio));
   let clientEnv;
   for (const id of (await readdir('/proc')).filter(n => /^\d+$/.test(n))) {
     try {
       const env = Object.fromEntries((await readFile('/proc/' + id + '/environ', 'utf8')).split('\0').filter(s => s.includes('=')).map(s => [s.slice(0, s.indexOf('=')), s.slice(s.indexOf('=') + 1)]));
-      if (env.HOME === root + '/home' && env.PIPEWIRE_REMOTE?.includes('bw-audio-')) {
+      if (env.HOME === root + '/home' && env.PIPEWIRE_REMOTE?.includes('elsewhere-audio-')) {
         clientEnv = env;
         assert.equal(env.PULSE_SINK, undefined);
         assert.equal(env.PULSE_SOURCE, undefined);
@@ -88,28 +88,28 @@ try {
       }
     } catch {}
   }
-  await page.waitForFunction(() => bw.store.get().stats.audio?.signalPeak > .05);
+  await page.waitForFunction(() => elsewhere.store.get().stats.audio?.signalPeak > .05);
   console.log('native playback through private default passed');
   if (rtc) {
-    await page.evaluate(() => bw.setTransport('webrtc'));
-    await page.waitForFunction(() => bw.store.get().videoVia === 'webrtc');
+    await page.evaluate(() => elsewhere.setTransport('webrtc'));
+    await page.waitForFunction(() => elsewhere.store.get().videoVia === 'webrtc');
     const before = await page.evaluate(() => audioSocketPackets);
     await page.waitForFunction(n => audioSocketPackets > n + 10, before);
     await page.evaluate(() => audioCheckChannel.close());
-    await page.waitForFunction(() => bw.store.get().rtcRecovery.state === 'waiting');
+    await page.waitForFunction(() => elsewhere.store.get().rtcRecovery.state === 'waiting');
     const fallback = await page.evaluate(() => audioSocketPackets);
     await page.waitForFunction(n => audioSocketPackets > n + 5, fallback);
-    await page.waitForFunction(() => bw.store.get().videoVia === 'webrtc');
-    assert.equal(await page.evaluate(() => bw.store.get().transport), 'webrtc');
-    assert(await page.evaluate(() => bw.store.get().stats.audio.signalPeak > .05));
+    await page.waitForFunction(() => elsewhere.store.get().videoVia === 'webrtc');
+    assert.equal(await page.evaluate(() => elsewhere.store.get().transport), 'webrtc');
+    assert(await page.evaluate(() => elsewhere.store.get().stats.audio.signalPeak > .05));
     console.log('real session audio stayed on WebSocket during RTC playback, fallback and recovery');
   }
 
-  await page.evaluate(() => bw.spawn('gst-launch-1.0 -q audiotestsrc is-live=true num-buffers=300 freq=880 volume=0.1 ! audioconvert ! pulsesink'));
-  await page.evaluate(() => { bw.store.get().playback.source.smoothingTimeConstant = 0; });
+  await page.evaluate(() => elsewhere.spawn('gst-launch-1.0 -q audiotestsrc is-live=true num-buffers=300 freq=880 volume=0.1 ! audioconvert ! pulsesink'));
+  await page.evaluate(() => { elsewhere.store.get().playback.source.smoothingTimeConstant = 0; });
   await page.waitForTimeout(1000);
   const tones = await page.evaluate(() => {
-    const { context, source } = bw.store.get().playback;
+    const { context, source } = elsewhere.store.get().playback;
     const bins = new Float32Array(source.frequencyBinCount);
     source.getFloatFrequencyData(bins);
     return [440, 880].map(hz => {
@@ -137,34 +137,34 @@ try {
   await page.waitForTimeout(1000);
   console.log('idle recording', recorders.map(({ command, samples }) => ({ command, buffers: samples.length, peak: Math.max(0, ...samples.map(s => s.peak)) })));
   const graph = JSON.parse(execFileSync('pw-dump', { env: clientEnv, timeout: 2000 }));
-  const streams = graph.filter(o => o.type.endsWith('Node') && o.info.props['media.class']?.startsWith('Stream/') && !o.info.props['node.name']?.startsWith('browser-wayland'));
+  const streams = graph.filter(o => o.type.endsWith('Node') && o.info.props['media.class']?.startsWith('Stream/') && !o.info.props['node.name']?.startsWith('elsewhere'));
   assert(streams.filter(o => o.info.props['media.class'] === 'Stream/Output/Audio').length >= 2);
   assert(streams.filter(o => o.info.props['media.class'] === 'Stream/Input/Audio').length >= 2);
   assert(streams.every(o => o.info.params.Props?.some(p => Array.isArray(p.channelVolumes))), 'application volume controls are exposed in the native graph');
   for (const { command, samples } of recorders) assert(samples.length > 0 && samples.every(s => s.peak < .0001), command + ' idle silence');
   await page.context().grantPermissions(['microphone']);
-  await page.evaluate(() => bw.mic.start());
-  await page.waitForFunction(() => bw.store.get().mic);
+  await page.evaluate(() => elsewhere.mic.start());
+  await page.waitForFunction(() => elsewhere.store.get().mic);
   await page.waitForTimeout(2000);
   for (const { command, samples } of recorders) assert(samples.some(s => s.peak > .02), command + ' receives browser microphone');
-  await page.waitForFunction(() => bw.store.get().mixer.nodes.some(n => n.kind === 'input' && n.mute_writable));
+  await page.waitForFunction(() => elsewhere.store.get().mixer.nodes.some(n => n.kind === 'input' && n.mute_writable));
   await page.evaluate(() => {
-    const input = bw.store.get().mixer.nodes.find(n => n.kind === 'input');
-    bw.mixer.command({ op: 'mute', id: input.id, value: true });
+    const input = elsewhere.store.get().mixer.nodes.find(n => n.kind === 'input');
+    elsewhere.mixer.command({ op: 'mute', id: input.id, value: true });
   });
-  await page.waitForFunction(() => bw.store.get().mixer.nodes.find(n => n.kind === 'input').mute);
+  await page.waitForFunction(() => elsewhere.store.get().mixer.nodes.find(n => n.kind === 'input').mute);
   const muted = Date.now();
   await page.waitForTimeout(1200);
-  assert.equal(await page.evaluate(() => bw.store.get().mic), true, 'session mute preserves browser capture');
+  assert.equal(await page.evaluate(() => elsewhere.store.get().mic), true, 'session mute preserves browser capture');
   for (const { command, samples } of recorders) {
     const quiet = samples.filter(s => s.at > muted + 600);
     assert(quiet.length > 0 && quiet.every(s => s.peak < .0001), command + ' observes session microphone mute');
   }
   await page.evaluate(() => {
-    const input = bw.store.get().mixer.nodes.find(n => n.kind === 'input');
-    bw.mixer.command({ op: 'mute', id: input.id, value: false });
+    const input = elsewhere.store.get().mixer.nodes.find(n => n.kind === 'input');
+    elsewhere.mixer.command({ op: 'mute', id: input.id, value: false });
   });
-  await page.waitForFunction(() => !bw.store.get().mixer.nodes.find(n => n.kind === 'input').mute);
+  await page.waitForFunction(() => !elsewhere.store.get().mixer.nodes.find(n => n.kind === 'input').mute);
   const resumed = Date.now();
   await page.evaluate(() => {
     const json = new TextEncoder().encode(JSON.stringify({ op: 'subscribe', enabled: true }));
@@ -172,7 +172,7 @@ try {
     window.mixerFlood = setInterval(() => { for (let n = 0; n < 64; n++) checkSocket.send(packet); }, 10);
   });
   await page.waitForTimeout(1200);
-  await page.evaluate(() => { clearInterval(window.mixerFlood); bw.mixer.subscribe(false); });
+  await page.evaluate(() => { clearInterval(window.mixerFlood); elsewhere.mixer.subscribe(false); });
   console.log('microphone under subscription traffic', recorders.map(({ command, samples }) => ({ command, buffers: samples.filter(s => s.at > resumed + 600).length, peak: Math.max(0, ...samples.filter(s => s.at > resumed + 600).map(s => s.peak)) })));
   for (const { command, samples } of recorders) {
     const active = samples.filter(s => s.at > resumed + 600);
@@ -180,7 +180,7 @@ try {
     assert(active.reduce((n, s) => n + s.frames, 0) >= 9600 && active.some(s => s.peak > .005), command + ' microphone progresses under subscription traffic');
   }
   console.log('session microphone mute preserves consent; microphone resumes under sustained mixer traffic');
-  await page.evaluate(() => bw.mic.stop());
+  await page.evaluate(() => elsewhere.mic.stop());
   const stopped = Date.now();
   await page.waitForTimeout(1500);
   for (const { command, samples } of recorders) {
@@ -188,8 +188,8 @@ try {
     assert(off.length > 0 && off.every(s => s.peak < .0001), command + ' produces silence after microphone stops');
   }
   console.log('native and Pulse recording: idle silence, browser microphone, and stopped silence passed');
-  await page.evaluate(() => bw.mic.start());
-  await page.waitForFunction(() => bw.store.get().mic);
+  await page.evaluate(() => elsewhere.mic.start());
+  await page.waitForFunction(() => elsewhere.store.get().mic);
   const children = (await readdir('/proc')).filter(n => /^\d+$/.test(n));
   let daemon;
   for (const id of children) {
@@ -201,11 +201,11 @@ try {
   }
   assert(daemon, 'owned PipeWire process found');
   process.kill(daemon, 'SIGKILL');
-  await page.waitForFunction(() => !bw.store.get().audioAvailable && !bw.store.get().micAvailable && !bw.store.get().mic && !bw.store.get().playback);
-  assert.equal(await page.evaluate(() => bw.store.get().status), 'connected');
+  await page.waitForFunction(() => !elsewhere.store.get().audioAvailable && !elsewhere.store.get().micAvailable && !elsewhere.store.get().mic && !elsewhere.store.get().playback);
+  assert.equal(await page.evaluate(() => elsewhere.store.get().status), 'connected');
   console.log('service failure withdraws live playback and microphone while desktop stays connected');
 } catch (error) {
-  await writeFile('/tmp/bw-private-audio-failure.log', await readFile(root + '/desktop.log'));
+  await writeFile('/tmp/elsewhere-private-audio-failure.log', await readFile(root + '/desktop.log'));
   throw error;
 } finally {
   for (const { child } of recorders) child.kill('SIGTERM');

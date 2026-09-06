@@ -11,7 +11,7 @@ export function TokenForm({ viewer }) {
     e.preventDefault();
     const t = token.trim();
     if (!t) return;
-    try { sessionStorage.setItem('bw.token', t); } catch {}
+    try { sessionStorage.setItem('elsewhere.token', t); } catch {}
     location.reload();
   };
   return (

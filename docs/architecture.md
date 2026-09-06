@@ -1,9 +1,9 @@
 # Architecture
 
-browser-wayland is a headless Wayland compositor whose display is a browser tab. Clients render on
+Elsewhere is a headless Wayland compositor whose display is a browser tab. Clients render on
 the GPU as usual; the composited frame is hardware-encoded (VA-API through GStreamer) and streamed
 over a WebSocket; the browser decodes it with WebCodecs and paints it on a canvas. Mouse, keyboard
-and (optionally) audio travel the same socket; the video moves to a WebRTC data channel (`bw-server`'s
+and (optionally) audio travel the same socket; the video moves to a WebRTC data channel (`elsewhere-server`'s
 `rtc.rs`, str0m) when a viewer picks that transport, which is what reaches a server across NAT through a
 TURN relay (the README compares the two under loss). The shared viewer engine keeps the transport
 preference separate from the active path. One socket-scoped RTC attempt owns its callbacks and timeout;
@@ -19,7 +19,7 @@ snapshots, browser UI).
 
 | Question | Decision |
 |---|---|
-| Stack | Rust + Smithay (git master, pinned by commit in `crates/bw-compositor/Cargo.toml`; 0.7.0 kills a client that destroys a toplevel icon before its buffer, as Chromium 152 does); no wlroots, no C. GStreamer (via gstreamer-rs) for encoding. axum for HTTP/WebSocket. |
+| Stack | Rust + Smithay (git master, pinned by commit in `crates/elsewhere-compositor/Cargo.toml`; 0.7.0 kills a client that destroys a toplevel icon before its buffer, as Chromium 152 does); no wlroots, no C. GStreamer (via gstreamer-rs) for encoding. axum for HTTP/WebSocket. |
 | Transport | WebSocket + WebCodecs. WebCodecs needs a secure context, so the server speaks HTTPS with a self-signed certificate unless `--no-tls` (localhost development). |
 | Windowing | Floating desktop: stacking, click-to-focus, decorations by the client or, for those that draw none, by the compositor, xdg move/resize, maximize/fullscreen, minimize, layer-shell panels. `--kiosk` fullscreens every window for nested desktops. |
 | Viewers | Any number, each with its own encoder at its own size and codec. One controls (input and output size): the first control-token session, or whoever took control last. A second, read-only token lets people watch. |
@@ -82,16 +82,16 @@ small shared-types crate. That boundary keeps encoders and transports pluggable 
 
 | Crate | Role |
 |---|---|
-| `bw-core` | Plain types shared by everything: `Command` (server → compositor), `Event` (compositor → server), `Frame`/`FrameBuffer`, `FrameSink`, `StreamMsg`, `WindowInfo`, `ControlMsg`, `InputMsg`, `Snapshot`, the decoration layout. Serde and JSON schemas on the API types. |
-| `bw-compositor` | Smithay. `lib.rs` (state, loop, output, resize, spawn), `handlers.rs` (protocol delegates), `input.rs` (browser and API input → seat, focus, decorations), `render.rs` (frame), `gpu.rs` (render node, GBM, EGL and dmabuf swapchains, or the surfaceless platform and a texture read back), `grabs.rs` (move/resize), `decor.rs` (title bars), `xwayland.rs`, `foreign_toplevel.rs`, `workspace.rs`, `desktop.rs` (window list, control, snapshots), `window_stream.rs`, `clipboard.rs`, `cursor.rs`. |
-| `bw-stream` | GStreamer. `GstSink: FrameSink` (dmabuf import or memory frames, pipeline build/rebuild, keyframes, codec and size switch), `lease.rs` (a custom `GstMeta` whose `free` drops the swapchain lease), the Opus audio source, the microphone and webcam sinks. |
-| `bw-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`; its build script insists on a web build first), `/ws` (viewer sessions, roles) and `/ws/window/{id}` sessions, `rtc.rs` (the WebRTC data-channel transport: str0m peers on one UDP socket per address, the video's other pipe), `/api` (`api.rs` holds the operations, `elements.rs` the accessibility walk), `/mcp` (`mcp.rs`), audio and event broadcast. |
-| `bw` | The `browser-wayland` binary: clap CLI, thread spawning, channel wiring, the audio devices, the render node or its absence. |
+| `elsewhere-core` | Plain types shared by everything: `Command` (server → compositor), `Event` (compositor → server), `Frame`/`FrameBuffer`, `FrameSink`, `StreamMsg`, `WindowInfo`, `ControlMsg`, `InputMsg`, `Snapshot`, the decoration layout. Serde and JSON schemas on the API types. |
+| `elsewhere-compositor` | Smithay. `lib.rs` (state, loop, output, resize, spawn), `handlers.rs` (protocol delegates), `input.rs` (browser and API input → seat, focus, decorations), `render.rs` (frame), `gpu.rs` (render node, GBM, EGL and dmabuf swapchains, or the surfaceless platform and a texture read back), `grabs.rs` (move/resize), `decor.rs` (title bars), `xwayland.rs`, `foreign_toplevel.rs`, `workspace.rs`, `desktop.rs` (window list, control, snapshots), `window_stream.rs`, `clipboard.rs`, `cursor.rs`. |
+| `elsewhere-stream` | GStreamer. `GstSink: FrameSink` (dmabuf import or memory frames, pipeline build/rebuild, keyframes, codec and size switch), `lease.rs` (a custom `GstMeta` whose `free` drops the swapchain lease), the Opus audio source, the microphone and webcam sinks. |
+| `elsewhere-server` | axum. TLS and token bootstrap, the viewer assets (`web/dist`, embedded with `include_str!`; its build script insists on a web build first), `/ws` (viewer sessions, roles) and `/ws/window/{id}` sessions, `rtc.rs` (the WebRTC data-channel transport: str0m peers on one UDP socket per address, the video's other pipe), `/api` (`api.rs` holds the operations, `elements.rs` the accessibility walk), `/mcp` (`mcp.rs`), audio and event broadcast. |
+| `elsewhere` | The `elsewhere` binary: clap CLI, thread spawning, channel wiring, the audio devices, the render node or its absence. |
 
 `web/` is the viewer: React 19 and Tailwind CSS 4, built by Vite into `web/dist` by `make web` (the
 `Makefile` runs it before cargo; the Dockerfile and the release workflow do the same; `web/dist` is
 not tracked). `src/viewer.js` is the engine (the
-WebSocket, WebCodecs decoding onto the canvas, input, clipboard, audio, the `bw` console helpers); it
+WebSocket, WebCodecs decoding onto the canvas, input, clipboard, audio, the `elsewhere` console helpers); it
 publishes its state on a small store and React only renders the chrome around the canvas
 (`src/App.jsx` and `src/components/`). `src/keycodes.js` maps DOM `code` to evdev (generated from
 Chromium's table).
@@ -119,7 +119,7 @@ implicit fences on its dmabufs), else the dmabuf's implicit fences.
 GTK renderer and Qt backend overrides are inherited from the launcher environment; see the
 [application environment settings](../README.md#run).
 
-**Output.** One `Output` ("BROWSER-1") whose mode is the browser's canvas in device pixels and whose
+**Output.** One `Output` ("ELSEWHERE-1") whose mode is the browser's canvas in device pixels and whose
 scale is the browser's `devicePixelRatio`, so logical pixels equal CSS pixels and pointer coordinates
 need no conversion. `Command::Resize` changes the mode, resizes the swapchain, re-arranges layers,
 re-fits windows (`relayout`), and rebuilds the encoder pipeline with a new stream id. Sizes are rounded
@@ -222,7 +222,7 @@ of its clock as a jitter buffer.
 
 axum with rustls. On first start the server writes a self-signed certificate (every local address and
 `localhost` as SANs, so the fingerprint it prints can be compared in the browser), its key and a random
-token into the data directory (`$XDG_CONFIG_HOME/browser-wayland`, or `~/.config/...`). ALPN is pinned to
+token into the data directory (`$XDG_CONFIG_HOME/elsewhere`, or `~/.config/...`). ALPN is pinned to
 HTTP/1.1 because WebSocket upgrades need it.
 
 A session becomes a viewer only after it sends a token (see [protocol.md](protocol.md)); which of the
@@ -242,7 +242,7 @@ is requested on the stage, so the chrome disappears and the output becomes the s
 Keyboard Lock API then lets shortcuts like Ctrl+W reach the desktop. The status bar shows fps, bandwidth,
 input-to-frame latency and loss counters; the Statistics tab of the side panel adds per-stage timings
 (receive to decoded, decoded to paint, paint interval as p50/p95), decode queue depth, keyframe cadence
-and audio lead once a second, collected only while it is shown; `bw()` in the console returns the same
+and audio lead once a second, collected only while it is shown; `elsewhere()` in the console returns the same
 as JSON.
 
 ## Running and deployment

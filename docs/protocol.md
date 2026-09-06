@@ -23,7 +23,7 @@ No cookies are used anywhere.
 
 ## WebSocket messages
 
-Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/bw-server/src/protocol.rs` and
+Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/elsewhere-server/src/protocol.rs` and
 `web/src/viewer.js` (with the constants in `web/src/protocol.js`).
 
 ### Server → client
@@ -127,7 +127,7 @@ the viewer's panel opens one, sized to the window). The same messages as `/ws`, 
 ## HTTP API
 
 ```sh
-T=$(cat ~/.config/browser-wayland/token)
+T=$(cat ~/.config/elsewhere/token)
 curl -s -H "Authorization: Bearer $T" https://host:8443/api/windows
 curl -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
      https://host:8443/api/control -d '{"id":3,"op":"minimize"}'
@@ -170,7 +170,7 @@ clipboard and file uploads have their own limits, or none).
 
 Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; see [mcp.md](mcp.md)) and
 `GET /skill/SKILL.md`, `GET /skill/reference.md` (the agent documentation, no token). The generated
-`skills/browser-wayland/reference.md` holds the JSON schemas of every body and tool.
+`skills/elsewhere/reference.md` holds the JSON schemas of every body and tool.
 
 ### Window object
 
@@ -245,7 +245,7 @@ Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; se
 | `resize` (`w`, `h`) | floating windows only; a size hint for Wayland clients, a configure for X11 |
 | `spawn` (`cmd`) | `sh -c cmd` with the `--exec` environment: `WAYLAND_DISPLAY`, `DISPLAY`, `PULSE_SINK`, `XDG_SESSION_TYPE` and the toolkits' backend switches |
 | `launch` (`app`) | start an installed application: `app` is an `id` from `GET /api/applications`, its `Exec` line runs like `spawn`; `404` over HTTP for an unknown id |
-| `quit` | browser-wayland exits, every window with it |
+| `quit` | Elsewhere exits, every window with it |
 
 Unknown ids and impossible requests are ignored. `spawn` is remote code execution by design; the token
 is the boundary.
@@ -261,8 +261,8 @@ is the entry's icon as SVG or PNG, from the icon themes (hicolor first) or `pixm
 
 ## Browser console
 
-`window.bw()` returns viewer statistics. `bw.windows()`, `bw.activate(id)`, `bw.control({...})`,
-`bw.spawn(cmd)`, `bw.launch(app)`, `bw.quit()`, `bw.snapshot(id, sizing)` (a `Blob`) and `bw.elements(id)` wrap the
+`window.elsewhere()` returns viewer statistics. `elsewhere.windows()`, `elsewhere.activate(id)`, `elsewhere.control({...})`,
+`elsewhere.spawn(cmd)`, `elsewhere.launch(app)`, `elsewhere.quit()`, `elsewhere.snapshot(id, sizing)` (a `Blob`) and `elsewhere.elements(id)` wrap the
 same messages and routes.
 
 The Docker rig can run `node web/checks/rtc-peer.mjs` for peer disposal and signaling callbacks,

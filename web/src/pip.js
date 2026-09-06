@@ -44,9 +44,9 @@ export function createPip(viewer) {
       const entry = owned = { win, target, desktop: target === null };
       win.onpagehide = () => { if (owned === entry) close(); };
       // The child's compact-mode detection reads this before its module evaluates.
-      win.bwReturn = () => { window.focus(); close(); };
-      win.bwOpenFiles = path => { window.focus(); close(); viewer.openFiles(path); };
-      win.document.title = 'browser-wayland';
+      win.elsewhereReturn = () => { window.focus(); close(); };
+      win.elsewhereOpenFiles = path => { window.focus(); close(); viewer.openFiles(path); };
+      win.document.title = 'Elsewhere';
       win.document.body.style.cssText = 'margin:0;height:100vh;background:#09090b';
       const frame = entry.frame = win.document.createElement('iframe');
       frame.title = target === null ? 'Remote desktop' : `Remote window ${target}`;
@@ -60,7 +60,7 @@ export function createPip(viewer) {
       if (entry.desktop) viewer.setPlaybackEnabled(false);
       frame.onload = () => {
         if (owned !== entry) return;
-        const child = entry.child = frame.contentWindow.bw;
+        const child = entry.child = frame.contentWindow.elsewhere;
         if (!child) return; // the connection deadline also covers an initial about:blank load
         let handedTo;
         const update = () => {

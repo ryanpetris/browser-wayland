@@ -1,0 +1,47 @@
+[package]
+name = "elsewhere"
+version = "0.0.0" # releases are versioned by their git tag (see build.rs and .github/workflows/build.yml)
+description = "Headless Wayland compositor whose screen is a browser tab"
+authors = ["Ryan Petris <ryan@petris.net>"]
+repository = "https://github.com/ryanpetris/elsewhere"
+edition.workspace = true
+license.workspace = true
+
+# `cargo deb -p elsewhere --deb-version <tag>-1` (see .github/workflows/build.yml). $auto = library
+# dependencies from dpkg-shlibdeps; the GStreamer plugin packages are loaded at runtime, so they are listed by hand.
+[package.metadata.deb]
+section = "graphics"
+priority = "optional"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+A headless Wayland compositor whose output is hardware-encoded (VA-API) and shown in a browser tab \
+over a WebSocket with WebCodecs; mouse, keyboard and audio travel the same way. Runs Wayland and \
+X11 clients, layer-shell panels and taskbars, and exposes a window-management HTTP API."""
+depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad"
+recommends = "xwayland, pipewire (>= 1.4.2), pipewire-pulse (>= 1.4.2), wireplumber (>= 0.5.6), gstreamer1.0-pipewire (>= 1.4.2), pulseaudio-utils, va-driver-all, fonts-dejavu-core"
+assets = [
+    ["target/release/elsewhere", "usr/bin/", "755"],
+    ["../../web/dist/THIRD_PARTY.txt", "usr/share/doc/elsewhere/", "644"],
+    ["../../docs/audio-visualiser.md", "usr/share/doc/elsewhere/", "644"],
+    ["../../docs/session-audio.md", "usr/share/doc/elsewhere/", "644"],
+    ["../../README.md", "usr/share/doc/elsewhere/", "644"],
+]
+
+[[bin]]
+name = "elsewhere"
+path = "src/main.rs"
+
+[dependencies]
+elsewhere-core = { path = "../elsewhere-core" }
+elsewhere-compositor = { path = "../elsewhere-compositor" }
+elsewhere-server = { path = "../elsewhere-server" }
+elsewhere-stream = { path = "../elsewhere-stream" }
+anyhow.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "signal", "time"] }
+serde_json = "1"
+tempfile = "3"
+signal-hook = "0.3"
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+pipewire = { version = "0.10.1", features = ["v0_3_65"] }

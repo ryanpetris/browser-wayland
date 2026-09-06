@@ -18,7 +18,7 @@ speaker connection. Animation is capped at 30 fps.
 
 ## Licences and source
 
-Original browser-wayland code remains MIT licensed. audioMotion-analyzer 4.5.4 is
+Original Elsewhere code remains MIT licensed. audioMotion-analyzer 4.5.4 is
 AGPL-3.0-or-later; the viewer includes that dependency and must meet
 its applicable licence requirements. Debian and tarball distributions include THIRD_PARTY.txt
 with the full applicable notice; Docker and Arch install it under the package's
@@ -46,8 +46,8 @@ The checks cover graph ownership, repeated disposal and click listener counts,
 style changes, HiDPI, fullscreen, reduced motion, animation off, delayed audio
 initialization, source replacement and license asset delivery.
 
-The live check is `node checks/session-audio.mjs`, with `BW_TEST_URL` and
-`BW_TEST_TOKEN_FILE` pointing at an isolated Docker desktop and its control token.
+The live check is `node checks/session-audio.mjs`, with `ELSEWHERE_TEST_URL` and
+`ELSEWHERE_TEST_TOKEN_FILE` pointing at an isolated Docker desktop and its control token.
 It uses finite GStreamer audio and mpv software-Wayland video test signals, then
 Chromium's fake microphone device. It terminates test processes whose command
 lines match its own signals; use a dedicated rig.

@@ -1,4 +1,4 @@
-# Instructions for agents working on browser-wayland
+# Instructions for agents working on Elsewhere
 
 ## Commits and pushes
 

@@ -416,14 +416,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "browser-wayland"
+name = "elsewhere"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "bw-compositor",
- "bw-core",
- "bw-server",
- "bw-stream",
+ "elsewhere-compositor",
+ "elsewhere-core",
+ "elsewhere-server",
+ "elsewhere-stream",
  "clap",
  "pipewire",
  "serde_json",
@@ -441,12 +441,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
-name = "bw-compositor"
+name = "elsewhere-compositor"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
- "bw-core",
+ "elsewhere-core",
  "fontdb",
  "smithay",
  "tokio",
@@ -455,7 +455,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bw-core"
+name = "elsewhere-core"
 version = "0.1.0"
 dependencies = [
  "bytes",
@@ -466,14 +466,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "bw-server"
+name = "elsewhere-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
  "axum-server",
  "base64 0.22.1",
- "bw-core",
+ "elsewhere-core",
  "calloop",
  "futures-util",
  "if-addrs",
@@ -494,11 +494,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "bw-stream"
+name = "elsewhere-stream"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bw-core",
+ "elsewhere-core",
  "gstreamer",
  "gstreamer-allocators",
  "gstreamer-app",

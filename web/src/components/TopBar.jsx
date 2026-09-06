@@ -31,14 +31,14 @@ export function TopBar({ viewer, windowMode, sidebar, onSidebar, onFullscreen, m
       {locked && <MousePointer2 className="size-3.5 shrink-0" aria-label="Pointer captured; Escape releases it" />}
       {!windowMode && role === 'participant' && <button type="button" className="shrink-0 rounded bg-indigo-500 px-2 py-1 text-white hover:bg-indigo-400" onClick={() => viewer.takeControl()}>Take control</button>}
       {!windowMode && role === 'controller' && <IconButton icon={Keyboard} label="On-screen keyboard" active={keyboard} onClick={onKeyboard} />}
-      <IconButton icon={CornerUpLeft} label="Return to main viewer" onClick={() => window.parent.bwReturn?.()} />
+      <IconButton icon={CornerUpLeft} label="Return to main viewer" onClick={() => window.parent.elsewhereReturn?.()} />
     </header>
   );
   return (
     <header onClick={event => { if (!event.target.closest('[data-menu-trigger]')) onMenu(null); }} className="flex h-11 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-2 sm:gap-3 sm:px-3">
       <div className="flex min-w-0 shrink items-center gap-2 font-medium text-zinc-100">
         <Logo />
-        <span className="hidden truncate sm:inline">{windowMode ? windowTitle || `Window ${WINDOW}` : 'browser-wayland'}</span>
+        <span className="hidden truncate sm:inline">{windowMode ? windowTitle || `Window ${WINDOW}` : 'Elsewhere'}</span>
       </div>
       {acts && <IconButton data-menu-trigger id="apps-toggle" icon={LayoutGrid} label="Applications" active={menu === 'apps'} onClick={() => onMenu('apps')} />}
       <div className="flex min-w-0 shrink-0 items-center gap-2 text-xs text-zinc-400">
@@ -72,7 +72,7 @@ export function TopBar({ viewer, windowMode, sidebar, onSidebar, onFullscreen, m
         <IconButton data-menu-trigger id="about-toggle" icon={Info} label="About / Licenses & source" active={menu === 'about'} aria-haspopup="dialog" aria-expanded={menu === 'about'} aria-controls="viewer-about" onClick={() => onMenu('about')} />
         {viewer.pip.supported && <IconButton icon={PictureInPicture2} label="Picture-in-picture" onClick={() => viewer.pip.open()} />}
         <IconButton icon={Expand} label="Fullscreen (browser shortcuts go to the desktop)" onClick={onFullscreen} />
-        {acts && <IconButton data-menu-trigger id="power-toggle" icon={Power} label="Quit browser-wayland" active={menu === 'power'} onClick={() => onMenu('power')} className="hover:text-rose-300" />}
+        {acts && <IconButton data-menu-trigger id="power-toggle" icon={Power} label="Quit Elsewhere" active={menu === 'power'} onClick={() => onMenu('power')} className="hover:text-rose-300" />}
       </div>
     </header>
   );

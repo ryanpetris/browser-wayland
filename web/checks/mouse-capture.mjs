@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 import { CONFIG, CURSOR, POINTER_LOCK, ROLE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, BLUR } from '../src/protocol.js';
 
-const root = await mkdtemp('/tmp/bw-capture-');
+const root = await mkdtemp('/tmp/elsewhere-capture-');
 const server = createServer(async (req, res) => {
   try {
     const path = new URL(req.url, 'http://localhost').pathname;
@@ -33,7 +33,7 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   const ready = async () => {
-    await page.waitForFunction(() => !!window.bw?.store && !!window.socket);
+    await page.waitForFunction(() => !!window.elsewhere?.store && !!window.socket);
     await page.evaluate(({ CONFIG, CURSOR, ROLE }) => {
       packet([ROLE, 2, 0]);
       packet([CONFIG, ...new TextEncoder().encode(JSON.stringify({ streamId: 1, codec: 'vp8', width: 1280, height: 720, scale: 1 }))]);
@@ -46,18 +46,18 @@ try {
   await ready();
   const canvas = page.locator('canvas.stage');
   const captured = async () => {
-    try { await page.waitForFunction(() => bw.store.get().locked && !!document.pointerLockElement, null, { timeout: 5000 }); }
-    catch (error) { console.error(await page.evaluate(() => ({ role: bw.store.get().role, status: bw.store.get().status, stats: bw.store.get().stats }))); throw error; }
+    try { await page.waitForFunction(() => elsewhere.store.get().locked && !!document.pointerLockElement, null, { timeout: 5000 }); }
+    catch (error) { console.error(await page.evaluate(() => ({ role: elsewhere.store.get().role, status: elsewhere.store.get().status, stats: elsewhere.store.get().stats }))); throw error; }
   };
-  const released = () => page.waitForFunction(() => !bw.store.get().locked && !document.pointerLockElement);
+  const released = () => page.waitForFunction(() => !elsewhere.store.get().locked && !document.pointerLockElement);
   await canvas.click();
   assert.equal(await page.evaluate(() => !!document.pointerLockElement), false);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const toggle = page.getByRole('checkbox', { name: 'Capture mouse on click' });
   await toggle.check();
-  assert.equal(await page.evaluate(() => localStorage.getItem('bw.captureOnClick')), '1');
+  assert.equal(await page.evaluate(() => localStorage.getItem('elsewhere.captureOnClick')), '1');
   await page.reload(); await ready();
-  assert.equal(await page.evaluate(() => bw.store.get().captureOnClick), true);
+  assert.equal(await page.evaluate(() => elsewhere.store.get().captureOnClick), true);
   const mousePackets = () => page.evaluate(types => sent.filter(p => types.includes(p[0])), [MOTION_ABS, MOTION_REL, BUTTON, AXIS]);
   await page.evaluate(() => { sent.length = 0; });
   await canvas.hover(); await page.mouse.wheel(0, 20);
@@ -93,8 +93,8 @@ try {
   // Programmatic exit avoids Chromium's cooldown after its built-in unlock gesture.
   await page.waitForTimeout(1300);
   await canvas.click(); await captured();
-  await page.evaluate(() => bw.setCaptureOnClick(false)); await released();
-  await page.evaluate(() => bw.setCaptureOnClick(true));
+  await page.evaluate(() => elsewhere.setCaptureOnClick(false)); await released();
+  await page.evaluate(() => elsewhere.setCaptureOnClick(true));
   await page.reload(); await ready();
   await canvas.click(); await captured();
   await page.evaluate(type => packet([type, 1, 0]), ROLE); await released();
@@ -117,7 +117,7 @@ try {
   await released(); await page.waitForTimeout(250);
   assert.equal(await page.evaluate(KEY => sent.some(p => p[0] === KEY && p[1] === 47 && p[3] === 1), KEY), false, 'release cancels deferred paste');
   await page.evaluate(() => {
-    bw.setTouchMouse(true);
+    elsewhere.setTouchMouse(true);
     const c = document.querySelector('canvas.stage'), r = c.getBoundingClientRect();
     const capture = c.setPointerCapture; c.setPointerCapture = () => {};
     for (const type of ['pointerdown', 'pointerup']) c.dispatchEvent(new PointerEvent(type, { pointerType: 'touch', pointerId: 7, clientX: r.left + r.width / 4, clientY: r.top + r.height / 4 }));
@@ -132,7 +132,7 @@ try {
     Object.defineProperty(document, 'pointerLockElement', { configurable: true, get: () => c });
     document.exitPointerLock = () => { window.lateExits++; };
     for (const patch of [{ role: 'participant', status: 'connected', captureOnClick: true }, { role: 'controller', status: 'retrying', captureOnClick: true }, { role: 'controller', status: 'connected', captureOnClick: false }]) {
-      bw.store.set(patch); document.dispatchEvent(new Event('pointerlockchange'));
+      elsewhere.store.set(patch); document.dispatchEvent(new Event('pointerlockchange'));
     }
     delete document.pointerLockElement; document.exitPointerLock = exit;
   });

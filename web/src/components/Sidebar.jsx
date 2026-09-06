@@ -119,7 +119,7 @@ function WindowRow({ viewer, w, acts, eligible, dpr }) {
         <Action icon={ExternalLink} label="Open in its own window" onClick={e => {
           e.stopPropagation(); e.currentTarget.blur();
           // the window's size plus the popup's own bars (TopBar h-11 + StatusBar h-7), so it shows 1:1
-          window.open(`/?window=${w.id}`, `bw-window-${w.id}`, `popup,width=${w.w},height=${w.h + 72}`);
+          window.open(`/?window=${w.id}`, `elsewhere-window-${w.id}`, `popup,width=${w.w},height=${w.h + 72}`);
         }} />
         {viewer.pip.supported && <Action icon={PictureInPicture2} label="Picture-in-picture" onClick={e => { e.stopPropagation(); viewer.pip.open(w.id); }} />}
         <Action icon={Camera} label="Snapshot (PNG)" onClick={e => {

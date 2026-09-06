@@ -5,12 +5,12 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
 
-const root = await mkdtemp(tmpdir() + '/bw-sizing-');
+const root = await mkdtemp(tmpdir() + '/elsewhere-sizing-');
 await mkdir(root + '/runtime', { mode: 0o700 });
 const log = await open(root + '/server.log', 'w');
 const origin = 'http://127.0.0.1:8093';
-const server = spawn('/src/target/release/browser-wayland', ['--no-audio', '--no-rtc', '--no-tls', '--render-node', 'none', '--codec', 'vp8', '--listen', '127.0.0.1:8093', '--socket-name', 'wayland-sizing'], {
-  env: { ...process.env, HOME: root, XDG_CONFIG_HOME: root + '/config', XDG_RUNTIME_DIR: root + '/runtime', RUST_LOG: 'bw_server::api=debug' }, stdio: ['ignore', log.fd, log.fd],
+const server = spawn('/src/target/release/elsewhere', ['--no-audio', '--no-rtc', '--no-tls', '--render-node', 'none', '--codec', 'vp8', '--listen', '127.0.0.1:8093', '--socket-name', 'wayland-sizing'], {
+  env: { ...process.env, HOME: root, XDG_CONFIG_HOME: root + '/config', XDG_RUNTIME_DIR: root + '/runtime', RUST_LOG: 'elsewhere_server::api=debug' }, stdio: ['ignore', log.fd, log.fd],
 });
 const wait = async fn => {
   for (let i = 0; i < 200; i++) { if (await fn()) return; await new Promise(r => setTimeout(r, 100)); }
@@ -19,9 +19,9 @@ const wait = async fn => {
 const dimensions = png => [png.readUInt32BE(16), png.readUInt32BE(20)];
 let browser;
 try {
-  await wait(async () => { try { return (await fetch(origin)).ok && !!await readFile(root + '/config/browser-wayland/token'); } catch { return false; } });
-  const token = (await readFile(root + '/config/browser-wayland/token', 'utf8')).trim();
-  const viewerToken = (await readFile(root + '/config/browser-wayland/viewer-token', 'utf8')).trim();
+  await wait(async () => { try { return (await fetch(origin)).ok && !!await readFile(root + '/config/elsewhere/token'); } catch { return false; } });
+  const token = (await readFile(root + '/config/elsewhere/token', 'utf8')).trim();
+  const viewerToken = (await readFile(root + '/config/elsewhere/viewer-token', 'utf8')).trim();
   const headers = { Authorization: `Bearer ${viewerToken}` };
   assert.equal((await fetch(origin + '/api/screenshot.png')).status, 401);
   let session, rpcId = 0;
@@ -39,16 +39,16 @@ try {
   browser = await chromium.launch({ env: { ...process.env, XDG_CONFIG_HOME: root + '/chromium' }, executablePath: '/usr/bin/chromium', args: ['--no-sandbox'] });
   for (const [dpr, viewport] of [[1, { width: 1000, height: 700 }], [1.5, { width: 700, height: 1000 }], [2, { width: 1000, height: 700 }]]) {
     const context = await browser.newContext({ viewport, deviceScaleFactor: dpr });
-    await context.addInitScript(() => localStorage.setItem('bw.sidebar', '1'));
+    await context.addInitScript(() => localStorage.setItem('elsewhere.sidebar', '1'));
     const page = await context.newPage();
     const previews = [];
     page.on('request', request => { if (request.url().includes('/snapshot.png')) previews.push(new URL(request.url()).searchParams); });
     await page.goto(origin + '/#token=' + token);
-    await page.waitForFunction(() => !!bw.store.get().stream);
-    await page.evaluate(() => bw.takeControl());
+    await page.waitForFunction(() => !!elsewhere.store.get().stream);
+    await page.evaluate(() => elsewhere.takeControl());
     for (const [name, size] of [['landscape', '640x360'], ['portrait', '300x600']]) {
-      await page.evaluate(({ name, size }) => bw.spawn(`foot --app-id=sizing-${name} --window-size-pixels=${size}`), { name, size });
-      await page.waitForFunction(name => bw.store.get().windows.some(w => w.app_id === `sizing-${name}`), name);
+      await page.evaluate(({ name, size }) => elsewhere.spawn(`foot --app-id=sizing-${name} --window-size-pixels=${size}`), { name, size });
+      await page.waitForFunction(name => elsewhere.store.get().windows.some(w => w.app_id === `sizing-${name}`), name);
     }
     await page.waitForTimeout(750);
     const windows = await (await fetch(origin + '/api/windows', { headers })).json();
@@ -56,7 +56,7 @@ try {
     assert(previews.some(q => q.get('width') === String(Math.ceil(64 * dpr))), 'landscape list previews use width');
     await wait(() => previews.some(q => q.get('height') === String(Math.ceil(40 * dpr))));
     assert(previews.some(q => q.get('height') === String(Math.ceil(40 * dpr))), 'portrait list previews use height');
-    const stream = await page.evaluate(() => bw.store.get().stream);
+    const stream = await page.evaluate(() => elsewhere.store.get().stream);
     for (const id of [null, ...windows.filter(w => w.app_id.startsWith('sizing-')).map(w => w.id)]) {
       const path = id == null ? '/api/screenshot.png' : `/api/windows/${id}/snapshot.png`;
       const target = windows.find(w => w.id === id);
@@ -91,9 +91,9 @@ try {
     }
     const tiny = windows.find(w => w.app_id === 'sizing-portrait');
     previews.length = 0;
-    await page.evaluate(tiny => bw.store.set({ windows: bw.store.get().windows.map(w => w.id === tiny.id ? { ...w, w: 3, h: 5 } : w) }), tiny);
+    await page.evaluate(tiny => elsewhere.store.set({ windows: elsewhere.store.get().windows.map(w => w.id === tiny.id ? { ...w, w: 3, h: 5 } : w) }), tiny);
     await wait(() => previews.some(q => q.get('height') === String(Math.max(1, Math.floor(5 * stream.scale)))));
-    for (const win of windows.filter(w => w.app_id.startsWith('sizing-'))) await page.evaluate(id => bw.control({ id, op: 'close' }), win.id);
+    for (const win of windows.filter(w => w.app_id.startsWith('sizing-'))) await page.evaluate(id => elsewhere.control({ id, op: 'close' }), win.id);
     await context.close();
   }
   console.log((await readFile(root + '/server.log', 'utf8')).split('\n').filter(l => l.includes('snapshot completed')).join('\n'));

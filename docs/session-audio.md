@@ -10,9 +10,9 @@ The graph has three virtual devices:
 
 | Name | Purpose |
 | --- | --- |
-| `browser-wayland-output` | Default stereo application output, captured for the browser |
-| `browser-wayland-microphone` | Default mono source carrying the controlling browser's microphone |
-| `browser-wayland-microphone-input` | Internal input to the microphone loopback |
+| `elsewhere-output` | Default stereo application output, captured for the browser |
+| `elsewhere-microphone` | Default mono source carrying the controlling browser's microphone |
+| `elsewhere-microphone-input` | Internal input to the microphone loopback |
 
 The output is a native null sink. The microphone uses a native loopback module. The output and
 microphone keep processing while idle, so recording starts without waiting for a playing application
@@ -79,7 +79,7 @@ not a stored volume setting. Monitor streams are shared between viewers, publish
 about 10 Hz, and are removed when the last visible mixer closes. Meter failures are shown separately
 from control availability. The optional output visualiser is independent of this panel.
 
-Muting **Browser microphone** silences the session source while browser capture continues. Use the
+Muting **Elsewhere microphone** silences the session source while browser capture continues. Use the
 microphone capture toggle to stop recording permission use. Opening the mixer, changing its controls,
 and subscribing to meters never start browser capture.
 
@@ -118,23 +118,23 @@ packages. Runtime startup never changes host defaults or invokes a service manag
 ## Verification
 
 Run verification inside Docker with the checkout and release build mounted. The lifecycle check is
-`crates/bw/checks/audio-lifecycle.py`, taking the release binary as its argument. It covers idle
+`crates/elsewhere/checks/audio-lifecycle.py`, taking the release binary as its argument. It covers idle
 startup, signal handling, missing services/plugins, service and worker readiness timeouts, and
 individual service exits. Failed audio must be cleaned up while the desktop keeps running.
 `web/checks/private-audio.mjs` exercises native and Pulse playback/recording through a live browser,
 microphone silence transitions, session microphone mute without changing consent, sustained mixer traffic,
 malformed packet handling and capability withdrawal.
-`crates/bw/checks/audio-isolation.py` checks two desktops alongside an unrelated audio graph, separate
+`crates/elsewhere/checks/audio-isolation.py` checks two desktops alongside an unrelated audio graph, separate
 tones and lifecycles, and native/Pulse mpv playback with saved device choices across app restarts. It
 also runs `web/checks/mixer-isolation.mjs` against both live sessions to check mixer membership and
 foreign-object rejection.
-The native meter check is `cargo run --release -p browser-wayland --example audio-graph`, also
+The native meter check is `cargo run --release -p elsewhere --example audio-graph`, also
 run inside Docker. It creates its own private services and checks playback, output, microphone and
 recording peaks through mute and gain changes, then verifies monitoring nodes disappear when meters
 are dropped while the management connection stays open. Output monitors follow channel volume and mute. Recording-stream monitoring is before that
 stream's own controls; the check separately verifies muted samples delivered to the recorder.
 
-`cargo run --release -p browser-wayland --example audio-mixer` checks native and Pulse controls,
+`cargo run --release -p elsewhere --example audio-mixer` checks native and Pulse controls,
 per-stream isolation, real routing to a second output, default selection, object removal, reconnect,
 monitor cleanup and cross-process control revocation. `web/checks/session-mixer.mjs` checks the rendered
 panel, authoritative controls, three-viewer authorization and shared subscriptions.

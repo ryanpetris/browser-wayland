@@ -17,7 +17,7 @@ import {
 } from 'node:fs/promises';
 import {chromium} from 'playwright-core';
 
-const root = await mkdtemp('/tmp/bw-files-');
+const root = await mkdtemp('/tmp/elsewhere-files-');
 await mkdir(root + '/runtime', {mode : 0o700});
 for (const name of ['a', 'b', 'large', 'blocked', 'gone'])
   await mkdir(root + '/' + name);
@@ -39,7 +39,7 @@ await chmod(root + '/blocked', 0);
 const log = await open(root + '/server.log', 'w');
 const origin = 'http://127.0.0.1:8094';
 const server =
-    spawn('/src/target/release/browser-wayland',
+    spawn('/src/target/release/elsewhere',
           [
             '--no-rtc', '--no-tls', '--render-node', 'none', '--codec', 'vp8',
             '--listen', '127.0.0.1:8094', '--socket-name', 'wayland-files-check'
@@ -65,15 +65,15 @@ let browser, inputClient, inputLog;
 try {
   await wait(async () => {
     try {
-      return !!await readFile(root + '/config/browser-wayland/token');
+      return !!await readFile(root + '/config/elsewhere/token');
     } catch {
       return false;
     }
   });
   const token =
-      (await readFile(root + '/config/browser-wayland/token', 'utf8')).trim();
+      (await readFile(root + '/config/elsewhere/token', 'utf8')).trim();
   const viewerToken =
-      (await readFile(root + '/config/browser-wayland/viewer-token', 'utf8'))
+      (await readFile(root + '/config/elsewhere/viewer-token', 'utf8'))
           .trim();
   const request = (url, options = {}, key = token) => fetch(origin + url, {
     ...options,
@@ -308,7 +308,7 @@ try {
         ro = await context.newPage();
   for (const [page, key] of [[ p, token ], [ q, token ], [ ro, viewerToken ]]) {
     await page.goto(origin + '/#token=' + key);
-    await page.waitForFunction(() => !!window.bw?.store.get().role);
+    await page.waitForFunction(() => !!window.elsewhere?.store.get().role);
   }
   assert.equal(
       await ro.getByRole('button', {name : 'Files', exact : true}).count(), 0);
@@ -318,7 +318,7 @@ try {
     await page.getByRole('textbox', {name : 'Directory path'}).fill(path);
     await page.getByRole('button', {name : 'Go', exact : true}).click();
     await page.waitForFunction(
-        path => bw.store.get().filesPath === path &&
+        path => elsewhere.store.get().filesPath === path &&
                 !Array
                      .from(document.querySelectorAll(
                          '[aria-label="File browser"] [role="status"]'))
@@ -351,7 +351,7 @@ try {
     await held;
     await route.continue();
   });
-  const batch = p.evaluate(() => bw.uploadFiles([
+  const batch = p.evaluate(() => elsewhere.uploadFiles([
     new File([ 'one' ], 'late.txt'), new File([ 'two' ], 'late2.txt')
   ]));
   await wait(() => reached);
@@ -361,17 +361,17 @@ try {
   await batch;
   console.log('Late batch completed');
   assert.equal(requests.length, before);
-  assert.equal(await p.evaluate(() => bw.store.get().filesPath),
+  assert.equal(await p.evaluate(() => elsewhere.store.get().filesPath),
                root + '/large');
   assert.equal(await readFile(root + '/a/late2.txt', 'utf8'), 'two');
   await q.evaluate(
-      () => bw.uploadFiles([ new File([ 'other' ], 'client-b.txt') ]));
+      () => elsewhere.uploadFiles([ new File([ 'other' ], 'client-b.txt') ]));
   await q.locator('[data-file-name="client-b.txt"]').waitFor();
   assert.equal(await readFile(root + '/b/client-b.txt', 'utf8'), 'other');
   assert.equal(await p.locator('[data-file-name]').count(), 100);
   await p.getByRole('button', {name : 'Next', exact : true}).click();
   await p.locator('[data-file-name="0100"]').waitFor();
-  await p.evaluate(path => bw.openFiles(path), root + '/b');
+  await p.evaluate(path => elsewhere.openFiles(path), root + '/b');
   await p.locator('[data-file-name="client-b.txt"]').waitFor();
   // Delay an old listing after a later navigation has completed.
   let releaseList;
@@ -388,9 +388,9 @@ try {
   await navigate(p, root + '/b');
   releaseList();
   await p.waitForTimeout(200);
-  assert.equal(await p.evaluate(() => bw.store.get().filesPath), root + '/b');
-  await p.evaluate(() => bw.takeControl());
-  await p.waitForFunction(() => bw.store.get().role === 'controller');
+  assert.equal(await p.evaluate(() => elsewhere.store.get().filesPath), root + '/b');
+  await p.evaluate(() => elsewhere.takeControl());
+  await p.waitForFunction(() => elsewhere.store.get().role === 'controller');
   await navigate(p, root + '/Downloads');
   await p.locator('canvas.stage').evaluate(el => {
     const data = new DataTransfer();
@@ -423,8 +423,8 @@ try {
       }));
   });
   await p.waitForFunction(
-      () => bw.store.get().notice?.text.includes('rescued (2).txt'));
-  assert.equal(await p.evaluate(() => bw.store.get().filesPath), root + '/b');
+      () => elsewhere.store.get().notice?.text.includes('rescued (2).txt'));
+  assert.equal(await p.evaluate(() => elsewhere.store.get().filesPath), root + '/b');
   await p.getByRole('button', {name : 'Open folder', exact : true}).click();
   await p.locator('[data-file-name="rescued (2).txt"]').waitFor();
   await p.route('**/api/drop/*/fail.txt', route => route.abort());
@@ -451,16 +451,16 @@ try {
         'paste', {clipboardData : data, bubbles : true, cancelable : true}));
   });
   await p.waitForFunction(
-      async () => (await bw.clipboard.read()).includes('pasted.txt'));
-  const uri = (await p.evaluate(() => bw.clipboard.read())).trim();
-  assert(uri.includes('/browser-wayland/drops/'));
+      async () => (await elsewhere.clipboard.read()).includes('pasted.txt'));
+  const uri = (await p.evaluate(() => elsewhere.clipboard.read())).trim();
+  assert(uri.includes('/elsewhere/drops/'));
   assert.equal(await readFile(new URL(uri), 'utf8'), 'paste contents');
   assert.equal((await request('/api/clipboard', {}, viewerToken)).status, 403);
   assert.equal(
       (await rpc('tools/call', {name : 'clipboard_read', arguments : {}}))
           .result.isError,
       true);
-  assert.equal(await ro.evaluate(() => bw.store.get().clipboardFiles.length),
+  assert.equal(await ro.evaluate(() => elsewhere.store.get().clipboardFiles.length),
                0);
   assert.equal(
       await ro.locator('button[title^="Download the copied files"]').count(),
@@ -477,21 +477,21 @@ try {
         clientY : 100
       }));
   });
-  await p.waitForFunction(() => bw.store.get().notice?.text.startsWith(
+  await p.waitForFunction(() => elsewhere.store.get().notice?.text.startsWith(
                               '1 file could not be saved'));
-  await p.evaluate(cmd => bw.spawn(cmd),
+  await p.evaluate(cmd => elsewhere.spawn(cmd),
                    'stdbuf -oL wev > ' + root + '/wev.log');
   await p.waitForFunction(
-      () => bw.store.get().windows.some(w => w.app_id === 'wev'));
+      () => elsewhere.store.get().windows.some(w => w.app_id === 'wev'));
   await p.evaluate(
       () =>
-          bw.activate(bw.store.get().windows.find(w => w.app_id === 'wev').id));
+          elsewhere.activate(elsewhere.store.get().windows.find(w => w.app_id === 'wev').id));
   await p.locator('canvas.stage').focus();
   await p.keyboard.press('a');
   await wait(
       async () =>
           (await readFile(root + '/wev.log', 'utf8')).includes('sym: a'));
-  await p.waitForFunction(() => bw.store.get().stats.frames > 0);
+  await p.waitForFunction(() => elsewhere.store.get().stats.frames > 0);
   await p.screenshot({path : root + '/file-browser.png'});
   console.log('Native keyboard input and video frames passed');
   const otherRequests = requests.length;

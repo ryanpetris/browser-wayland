@@ -5,7 +5,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
 
-const root = await mkdtemp(tmpdir() + '/bw-thumbnails-');
+const root = await mkdtemp(tmpdir() + '/elsewhere-thumbnails-');
 await mkdir(root + '/runtime', { mode: 0o700 });
 const log = await open(root + '/server.log', 'w');
 const origin = 'http://127.0.0.1:8093';
@@ -20,16 +20,16 @@ try {
 const xml = '/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml';
 execFileSync('wayland-scanner', ['client-header', xml, root + '/xdg-shell-client-protocol.h']);
 execFileSync('wayland-scanner', ['private-code', xml, root + '/xdg-shell-protocol.c']);
-execFileSync('cc', ['-I' + root, '/src/crates/bw-compositor/checks/thumbnail-client.c', root + '/xdg-shell-protocol.c', '-lwayland-client', '-o', root + '/client']);
-server = spawn('/src/target/release/browser-wayland', ['--no-audio', '--no-rtc', '--no-tls', '--render-node', 'none', '--codec', 'vp8', '--listen', '127.0.0.1:8093', '--socket-name', 'wayland-thumbnails'], {
-  env: { ...process.env, HOME: root, XDG_CONFIG_HOME: root + '/config', XDG_RUNTIME_DIR: root + '/runtime', RUST_LOG: 'bw_server::api=debug' }, stdio: ['ignore', log.fd, log.fd],
+execFileSync('cc', ['-I' + root, '/src/crates/elsewhere-compositor/checks/thumbnail-client.c', root + '/xdg-shell-protocol.c', '-lwayland-client', '-o', root + '/client']);
+server = spawn('/src/target/release/elsewhere', ['--no-audio', '--no-rtc', '--no-tls', '--render-node', 'none', '--codec', 'vp8', '--listen', '127.0.0.1:8093', '--socket-name', 'wayland-thumbnails'], {
+  env: { ...process.env, HOME: root, XDG_CONFIG_HOME: root + '/config', XDG_RUNTIME_DIR: root + '/runtime', RUST_LOG: 'elsewhere_server::api=debug' }, stdio: ['ignore', log.fd, log.fd],
 });
-  await wait(async () => { try { return (await fetch(origin)).ok && !!await readFile(root + '/config/browser-wayland/token'); } catch { return false; } });
-  const token = (await readFile(root + '/config/browser-wayland/token', 'utf8')).trim(), headers = { Authorization: `Bearer ${token}` };
+  await wait(async () => { try { return (await fetch(origin)).ok && !!await readFile(root + '/config/elsewhere/token'); } catch { return false; } });
+  const token = (await readFile(root + '/config/elsewhere/token', 'utf8')).trim(), headers = { Authorization: `Bearer ${token}` };
   browser = await chromium.launch({ env: { ...process.env, XDG_CONFIG_HOME: root + '/chromium' }, executablePath: '/usr/bin/chromium', args: ['--no-sandbox'] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await context.addInitScript(() => {
-    localStorage.setItem('bw.sidebar', '1');
+    localStorage.setItem('elsewhere.sidebar', '1');
     const Observer = IntersectionObserver;
     window.IntersectionObserver = class extends Observer {
       constructor(callback, options) {
@@ -45,12 +45,12 @@ server = spawn('/src/target/release/browser-wayland', ['--no-audio', '--no-rtc',
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.url().includes('/snapshot.png')) requests.push({ at: Date.now(), url: request.url() }); });
   await page.goto(origin + '/#token=' + token);
-  await page.waitForFunction(() => !!bw.store.get().stream);
-  await page.evaluate(() => bw.takeControl());
-  await page.evaluate(cmd => bw.spawn(cmd), root + '/client ' + root + '/command');
-  await page.waitForFunction(() => bw.store.get().windows.some(w => w.app_id === 'thumbnail-surfaces'));
-  const id = await page.evaluate(() => bw.store.get().windows.find(w => w.app_id === 'thumbnail-surfaces').id);
-  const info = () => page.evaluate(id => bw.store.get().windows.find(w => w.id === id), id);
+  await page.waitForFunction(() => !!elsewhere.store.get().stream);
+  await page.evaluate(() => elsewhere.takeControl());
+  await page.evaluate(cmd => elsewhere.spawn(cmd), root + '/client ' + root + '/command');
+  await page.waitForFunction(() => elsewhere.store.get().windows.some(w => w.app_id === 'thumbnail-surfaces'));
+  const id = await page.evaluate(() => elsewhere.store.get().windows.find(w => w.app_id === 'thumbnail-surfaces').id);
+  const info = () => page.evaluate(id => elsewhere.store.get().windows.find(w => w.id === id), id);
   const thumb = page.locator('[data-window-list] .group').filter({ hasText: 'Thumbnail surfaces' }).locator('.h-10 img');
   await thumb.waitFor();
   const source = () => thumb.getAttribute('src');
@@ -85,11 +85,11 @@ server = spawn('/src/target/release/browser-wayland', ['--no-audio', '--no-rtc',
   await page.waitForTimeout(3300);
   await fresh();
   assert((await info()).content_revision >= beforeBurst + 2, 'both burst commits advance the revision');
-  await page.evaluate(id => bw.control({ id, op: 'minimize' }), id);
+  await page.evaluate(id => elsewhere.control({ id, op: 'minimize' }), id);
   await page.waitForTimeout(300);
   await command('root ff802020');
-  await page.evaluate(id => bw.control({ id, op: 'activate' }), id);
-  await page.evaluate(id => bw.control({ id, op: 'resize', w: 600, h: 240 }), id);
+  await page.evaluate(id => elsewhere.control({ id, op: 'activate' }), id);
+  await page.evaluate(id => elsewhere.control({ id, op: 'resize', w: 600, h: 240 }), id);
   await wait(async () => (await info()).w === 600);
   await fresh();
   const hidden = async (hide, show, label) => {
@@ -117,18 +117,18 @@ server = spawn('/src/target/release/browser-wayland', ['--no-audio', '--no-rtc',
   await page.getByRole('button', { name: 'Windows', exact: true }).click();
   await page.waitForTimeout(500);
   assert.equal(await source(), retained, 'unchanged reopening reuses URL');
-  await page.evaluate(id => bw.control({ id, op: 'close' }), id);
-  await page.waitForFunction(() => bw.store.get().windows.length === 0);
+  await page.evaluate(id => elsewhere.control({ id, op: 'close' }), id);
+  await page.waitForFunction(() => elsewhere.store.get().windows.length === 0);
   await page.waitForTimeout(200);
   assert(!await page.evaluate(url => liveBlobUrls.has(url), retained), 'removed row revokes thumbnail URL');
-  await page.evaluate(cmd => bw.spawn(cmd), 'env GDK_BACKEND=x11 python /src/crates/bw-compositor/checks/thumbnail-x11.py ' + root + '/x11-command');
-  await page.waitForFunction(() => bw.store.get().windows.some(w => w.x11 && w.title === 'Thumbnail X11'));
-  const x11 = await page.evaluate(() => bw.store.get().windows.find(w => w.x11 && w.title === 'Thumbnail X11'));
+  await page.evaluate(cmd => elsewhere.spawn(cmd), 'env GDK_BACKEND=x11 python /src/crates/elsewhere-compositor/checks/thumbnail-x11.py ' + root + '/x11-command');
+  await page.waitForFunction(() => elsewhere.store.get().windows.some(w => w.x11 && w.title === 'Thumbnail X11'));
+  const x11 = await page.evaluate(() => elsewhere.store.get().windows.find(w => w.x11 && w.title === 'Thumbnail X11'));
   const xThumb = page.locator('[data-window-list] .group').filter({ hasText: 'Thumbnail X11' }).locator('.h-10 img');
   await xThumb.waitFor();
   const xBefore = Buffer.from(await xThumb.evaluate(async img => [...new Uint8Array(await (await fetch(img.src)).arrayBuffer())]));
   await writeFile(root + '/x11-command', 'root ffe02020');
-  await page.waitForFunction(({ id, revision }) => bw.store.get().windows.find(w => w.id === id).content_revision > revision, { id: x11.id, revision: x11.content_revision });
+  await page.waitForFunction(({ id, revision }) => elsewhere.store.get().windows.find(w => w.id === id).content_revision > revision, { id: x11.id, revision: x11.content_revision });
   await wait(async () => {
     try {
       const png = Buffer.from(await xThumb.evaluate(async img => [...new Uint8Array(await (await fetch(img.src)).arrayBuffer())]));
@@ -145,7 +145,7 @@ server = spawn('/src/target/release/browser-wayland', ['--no-audio', '--no-rtc',
   await writeFile(root + '/x11-command', 'root ff20e0e0');
   await wait(() => waiting);
   const xUrl = await xThumb.getAttribute('src');
-  await page.evaluate(() => bw.dispose());
+  await page.evaluate(() => elsewhere.dispose());
   resume();
   await page.waitForTimeout(200);
   assert(!await page.evaluate(url => liveBlobUrls.has(url), xUrl), 'viewer disposal releases retained thumbnail');

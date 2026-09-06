@@ -1,0 +1,17 @@
+[package]
+name = "elsewhere-compositor"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+elsewhere-core = { path = "../elsewhere-core" }
+anyhow.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+xcursor = "0.3"
+smithay = { git = "https://github.com/Smithay/smithay", rev = "28c8e0fad905f3e7d01c2446fb60d26659071684", default-features = false, features = [
+    "wayland_frontend", "desktop", "backend_drm", "backend_gbm", "backend_egl", "renderer_gl", "xwayland",
+] }
+ab_glyph = "0.2.32"
+fontdb = "0.24.0"

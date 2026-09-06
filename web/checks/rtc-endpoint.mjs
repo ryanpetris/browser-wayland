@@ -6,7 +6,7 @@ import { hostname, tmpdir } from 'node:os';
 import { lookup } from 'node:dns/promises';
 import { chromium } from 'playwright-core';
 
-const root = await mkdtemp(tmpdir() + '/bw-rtc-endpoint-');
+const root = await mkdtemp(tmpdir() + '/elsewhere-rtc-endpoint-');
 await mkdir(root + '/runtime', { mode: 0o700 });
 const browser = await chromium.launch({ executablePath: '/usr/bin/chromium', args: ['--no-sandbox', `--unsafely-treat-insecure-origin-as-secure=http://${hostname()}:8097`] });
 try {
@@ -18,7 +18,7 @@ try {
     ['localhost', ['--rtc-addr', '127.0.0.1', '--rtc-port', '8098'], 8098],
   ]) {
     const log = await open(root + '/desktop.log', 'w');
-    const desktop = spawn('/src/target/release/browser-wayland', ['--no-audio', '--no-tls', '--render-node', 'none', '--codec', 'vp8', '--listen', '[::]:8097', ...args], {
+    const desktop = spawn('/src/target/release/elsewhere', ['--no-audio', '--no-tls', '--render-node', 'none', '--codec', 'vp8', '--listen', '[::]:8097', ...args], {
       env: { ...process.env, XDG_CONFIG_HOME: root + '/config', XDG_RUNTIME_DIR: root + '/runtime' },
       stdio: ['ignore', log.fd, log.fd],
     });
@@ -32,7 +32,7 @@ try {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
       assert(ready, await readFile(root + '/desktop.log', 'utf8'));
-      const token = (await readFile(root + '/config/browser-wayland/token', 'utf8')).trim();
+      const token = (await readFile(root + '/config/elsewhere/token', 'utf8')).trim();
       await context.addInitScript(() => {
         window.endpointReplies = [];
         let omit = true;
@@ -65,9 +65,9 @@ try {
       });
       const page = await context.newPage();
       await page.goto(`${origin}/#token=${token}`);
-      await page.waitForFunction(() => window.bw?.store.get().rtcAvailable);
-      await page.evaluate(() => bw.setTransport('webrtc'));
-      await page.waitForFunction(() => bw.store.get().videoVia === 'webrtc', null, { timeout: 15000 });
+      await page.waitForFunction(() => window.elsewhere?.store.get().rtcAvailable);
+      await page.evaluate(() => elsewhere.setTransport('webrtc'));
+      await page.waitForFunction(() => elsewhere.store.get().videoVia === 'webrtc', null, { timeout: 15000 });
       const remote = await page.evaluate(async () => {
         const stats = await testPeer.getStats();
         const pair = [...stats.values()].find(s => s.type === 'candidate-pair' && s.nominated);

@@ -110,7 +110,7 @@ function Banner({ viewer }) {
     return (
       <div className={`absolute ${card}`}>
         <MonitorX className="size-6 text-zinc-500" />
-        <div className="text-sm text-zinc-200">browser-wayland was shut down</div>
+        <div className="text-sm text-zinc-200">Elsewhere was shut down</div>
         <div className="text-xs text-zinc-500">Start it again and reload this page.</div>
       </div>
     );

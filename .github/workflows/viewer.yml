@@ -16,4 +16,4 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
           npm run check:visualiser
-          cargo test --manifest-path ../Cargo.toml -p bw-server --release --locked web_asset_tests
+          cargo test --manifest-path ../Cargo.toml -p elsewhere-server --release --locked web_asset_tests
