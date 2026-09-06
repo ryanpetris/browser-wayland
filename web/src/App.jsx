@@ -30,6 +30,7 @@ export function App({ viewer }) {
   const [elements, setElements] = usePref('elements', false);
   const [tab, setTab] = useState('windows');
   const [menu, setMenu] = useState(null); // One top-bar menu at a time.
+  const closeMenu = () => { setMenu(null); document.getElementById(`${menu}-toggle`)?.focus(); };
   const [fullscreen, setFullscreen] = useState(false); // the chrome is gone then, so nothing is collected for it
   const windowMode = !!WINDOW;
   useEffect(() => {
@@ -51,9 +52,9 @@ export function App({ viewer }) {
         menu={menu} onMenu={m => setMenu(menu === m ? null : m)}
         keyboard={keyboard} onKeyboard={() => (keyboard ? focusKeyboard() : setKeyboard(true))}
       />
-      {menu === 'apps' && <Launcher viewer={viewer} onClose={() => setMenu(null)} />}
-      {menu === 'power' && <PowerMenu viewer={viewer} onClose={() => setMenu(null)} />}
-      {menu === 'settings' && !windowMode && !fullscreen && <Settings viewer={viewer} borders={borders} onBorders={setBorders} elements={elements} onElements={setElements} onClose={() => setMenu(null)} />}
+      {menu === 'apps' && <Launcher viewer={viewer} onClose={closeMenu} />}
+      {menu === 'power' && <PowerMenu viewer={viewer} onClose={closeMenu} />}
+      {menu === 'settings' && !windowMode && !fullscreen && <Settings viewer={viewer} borders={borders} onBorders={setBorders} elements={elements} onElements={setElements} onClose={closeMenu} />}
       <div className="relative flex min-h-0 flex-1">
         <Stage viewer={viewer} windowMode={windowMode} borders={borders && !windowMode} elements={elements && !windowMode} />
         {/* stays mounted while hidden, so the thumbnails don't reload on every toggle */}

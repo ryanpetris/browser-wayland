@@ -27,7 +27,7 @@ export function TopBar({ viewer, windowMode, sidebar, onSidebar, onFullscreen, m
         <Logo />
         <span className="hidden truncate sm:inline">{windowMode ? windowTitle || `Window ${WINDOW}` : 'browser-wayland'}</span>
       </div>
-      {acts && <IconButton data-menu-trigger icon={LayoutGrid} label="Applications" active={menu === 'apps'} onClick={() => onMenu('apps')} />}
+      {acts && <IconButton data-menu-trigger id="apps-toggle" icon={LayoutGrid} label="Applications" active={menu === 'apps'} onClick={() => onMenu('apps')} />}
       <div className="flex min-w-0 shrink-0 items-center gap-2 text-xs text-zinc-400">
         <span className={`size-2 shrink-0 rounded-full ${dot}`} title={text} />
         <span className="hidden truncate sm:inline">{text}</span>
@@ -57,7 +57,7 @@ export function TopBar({ viewer, windowMode, sidebar, onSidebar, onFullscreen, m
           </>
         )}
         <IconButton icon={Expand} label="Fullscreen (browser shortcuts go to the desktop)" onClick={onFullscreen} />
-        {acts && <IconButton data-menu-trigger icon={Power} label="Quit browser-wayland" active={menu === 'power'} onClick={() => onMenu('power')} className="hover:text-rose-300" />}
+        {acts && <IconButton data-menu-trigger id="power-toggle" icon={Power} label="Quit browser-wayland" active={menu === 'power'} onClick={() => onMenu('power')} className="hover:text-rose-300" />}
       </div>
     </header>
   );

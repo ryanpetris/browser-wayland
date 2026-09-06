@@ -23,7 +23,7 @@ export function Settings({ viewer, borders, onBorders, elements, onElements, onC
   const checkbox = 'mt-1 size-5 shrink-0 accent-indigo-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400';
   return (
     <Popover id="viewer-settings" role="dialog" aria-label="Settings" onClose={onClose} onEscape={escape}
-      onKeyDown={keyDown} onKeyUp={event => event.stopPropagation()}
+      onKeyDown={keyDown}
       className="right-2 max-h-[calc(100dvh-4rem)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto p-3 sm:right-3">
       <h2 className="mb-2 px-2 text-sm font-semibold text-zinc-100">Overlays</h2>
       <label className={label}>

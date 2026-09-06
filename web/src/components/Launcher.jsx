@@ -21,7 +21,7 @@ export function Popover({ onClose, onEscape = onClose, className = '', children,
   return (
     <>
       <div className="absolute inset-x-0 top-11 bottom-0 z-20" onClick={onClose} />
-      <div tabIndex={-1} {...props} className={`absolute top-12 z-30 flex flex-col rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl ${className}`}>{children}</div>
+      <div tabIndex={-1} onKeyDown={event => event.stopPropagation()} onKeyUp={event => event.stopPropagation()} {...props} className={`absolute top-12 z-30 flex flex-col rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl ${className}`}>{children}</div>
     </>
   );
 }
@@ -43,7 +43,7 @@ export function Launcher({ viewer, onClose }) {
           value={q}
           onChange={e => setQ(e.target.value)}
           onFocus={viewer.releaseInput}
-          onKeyDown={e => { if (e.key === 'Enter' && needle && shown[0]) launch(shown[0]); }}
+          onKeyDown={e => { if (e.key === 'Enter' && needle && shown[0]) { e.preventDefault(); launch(shown[0]); } }}
           placeholder="Search applications…"
           spellCheck={false}
           autoComplete="off"

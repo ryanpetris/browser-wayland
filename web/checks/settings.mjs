@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 const server = createServer(async (req, res) => {
   try {
     const path = new URL(req.url, 'http://localhost').pathname;
-    if (path.startsWith('/api/')) { res.setHeader('Content-Type', 'application/json'); return res.end('[]'); }
+    if (path.startsWith('/api/')) { res.setHeader('Content-Type', 'application/json'); return res.end(path === '/api/applications' ? JSON.stringify([{ id: 'local-test.desktop', name: 'Local Test', categories: ['Utility'] }]) : '[]'); }
     const data = await readFile(new URL('../dist/' + (path === '/' ? 'index.html' : path.slice(1)), import.meta.url));
     res.setHeader('Content-Type', path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : 'text/html');
     res.end(data);
@@ -19,7 +19,7 @@ const errors = [];
 try {
   const context = await browser.newContext();
   const fixture = () => {
-    window.sent = []; window.elementRequests = []; window.holdElements = false; window.elementStatus = 200;
+    window.controlRequests = []; window.sent = []; window.elementRequests = []; window.holdElements = false; window.elementStatus = 200;
     window.WebSocket = class extends EventTarget {
       static OPEN = 1;
       readyState = 1;
@@ -29,6 +29,7 @@ try {
     };
     const originalFetch = window.fetch;
     window.fetch = (url, options) => {
+      if (String(url).endsWith('/api/control')) window.controlRequests.push(JSON.parse(options.body));
       if (!String(url).endsWith('/elements')) return originalFetch(url, options);
       const request = { url, status: window.elementStatus };
       window.elementRequests.push(request);
@@ -95,6 +96,30 @@ try {
   assert.equal(await panel.count(), 0, 'header outside click dismisses settings');
   await trigger.click();
   await page.mouse.click(5, 500); assert.equal(await panel.count(), 0);
+  const apps = page.getByRole('button', { name: 'Applications', exact: true });
+  await apps.click();
+  await page.getByRole('heading', { name: 'Accessories', exact: true }).click();
+  await page.keyboard.press('a');
+  await page.keyboard.press('Escape');
+  assert(await apps.evaluate(el => el === document.activeElement));
+  assert.equal(await page.getByPlaceholder('Search applications…').count(), 0);
+  await apps.click();
+  const search = page.getByPlaceholder('Search applications…');
+  await search.fill('Local Test');
+  await search.press('Enter');
+  await search.waitFor({ state: 'detached' });
+  assert.equal(await search.count(), 0);
+  assert(await apps.evaluate(el => el === document.activeElement));
+  assert(await page.evaluate(() => controlRequests.some(p => p.op === 'launch' && p.app === 'local-test.desktop')), 'search Enter launches the selected application');
+  await page.getByRole('button', { name: 'Quit browser-wayland', exact: true }).click();
+  await page.getByRole('button', { name: 'Quit browser-wayland', exact: true }).last().click();
+  await page.getByText('Quit browser-wayland? Every window closes with it, and the desktop is gone until it is started again.', { exact: true }).click();
+  await page.keyboard.press('a');
+  assert.equal(await page.evaluate(() => sent.filter(p => [0x83, 0x84, 0x85, 0x86, 0x87, 0x91, 0x92].includes(p[0])).length), 0, 'application and power menu keys stay local');
+  await trigger.click(); await panel.waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Cancel', exact: true }).count(), 0);
+  await page.keyboard.press('Escape');
+
   await page.reload(); await ready(); await trigger.click();
   assert(await borders.isChecked() && await elements.isChecked());
   await elements.uncheck();
