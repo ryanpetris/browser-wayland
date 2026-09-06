@@ -33,6 +33,12 @@ pub const RTC: u8 = 0x0D;
 /// `[FRAGMENT][u32 id][u16 index][u16 count][bytes]`: on the data channel only, a piece of one WebSocket
 /// message (a video frame), reassembled by id.
 pub const FRAGMENT: u8 = 0x0E;
+/// JSON snapshot of the private session mixer.
+pub const MIXER_STATE: u8 = 0x0F;
+/// JSON array of per-object scalar peaks.
+pub const MIXER_LEVELS: u8 = 0x10;
+/// UTF-8 mixer command error.
+pub const MIXER_ERROR: u8 = 0x11;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
@@ -85,6 +91,8 @@ pub const RTC_CLIENT: u8 = 0x95;
 /// later they arrived than at their best lately (the link queueing, which comes before it loses) and how
 /// many its decoder dropped. The rate controller's ear on the far end.
 pub const REPORT: u8 = 0x96;
+/// JSON typed session-mixer command, at most 4096 bytes.
+pub const MIXER_CLIENT: u8 = 0x97;
 
 /// What a session may do, as sent in `ROLE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,6 +152,24 @@ pub fn rtc(v: &serde_json::Value) -> Bytes {
     let mut b = vec![RTC];
     serde_json::to_writer(&mut b, v).expect("json serializes");
     b.into()
+}
+
+pub fn mixer_state(state: &bw_core::audio::Snapshot) -> Bytes {
+    let mut packet = vec![MIXER_STATE];
+    serde_json::to_writer(&mut packet, state).expect("mixer state");
+    packet.into()
+}
+
+pub fn mixer_levels(levels: &[bw_core::audio::Level]) -> Bytes {
+    let mut packet = vec![MIXER_LEVELS];
+    serde_json::to_writer(&mut packet, levels).expect("mixer levels");
+    packet.into()
+}
+
+pub fn mixer_error(text: &str) -> Bytes {
+    let mut packet = vec![MIXER_ERROR];
+    packet.extend_from_slice(text.as_bytes());
+    packet.into()
 }
 
 /// A warning: something didn't happen, or happened instead.
@@ -276,6 +302,7 @@ pub enum ClientMsg {
     Drag(DragMsg),
     Input(InputMsg),
     Touch { kind: u8, id: u8, x: f32, y: f32 },
+    Mixer(Result<bw_core::audio::Command, &'static str>),
     Mic(Bytes),
     Cam(Bytes),
     /// `{"offer": "<sdp>"}` or `{"close": true}` (see `RTC_CLIENT`).
@@ -338,6 +365,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         TOUCH => ClientMsg::Touch { kind: u8_at(1)?, id: u8_at(2)?, x: f32_at(3)?, y: f32_at(7)? },
         MIC if (2..=65_537).contains(&b.len()) => ClientMsg::Mic(Bytes::copy_from_slice(&b[1..])),
         CAM => ClientMsg::Cam(Bytes::copy_from_slice(b.get(1..)?)),
+        MIXER_CLIENT => ClientMsg::Mixer(if b.len() <= 4097 { serde_json::from_slice(&b[1..]).map_err(|_| "Malformed mixer command.") } else { Err("Mixer command is too large.") }),
         RTC_CLIENT => ClientMsg::Rtc(serde_json::from_slice(&b[1..]).ok()?),
         REPORT => ClientMsg::Report { delay_ms: u16_at(1)?, dropped: u16_at(3)? },
         _ => return None,
@@ -347,6 +375,22 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixer_packets_and_commands() {
+        let packet = mixer_state(&bw_core::audio::Snapshot::default());
+        assert_eq!(packet[0], MIXER_STATE);
+        assert!(!serde_json::from_slice::<bw_core::audio::Snapshot>(&packet[1..]).unwrap().available);
+        assert_eq!(mixer_levels(&[]).as_ref(), &[MIXER_LEVELS, b'[', b']']);
+        assert_eq!(mixer_error("busy").as_ref(), &[MIXER_ERROR, b'b', b'u', b's', b'y']);
+        for (body, valid) in [(r#"{"op":"subscribe","enabled":true}"#, true),
+            (r#"{"op":"mute","id":"1:2","value":true,"server":"host"}"#, false)] {
+            let mut packet = vec![MIXER_CLIENT];
+            packet.extend_from_slice(body.as_bytes());
+            assert!(matches!(decode(&packet), Some(ClientMsg::Mixer(result)) if result.is_ok() == valid));
+        }
+        assert!(matches!(decode(&vec![MIXER_CLIENT; 4098]), Some(ClientMsg::Mixer(Err(_)))));
+    }
 
     #[test]
     fn microphone_payload_bounds() {

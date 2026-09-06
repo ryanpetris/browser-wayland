@@ -459,6 +459,7 @@ name = "bw-core"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "memmap2",
  "schemars",
  "serde",
  "serde_json",

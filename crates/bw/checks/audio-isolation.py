@@ -119,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix="bw-isolation-") as directory:
                 return False
         wait_for(outside_ready)
         external_defaults = defaults(outside_env)
-        external_player = start(["gst-launch-1.0", "-q", "audiotestsrc", "is-live=true", "freq=1320", "volume=0.1", "!", "audioconvert", "!", "pulsesink"], outside_env, outside / "player.log")
+        external_player = start(["gst-launch-1.0", "-q", "audiotestsrc", "is-live=true", "freq=1320", "volume=0.1", "!", "audioconvert", "!", "pulsesink", "stream-properties=properties,application.name=OutsideHostTest"], outside_env, outside / "player.log")
         time.sleep(.4)
         assert amplitudes(outside_env, "outside-output")[2] > .05
         external_nodes = {o["id"] for o in graph(outside_env) if o["type"].endswith("Node")}
@@ -167,6 +167,8 @@ with tempfile.TemporaryDirectory(prefix="bw-isolation-") as directory:
             assert max(amplitudes(env, "browser-wayland-output")) < .005
             output(["pw-cli", "set-param", node, "Props", "{ mute = false }"], env)
             assert amplitudes(env, "browser-wayland-output")[index] > .05
+        subprocess.run(["node", "/src/web/checks/mixer-isolation.mjs", *(str(session[4]) for session in sessions)],
+                       check=True, timeout=30)
         assert defaults(outside_env) == external_defaults
         assert external_nodes <= {o["id"] for o in graph(outside_env) if o["type"].endswith("Node")}
         assert amplitudes(outside_env, "outside-output")[2] > .05

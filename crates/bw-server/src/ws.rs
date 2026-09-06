@@ -188,11 +188,13 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         }
         let id = v.next_id;
         v.next_id += 1;
-        v.sessions.insert(id, ViewerSession { key, events: etx.clone(), audio: atx, audio_seq: 0, size: None, control, hw, sw, want_codec, codec, quality, cam_wait_key: false });
+        v.sessions.insert(id, ViewerSession { key, events: etx.clone(), audio: atx, audio_seq: 0, size: None, control, hw, sw, want_codec, codec, quality, cam_wait_key: false, mixer_subscribed: false });
         if key == Key::Control && v.controller.is_none() {
             v.controller = Some(id);
+            v.control_epoch = v.control_epoch.wrapping_add(1);
         }
-        let replay: Vec<Bytes> = [v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id), app.features())), Some(notifications.clone())].into_iter().flatten().collect();
+        app.mixer_audience(&v);
+        let replay: Vec<Bytes> = [Some(protocol::mixer_state(&app.mixer_state())), v.cursor.clone(), v.windows.clone(), v.locked.then(|| Bytes::from(vec![protocol::POINTER_LOCK, 1])), Some(protocol::role(v.role_of(id), app.features())), Some(notifications.clone())].into_iter().flatten().collect();
         (id, replay)
     };
     for msg in replay {
@@ -203,11 +205,24 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     }
     let _ = app.commands.send(Command::ViewerStream { key: id, sink: Some(sink) });
 
+    let mut mixer_state = app.mixer.as_ref().map(|m| m.state.clone());
+    let mut mixer_levels = app.mixer.as_ref().map(|m| m.levels.clone());
     let (mut info, mut seq, mut failed) = (None::<bw_core::StreamInfo>, 0u16, false);
     let mut ping = tokio::time::interval(Duration::from_secs(1));
     let (mut unanswered, started) = (0, Instant::now());
     let ended = loop {
         tokio::select! {
+            changed = async { match &mut mixer_state { Some(state) => state.changed().await, None => std::future::pending().await } } => {
+                if changed.is_err() { mixer_state = None; }
+                if !send(&mut socket, protocol::mixer_state(&app.mixer_state())).await { break None }
+            },
+            changed = async { match &mut mixer_levels { Some(levels) => levels.changed().await, None => std::future::pending().await } } => {
+                if changed.is_err() { mixer_levels = None; }
+                if app.mixer_subscribed(id) {
+                    let levels = app.mixer.as_ref().map(|m| m.levels.borrow().clone()).unwrap_or_default();
+                    if !send(&mut socket, protocol::mixer_levels(&levels)).await { break None }
+                }
+            },
             msg = rx.recv() => match msg {
                 Some(StreamMsg::Info(i)) => {
                     seq = 0;
@@ -309,6 +324,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     {
         let mut v = app.viewers.lock().unwrap();
         v.sessions.remove(&id);
+        app.mixer_audience(&v);
         if v.controller == Some(id) {
             // the oldest remaining control-token session takes over
             let next = v.sessions.iter().filter(|(_, s)| s.key == Key::Control).map(|(id, _)| *id).min();
@@ -670,6 +686,7 @@ impl App {
             ClientMsg::SetClipboard(text) if key == Key::Control => Some(Command::SetClipboard { mime: api::TEXT.into(), data: text.into() }),
             ClientMsg::Drag(d) if controls => Some(self.drag_command(d)),
             ClientMsg::Input(m) if controls => Some(Command::Input(m)),
+            ClientMsg::Mixer(command) => { self.mixer_message(&mut v, id, command); None },
             ClientMsg::Mic(packet) if controls => {
                 if let Some(mic) = &self.mic {
                     let _ = mic.try_send(packet); // a full queue drops the packet: the sink is behind anyway
@@ -713,6 +730,8 @@ impl App {
             return;
         }
         v.controller = next;
+        v.control_epoch = v.control_epoch.wrapping_add(1);
+        self.mixer_audience(v);
         // whatever the old controller held; the application asks for its pointer lock again on the new one's click
         let _ = self.commands.send(Command::ReleaseAllInput);
         let _ = self.commands.send(Command::ReleasePointerLock);

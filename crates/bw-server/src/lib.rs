@@ -7,6 +7,8 @@ mod api;
 mod apps;
 mod elements;
 mod mcp;
+mod mixer;
+pub use mixer::{Mixer, MixerAudience};
 pub mod files;
 mod notify;
 pub mod rtc;
@@ -76,6 +78,7 @@ pub struct Config {
     pub sinks: SinkFactory,
     /// Whether session playback initialized successfully, independently of microphone capture.
     pub audio_available: bool,
+    pub mixer: Option<Mixer>,
     /// Where browser microphone packets go; `None` without a microphone.
     pub mic: Option<mpsc::Sender<Bytes>>,
     /// Where the browser's webcam frames (VP8) go to be played into the loopback camera; `None` without
@@ -107,6 +110,7 @@ pub struct App {
     viewers: Mutex<Viewers>,
     sinks: SinkFactory,
     audio_available: std::sync::atomic::AtomicBool,
+    mixer: Option<Mixer>,
     mic: Option<mpsc::Sender<Bytes>>,
     cam: Option<mpsc::Sender<Bytes>>,
     rtc: Option<rtc::Hub>,
@@ -133,6 +137,7 @@ pub struct App {
 pub(crate) struct Viewers {
     sessions: HashMap<u64, ViewerSession>,
     controller: Option<u64>,
+    control_epoch: u64,
     /// The output as the controller last sized it.
     output: OutputGeometry,
     /// Last cursor message, replayed to a new viewer.
@@ -149,7 +154,7 @@ pub(crate) struct Viewers {
 
 impl Default for Viewers {
     fn default() -> Self {
-        Viewers { sessions: HashMap::new(), controller: None, output: bw_core::INITIAL_OUTPUT, cursor: None, locked: false, windows: None, window_list: Vec::new(), clipboard: None, next_id: 1 }
+        Viewers { sessions: HashMap::new(), controller: None, control_epoch: 0, output: bw_core::INITIAL_OUTPUT, cursor: None, locked: false, windows: None, window_list: Vec::new(), clipboard: None, next_id: 1 }
     }
 }
 
@@ -172,6 +177,7 @@ pub(crate) struct ViewerSession {
     /// A webcam frame of this session was dropped: the next ones are too, until a keyframe (a VP8 delta
     /// without its reference would corrupt the picture until the next one anyway).
     cam_wait_key: bool,
+    mixer_subscribed: bool,
 }
 
 /// `audio_rx` carries the clients' Opus packets, for every viewer.
@@ -183,6 +189,8 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         Some(c) => rtc::Hub::start(c).await.map_err(|e| tracing::warn!("WebRTC disabled: {e:#}")).ok(),
         None => None,
     };
+    let mut mixer = cfg.mixer;
+    let mixer_errors = mixer.as_mut().and_then(|mixer| mixer.errors.take());
     let app = Arc::new(App {
         tokens: RwLock::new((token, viewer_token)),
         data_dir: cfg.data_dir.clone(),
@@ -194,6 +202,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         viewers: Mutex::new(Viewers { output: bw_core::OutputGeometry { refresh_mhz: cfg.refresh_mhz, ..bw_core::INITIAL_OUTPUT }, ..Default::default() }),
         sinks: cfg.sinks,
         audio_available: cfg.audio_available.into(),
+        mixer,
         mic: cfg.mic,
         cam: cfg.cam,
         rtc,
@@ -210,6 +219,7 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         tls: cfg.tls,
         port: cfg.listen.port(),
     });
+    if let Some(errors) = mixer_errors { tokio::spawn(mixer::errors(app.clone(), errors)); }
     tokio::spawn(ws::distribute_audio(app.clone(), audio_rx));
     tokio::spawn(ws::forward_events(app.clone(), events_rx));
     tokio::spawn(notify::serve(app.clone()));
@@ -619,6 +629,8 @@ impl App {
             let mut v = self.viewers.lock().unwrap();
             v.sessions.clear();
             v.controller = None;
+            v.control_epoch = v.control_epoch.wrapping_add(1);
+            self.mixer_audience(&v);
         }
         self.window_viewers.lock().unwrap().clear();
         let _ = self.commands.send(Command::ReleaseAllInput);

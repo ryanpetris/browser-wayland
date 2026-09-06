@@ -6,7 +6,7 @@ use pipewire::{self as pw, properties::properties, spa::{
     pod::{Object, Pod, Value, serialize::PodSerializer},
     utils::Direction,
 }};
-use std::{cell::RefCell, io::Cursor, rc::Rc};
+use std::{cell::RefCell, io::Cursor, rc::Rc, time::{Duration, Instant}};
 
 pub const NAME: &str = "browser-wayland-meter";
 
@@ -14,6 +14,7 @@ pub const NAME: &str = "browser-wayland-meter";
 struct Reading {
     peak: f32,
     error: Option<String>,
+    received: Option<Instant>,
 }
 
 pub struct Meter {
@@ -39,13 +40,14 @@ impl Meter {
         })?;
         let reading: Rc<RefCell<Reading>> = Rc::default();
         let listener = stream.add_local_listener_with_user_data(reading.clone())
-            .state_changed(|_, reading, _, state| {
+            .state_changed(|_, reading, old, state| {
                 let mut reading = reading.borrow_mut();
-                reading.error = match &state {
-                    pw::stream::StreamState::Error(error) => Some(error.clone()),
-                    _ => None,
-                };
-                if !matches!(state, pw::stream::StreamState::Streaming) { reading.peak = 0.0; }
+                match &state {
+                    pw::stream::StreamState::Error(error) => reading.error = Some(error.clone()),
+                    pw::stream::StreamState::Unconnected if !matches!(old, pw::stream::StreamState::Unconnected) => reading.error = Some("Audio meter disconnected.".into()),
+                    _ => {}
+                }
+                if !matches!(state, pw::stream::StreamState::Streaming) { reading.peak = 0.0; reading.received = None; }
             })
             .process(|stream, reading| {
                 while let Some(mut buffer) = stream.dequeue_buffer() {
@@ -57,7 +59,7 @@ impl Meter {
                     let Some(samples) = bytes.get(offset..offset.saturating_add(size)) else { continue; };
                     for sample in samples.chunks_exact(4) {
                         let value = f32::from_ne_bytes(sample.try_into().unwrap()).abs();
-                        if value.is_finite() { reading.peak = reading.peak.max(value); }
+                        if value.is_finite() { reading.peak = reading.peak.max(value); reading.received = Some(Instant::now()); }
                     }
                 }
                 }
@@ -83,6 +85,8 @@ impl Meter {
     pub fn take_peak(&self) -> f32 {
         std::mem::take(&mut self.reading.borrow_mut().peak)
     }
+
+    pub fn active(&self) -> bool { self.reading.borrow().received.is_some_and(|received| received.elapsed() < Duration::from_secs(1)) }
 
     pub fn error(&self) -> Option<String> { self.reading.borrow().error.clone() }
 }

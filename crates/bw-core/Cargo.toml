@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 bytes.workspace = true
+memmap2 = "0.9"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 

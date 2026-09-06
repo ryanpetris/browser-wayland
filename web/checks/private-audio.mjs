@@ -117,6 +117,34 @@ try {
   await page.waitForFunction(() => bw.store.get().mic);
   await page.waitForTimeout(2000);
   for (const { command, samples } of recorders) assert(samples.some(s => s.peak > .02), command + ' receives browser microphone');
+  await page.waitForFunction(() => bw.store.get().mixer.nodes.some(n => n.kind === 'input' && n.mute_writable));
+  await page.evaluate(() => {
+    const input = bw.store.get().mixer.nodes.find(n => n.kind === 'input');
+    bw.mixer.command({ op: 'mute', id: input.id, value: true });
+  });
+  await page.waitForFunction(() => bw.store.get().mixer.nodes.find(n => n.kind === 'input').mute);
+  const muted = Date.now();
+  await page.waitForTimeout(1200);
+  assert.equal(await page.evaluate(() => bw.store.get().mic), true, 'session mute preserves browser capture');
+  for (const { command, samples } of recorders) {
+    const quiet = samples.filter(s => s.at > muted + 600);
+    assert(quiet.length > 0 && quiet.every(s => s.peak < .0001), command + ' observes session microphone mute');
+  }
+  await page.evaluate(() => {
+    const input = bw.store.get().mixer.nodes.find(n => n.kind === 'input');
+    bw.mixer.command({ op: 'mute', id: input.id, value: false });
+  });
+  await page.waitForFunction(() => !bw.store.get().mixer.nodes.find(n => n.kind === 'input').mute);
+  const resumed = Date.now();
+  await page.evaluate(() => {
+    const json = new TextEncoder().encode(JSON.stringify({ op: 'subscribe', enabled: true }));
+    const packet = new Uint8Array(json.length + 1); packet[0] = 0x97; packet.set(json, 1);
+    window.mixerFlood = setInterval(() => { for (let n = 0; n < 64; n++) checkSocket.send(packet); }, 10);
+  });
+  await page.waitForTimeout(1200);
+  await page.evaluate(() => { clearInterval(window.mixerFlood); bw.mixer.subscribe(false); });
+  for (const { command, samples } of recorders) assert(samples.some(s => s.at > resumed + 600 && s.peak > .02), command + ' microphone progresses under subscription traffic');
+  console.log('session microphone mute preserves consent; microphone resumes under sustained mixer traffic');
   await page.evaluate(() => bw.mic.stop());
   const stopped = Date.now();
   await page.waitForTimeout(1500);

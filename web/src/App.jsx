@@ -8,6 +8,7 @@ import { Sidebar } from './components/Sidebar.jsx';
 import { StatusBar } from './components/StatusBar.jsx';
 import { TokenForm } from './components/TokenForm.jsx';
 import { Launcher, PowerMenu } from './components/Launcher.jsx';
+import { MixerPanel } from './components/MixerPanel.jsx';
 import { AudioPanel } from './components/AudioPanel.jsx';
 import { Keyboard, focusKeyboard } from './components/Keyboard.jsx';
 
@@ -22,6 +23,7 @@ export function App({ viewer }) {
   const role = useStore(viewer.store, s => s.role);
   const [sidebar, setSidebar] = usePref('sidebar', matchMedia('(min-width: 48rem)').matches); // a phone starts with the stage alone
   const [audioPanel, setAudioPanel] = useState(false);
+  const [mixerPanel, setMixerPanel] = useState(false);
   const [keyboard, setKeyboard] = useState(false);
   const [borders, setBorders] = usePref('borders', false);
   const [elements, setElements] = usePref('elements', false);
@@ -59,7 +61,8 @@ export function App({ viewer }) {
       </div>
       {keyboard && <Keyboard viewer={viewer} onClose={() => setKeyboard(false)} />}
       {__BW_VISUALISER__ && audioPanel && !windowMode && <AudioPanel viewer={viewer} hidden={fullscreen} onClose={() => setAudioPanel(false)} />}
-      <StatusBar viewer={viewer} audioPanel={audioPanel} onAudioPanel={!windowMode ? () => setAudioPanel(!audioPanel) : undefined} />
+      {mixerPanel && !windowMode && <MixerPanel viewer={viewer} hidden={fullscreen} onClose={() => { setMixerPanel(false); document.getElementById('session-mixer-toggle')?.focus(); }} />}
+      <StatusBar mixerPanel={mixerPanel} onMixer={!windowMode ? () => setMixerPanel(!mixerPanel) : undefined} viewer={viewer} audioPanel={audioPanel} onAudioPanel={!windowMode ? () => setAudioPanel(!audioPanel) : undefined} />
       {(status === 'no-token' || status === 'unauthorized') && <TokenForm viewer={viewer} />}
     </div>
   );

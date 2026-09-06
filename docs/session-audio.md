@@ -60,6 +60,36 @@ The container runs the compositor as PID 1 so `docker stop` reaches its signal h
 Forced termination such as SIGKILL cannot run this cleanup. Outside a container, it can leave audio
 children and the temporary directory behind.
 
+## Session mixer
+
+Open **Mixer** in the desktop status bar to inspect session devices and application playback and
+recording streams. Streams with application metadata are grouped together, but each row controls one
+stream. Read-only viewers can inspect; only the current controlling viewer can change audio.
+Changes affect the shared session for every viewer.
+
+Volume ranges from 0 to 100 percent with cubic gain: 50 percent means linear gain 0.125. Mute and
+volume use the object's native controls. Unsupported controls are disabled or explained. Current
+routing is shown for application streams. When more than one compatible session endpoint exists,
+the target selector and device default buttons ask WirePlumber to change routing. These controls do
+not enumerate host hardware or alter host defaults.
+
+Meters measure actual peaks. Playback, output and microphone meters follow their volume and mute;
+recording-stream meters measure before that stream's own controls. Inactive means no recent samples,
+not a stored volume setting. Monitor streams are shared between viewers, publish scalar peaks at
+about 10 Hz, and are removed when the last visible mixer closes. Meter failures are shown separately
+from control availability. The optional output visualiser is independent of this panel.
+
+Muting **Browser microphone** silences the session source while browser capture continues. Use the
+microphone capture toggle to stop recording permission use. Opening the mixer, changing its controls,
+and subscribing to meters never start browser capture.
+
+The helper owns one native management connection. Object identifiers combine its connection
+generation with PipeWire's object serial; reconnects invalidate old identifiers. Authoritative state
+is broadcast through latest-value channels, and control queues are bounded. A shared atomic control
+epoch rejects queued commands from a revoked controller even if helper input is delayed. An operation
+already admitted before handoff may complete afterward. Changes not confirmed by native state within
+three seconds produce an error.
+
 ## Dependencies
 
 The supported baseline is PipeWire 1.4.2 and WirePlumber 0.5.6. The latter introduces the policy and
@@ -91,14 +121,22 @@ Run verification inside Docker with the checkout and release build mounted. The 
 startup, signal handling, missing services/plugins, service and worker readiness timeouts, and
 individual service exits. Failed audio must be cleaned up while the desktop keeps running.
 `web/checks/private-audio.mjs` exercises native and Pulse playback/recording through a live browser,
-microphone silence transitions, malformed packet handling and capability withdrawal.
+microphone silence transitions, session microphone mute without changing consent, sustained mixer traffic,
+malformed packet handling and capability withdrawal.
 `crates/bw/checks/audio-isolation.py` checks two desktops alongside an unrelated audio graph, separate
-tones and lifecycles, and native/Pulse mpv playback with saved device choices across app restarts.
+tones and lifecycles, and native/Pulse mpv playback with saved device choices across app restarts. It
+also runs `web/checks/mixer-isolation.mjs` against both live sessions to check mixer membership and
+foreign-object rejection.
 The native meter check is `cargo run --release -p browser-wayland --example audio-graph`, also
 run inside Docker. It creates its own private services and checks playback, output, microphone and
 recording peaks through mute and gain changes, then verifies monitoring nodes disappear when meters
 are dropped while the management connection stays open. Output monitors follow channel volume and mute. Recording-stream monitoring is before that
 stream's own controls; the check separately verifies muted samples delivered to the recorder.
+
+`cargo run --release -p browser-wayland --example audio-mixer` checks native and Pulse controls,
+per-stream isolation, real routing to a second output, default selection, object removal, reconnect,
+monitor cleanup and cross-process control revocation. `web/checks/session-mixer.mjs` checks the rendered
+panel, authoritative controls, three-viewer authorization and shared subscriptions.
 
 The browser check's fake capture source is a test WAV;
 production capture still requires browser consent.

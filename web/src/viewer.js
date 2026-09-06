@@ -7,7 +7,7 @@ import { createStore } from './store.js';
 import { startMic, stopMic } from './mic.js';
 import { startCam, stopCam } from './cam.js';
 import { openRtc } from './rtc.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 
@@ -32,6 +32,9 @@ export function createViewer() {
     choice: { codec: pref.getStr('codec', 'auto'), quality: pref.getStr('quality', 'auto') }, // this viewer's picks
     touchMouse: pref.get('touchmouse', false), // fingers as a mouse with gestures, instead of real touch points
     audioAvailable: false,
+    mixer: { available: false, generation: '', nodes: [], routing: false, error: null },
+    mixerLevels: {},
+    mixerError: '',
     playback: null, // shared context/source; visualisers own only their analysis branch
     mic: false, // the local microphone is going to the desktop
     micAvailable: false, // the desktop takes one (audio is on there)
@@ -55,6 +58,8 @@ export function createViewer() {
   let stage = { w: 0, h: 0 }; // CSS size of the area the canvas lives in
   let quitting = false; // this page asked the desktop to shut down: the socket's end is not a failure
   let noticeTimer;
+  let mixerSubscribed = false, mixerTimer = 0;
+  const mixerVolumes = new Map();
   let ws, decoder, stream = null, awaitingKey = true;
   let frames = 0, received = 0, windowFrames = 0, windowBytes = 0, lastInput = 0, latencyMs = 0, lockRequests = 0, lockError = '', wantLock = false, connects = 0, closes = [], keyframes = 0, decodeErrors = 0, dropped = 0;
   let videoSeq = -1, audioSeq = -1, lost = 0, dropNext = false; // seq: last message seen per stream; lost: gaps in either
@@ -150,12 +155,15 @@ export function createViewer() {
       const t = new TextEncoder().encode(TOKEN);
       send(AUTH, t.length, dv => new Uint8Array(dv.buffer, 1).set(t));
       await sendHello();
+      if (mixerSubscribed) sendText(MIXER_CLIENT, JSON.stringify({ op: 'subscribe', enabled: true }));
       if (!WINDOW) sendResize(); // a window stream is the window's size
       else if (document.hasFocus()) sendControl({ id: +WINDOW, op: 'activate' }); // a popup is focused before its script runs
     };
     ws.onmessage = e => onMessage(e.data);
     ws.onclose = e => {
       closes.push(`${e.code}:${e.reason}`);
+      cancelMixerVolumes();
+      store.set({ mixer: { available: false, generation: '', nodes: [], routing: false, error: 'Desktop disconnected.' }, mixerLevels: {}, mixerError: '' });
       micStop(); camStop(); // nobody hears or sees them now, and the role is whatever the next connection says
       clearTimeout(rtcTimer); rtc?.close(); rtc = null; // the next connection offers again
       store.set({ role: null, playback: null, audioAvailable: false, micAvailable: false, camAvailable: false, rtcAvailable: false, videoVia: 'websocket' });
@@ -182,6 +190,54 @@ export function createViewer() {
     ws.send(buf);
   }
   const sendText = (type, text) => { const b = new TextEncoder().encode(text); send(type, b.length, dv => new Uint8Array(dv.buffer, 1).set(b)); };
+  function cancelMixerVolumes() {
+    clearTimeout(mixerTimer); mixerTimer = 0; mixerVolumes.clear();
+  }
+
+  function mixerCommand(command) {
+    if (state().role !== 'controller' || state().status !== 'connected' || !state().mixer.available) {
+      store.set({ mixerError: 'Only the connected controlling viewer can change session audio.' });
+      return false;
+    }
+    if (!state().mixer.nodes.some(node => node.id === command.id)) {
+      store.set({ mixerError: 'This audio object is no longer available.' });
+      return false;
+    }
+    store.set({ mixerError: '' });
+    if (command.op === 'volume') {
+      if (!Number.isFinite(command.value) || command.value < 0 || command.value > 100) return false;
+      if (mixerVolumes.size >= 64 && !mixerVolumes.has(command.id)) {
+        store.set({ mixerError: 'Too many pending audio changes. Try again.' });
+        return false;
+      }
+      mixerVolumes.set(command.id, command);
+      if (!mixerTimer) mixerTimer = setTimeout(() => {
+        mixerTimer = 0;
+        const commands = [...mixerVolumes.values()]; mixerVolumes.clear();
+        for (const command of commands) {
+          if (state().role === 'controller' && state().mixer.available && state().mixer.nodes.some(node => node.id === command.id)) sendMixer(command);
+        }
+      }, 100);
+      return true;
+    }
+    return sendMixer(command);
+  }
+
+  function sendMixer(command) {
+    if (ws?.readyState !== WebSocket.OPEN || ws.bufferedAmount > 262144) {
+      store.set({ mixerError: 'Connection is busy. The audio change was not sent.' });
+      return false;
+    }
+    sendText(MIXER_CLIENT, JSON.stringify(command));
+    return true;
+  }
+
+  function subscribeMixer(enabled) {
+    mixerSubscribed = !!enabled;
+    sendText(MIXER_CLIENT, JSON.stringify({ op: 'subscribe', enabled: mixerSubscribed }));
+    if (!enabled) { cancelMixerVolumes(); store.set({ mixerLevels: {} }); }
+  }
+
   /// A window action or spawn for the compositor, as JSON.
   const sendControl = obj => sendText(CONTROL, JSON.stringify(obj));
 
@@ -332,6 +388,24 @@ export function createViewer() {
       case CLIPBOARD:
         onClipboard(new TextDecoder().decode(new Uint8Array(buf, 1)));
         break;
+      case MIXER_STATE: {
+        const mixer = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
+        if (mixer.generation !== state().mixer.generation || !mixer.available) cancelMixerVolumes();
+        const ids = new Set(mixer.nodes.map(node => node.id));
+        for (const id of mixerVolumes.keys()) if (!ids.has(id)) mixerVolumes.delete(id);
+        store.set({ mixer, mixerLevels: Object.fromEntries(Object.entries(state().mixerLevels).filter(([id]) => ids.has(id))) });
+        break;
+      }
+      case MIXER_LEVELS: {
+        const ids = new Set(state().mixer.nodes.map(node => node.id));
+        const levels = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
+        store.set({ mixerLevels: Object.fromEntries(levels.filter(level => ids.has(level.id) && Number.isFinite(level.peak)).map(level => [level.id, Math.max(0, level.peak)])) });
+        break;
+      }
+      case MIXER_ERROR:
+        cancelMixerVolumes();
+        store.set({ mixerError: new TextDecoder().decode(new Uint8Array(buf, 1)) });
+        break;
       case NOTICE:
         notice(new TextDecoder().decode(new Uint8Array(buf, 2)), dv.getUint8(1) ? 'success' : 'warning');
         break;
@@ -342,6 +416,7 @@ export function createViewer() {
         if (!(features & 4)) stopPlayback();
         if (!(features & 1)) micStop();
         if (role !== 'controller') {
+          cancelMixerVolumes();
           if (document.pointerLockElement) document.exitPointerLock(); // only the controller's pointer is the desktop's
           micStop(); camStop(); // and only its microphone and webcam
         }
@@ -929,6 +1004,7 @@ export function createViewer() {
     key: keys => sendText(INPUT, JSON.stringify({ type: 'key', keys })),
     touch: navigator.maxTouchPoints > 0,
     mic: { start: micStart, stop: micStop },
+    mixer: { subscribe: subscribeMixer, command: mixerCommand },
     cam: { start: camStart, stop: camStop },
     setTouchMouse(on) {
       // fingers down now end here, on both sides: the desktop lets go of everything, the page forgets them

@@ -14,7 +14,7 @@ use pipewire::{
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
-    io::{Cursor, Read, Seek},
+    io::{BufReader, Cursor, Read, Seek},
     os::unix::net::UnixStream,
     process::{Command, Stdio},
     rc::Rc,
@@ -47,7 +47,7 @@ fn graph(env: &[(String, String)]) -> anyhow::Result<serde_json::Value> {
     let mut child = Probe(Command::new("pw-dump").envs(env.iter().cloned()).stdout(output.try_clone()?).spawn()?);
     anyhow::ensure!(child.wait(Duration::from_secs(5))?.success(), "graph inspection failed");
     output.rewind()?;
-    Ok(serde_json::from_reader(output)?)
+    Ok(serde_json::from_reader(BufReader::new(output))?)
 }
 
 fn check_links() -> anyhow::Result<()> {
@@ -55,9 +55,11 @@ fn check_links() -> anyhow::Result<()> {
     let objects = graph.as_array().context("graph array")?;
     let meters: Vec<_> = objects.iter().filter(|o| o["info"]["props"]["node.name"].as_str().is_some_and(|name| name.starts_with(audio::meter::NAME))).collect();
     anyhow::ensure!(meters.len() == 5, "expected five monitor nodes");
+    let mut targets = HashSet::new();
     for meter in meters {
         let serial = &meter["info"]["props"]["target.object"];
         let target = objects.iter().find(|o| &o["info"]["props"]["object.serial"] == serial).context("meter target missing")?;
+        anyhow::ensure!(targets.insert(target["id"].as_u64().context("target id")?), "duplicate meter target");
         let links: Vec<_> = objects.iter().filter(|o| o["type"] == "PipeWire:Interface:Link" && o["info"]["input-node-id"] == meter["id"]).collect();
         anyhow::ensure!(!links.is_empty(), "meter has no input links");
         anyhow::ensure!(links.iter().all(|o| o["info"]["output-node-id"] == target["id"]), "meter linked to the wrong target");
@@ -142,7 +144,7 @@ fn main() -> anyhow::Result<()> {
         anyhow::ensure!(
             !graph
                 .as_array()
-                .unwrap()
+                .context("graph array")?
                 .iter()
                 .any(|object| object["info"]["props"]["node.name"].as_str().is_some_and(|name| name.starts_with(audio::meter::NAME))),
             "monitor nodes survived their client"
@@ -179,7 +181,7 @@ fn main() -> anyhow::Result<()> {
         let class = props.get("media.class").unwrap_or("");
         let name = props.get("node.name").unwrap_or("");
         if name.starts_with(audio::meter::NAME) { added_monitors.borrow_mut().insert(global.id); return; }
-        if !matches!(class, "Audio/Sink" | "Audio/Source" | "Stream/Output/Audio" | "Stream/Input/Audio") || name.starts_with(audio::meter::NAME) || name == "browser-wayland-microphone-input" { return; }
+        if !matches!(class, "Audio/Sink" | "Audio/Source" | "Stream/Output/Audio" | "Stream/Input/Audio") || name == "browser-wayland-microphone-input" { return; }
         let Some(serial) = props.get("object.serial") else { binding_errors.borrow_mut().push("node has no serial".into()); return; };
         let id = global.id;
         println!("node {id} serial={serial} {class} {name}");
@@ -214,6 +216,7 @@ fn main() -> anyhow::Result<()> {
         }
         ticks.set(ticks.get() + 1);
         if ticks.get() == 24 {
+            if monitor_ids.borrow().len() != 5 { checks.borrow_mut().push("registry did not track all five monitors".into()); }
             for node in nodes.borrow_mut().values_mut() { node.meter.take(); }
         }
         if ticks.get() >= 24 {
@@ -223,14 +226,15 @@ fn main() -> anyhow::Result<()> {
             }
             return;
         }
-        if ticks.get() == 2 {
+        if matches!(ticks.get(), 2 | 20) {
             if let Err(error) = check_links() { checks.borrow_mut().push(error.to_string()); }
         }
         if ticks.get() == 21 {
             let result = (|| -> anyhow::Result<()> {
                 let bytes = std::fs::read(std::env::var("BW_PROBE_RECORDING")?)?;
-                anyhow::ensure!(bytes.len() >= 48000, "recording gain samples missing");
-                let peak = bytes[bytes.len() - 48000..].chunks_exact(4).map(|s| f32::from_ne_bytes(s.try_into().unwrap()).abs()).fold(0.0f32, f32::max);
+                const QUARTER_SECOND_BYTES: usize = 12000 * 4;
+                anyhow::ensure!(bytes.len() >= QUARTER_SECOND_BYTES, "recording gain samples missing");
+                let peak = bytes[bytes.len() - QUARTER_SECOND_BYTES..].chunks_exact(4).map(|s| f32::from_ne_bytes(s.try_into().unwrap()).abs()).fold(0.0f32, f32::max);
                 anyhow::ensure!((peak - 0.00078125).abs() < 0.0001, "recording gain sample peak: {peak}");
                 Ok(())
             })();
@@ -246,37 +250,38 @@ fn main() -> anyhow::Result<()> {
                 ("browser-wayland-microphone", if tick == 14 { 0.0 } else if tick >= 17 { 0.00625 } else { 0.05 }),
                 ("pw-record", if tick == 14 { 0.0 } else if tick >= 17 { 0.00625 } else { 0.05 }),
             ] {
-                match nodes.values().find(|node| node.name == name) {
-                    Some(node) if (node.meter.as_ref().unwrap().peak() - expected).abs() <= 0.001 => {}
-                    Some(node) => checks.borrow_mut().push(format!("tick {tick} {name}: expected {expected}, got {}", node.meter.as_ref().unwrap().peak())),
+                match nodes.values().find(|node| node.name == name).and_then(|node| node.meter.as_ref()) {
+                    Some(meter) if (meter.peak() - expected).abs() <= 0.001 => {}
+                    Some(meter) => checks.borrow_mut().push(format!("tick {tick} {name}: expected {expected}, got {}", meter.peak())),
                     None => checks.borrow_mut().push(format!("tick {tick}: missing {name}")),
                 }
             }
         }
         for (id, node) in nodes.iter() {
-            if let Some(error) = node.meter.as_ref().unwrap().error() { checks.borrow_mut().push(format!("{}: {error}", node.name)); }
+            let Some(meter) = node.meter.as_ref() else { checks.borrow_mut().push(format!("missing meter: {}", node.name)); continue; };
+            if let Some(error) = meter.error() { checks.borrow_mut().push(format!("{}: {error}", node.name)); }
 
             println!(
                 "peak {} {id} {} {}",
                 ticks.get(),
                 node.name,
-                node.meter.as_ref().unwrap().take_peak()
+                meter.take_peak()
             );
             if (ticks.get() == 3 && node.name == "probe-playback")
                 || (ticks.get() == 9 && node.name == "browser-wayland-output")
                 || (ticks.get() == 12 && node.name == "browser-wayland-microphone")
                 || (ticks.get() == 21 && node.name == "pw-record")
             {
-                set_props(
+                if let Err(error) = set_props(
                     &node._node,
                     vec![(pw::spa::sys::SPA_PROP_mute, Value::Bool(true))],
-                );
+                ) { checks.borrow_mut().push(error.to_string()); }
             }
             if (ticks.get() == 6 && node.name == "probe-playback")
                 || (ticks.get() == 15 && node.name == "browser-wayland-microphone")
                 || (ticks.get() == 18 && node.name == "pw-record")
             {
-                set_props(
+                if let Err(error) = set_props(
                     &node._node,
                     vec![
                         (pw::spa::sys::SPA_PROP_mute, Value::Bool(false)),
@@ -292,7 +297,7 @@ fn main() -> anyhow::Result<()> {
                             ])),
                         ),
                     ],
-                );
+                ) { checks.borrow_mut().push(error.to_string()); }
             }
         }
     });
@@ -307,7 +312,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn set_props(node: &pw::node::Node, values: Vec<(u32, Value)>) {
+fn set_props(node: &pw::node::Node, values: Vec<(u32, Value)>) -> anyhow::Result<()> {
     let pod = Value::Object(Object {
         type_: pw::spa::sys::SPA_TYPE_OBJECT_Props,
         id: ParamType::Props.as_raw(),
@@ -320,9 +325,9 @@ fn set_props(node: &pw::node::Node, values: Vec<(u32, Value)>) {
             })
             .collect(),
     });
-    let bytes = PodSerializer::serialize(Cursor::new(Vec::new()), &pod)
-        .unwrap()
+    let bytes = PodSerializer::serialize(Cursor::new(Vec::new()), &pod)?
         .0
         .into_inner();
-    node.set_param(ParamType::Props, 0, Pod::from_bytes(&bytes).unwrap());
+    node.set_param(ParamType::Props, 0, Pod::from_bytes(&bytes).context("control properties")?);
+    Ok(())
 }

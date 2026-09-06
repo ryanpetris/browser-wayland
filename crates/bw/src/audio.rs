@@ -1,6 +1,8 @@
 //! Private audio services. Pipelines must stop before this owner is dropped.
 #[path = "audio/meter.rs"]
 pub mod meter;
+#[path = "audio/mixer.rs"]
+pub mod mixer;
 
 use anyhow::{Context, Result, bail, ensure};
 use std::{
@@ -198,6 +200,7 @@ pub struct Session {
     worker: Worker,
     services: Services,
     pub mic: tokio::sync::mpsc::Sender<bw_core::Bytes>,
+    pub mixer: Option<bw_server::Mixer>,
 }
 
 struct Worker {
@@ -210,22 +213,52 @@ struct Worker {
 impl Session {
     pub fn start(stopping: &Arc<AtomicBool>, audio: tokio::sync::mpsc::Sender<bw_core::StreamMsg>) -> Result<Self> {
         let mut services = Services::start(stopping)?;
+        use std::os::fd::AsRawFd;
+        let epoch_file = tempfile::tempfile_in(services.directory.path())?;
+        epoch_file.set_len(8)?;
+        let epoch_path = format!("/proc/{}/fd/{}", std::process::id(), epoch_file.as_raw_fd());
+        // The anonymous file is fixed-size and shared only with the helper through Epoch.
+        let epoch = Arc::new(unsafe { bw_core::audio::Epoch::map(epoch_file)? });
         let child = services.command(std::env::current_exe()?.to_str().context("executable path")?)
-            .arg("--audio-worker").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn()?;
+            .arg("--audio-worker").env("BW_MIXER_EPOCH", epoch_path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn()?;
         let mut worker = Worker { child, stop: None, writer: None, reader: None };
         let mut stdout = worker.child.stdout.take().context("audio worker output")?;
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let (mixer_state, state) = tokio::sync::watch::channel(bw_core::audio::Snapshot::default());
+        let (mixer_levels, levels) = tokio::sync::watch::channel(Vec::new());
+        let (mixer_errors, errors) = tokio::sync::mpsc::channel(32);
+        let writer_errors = mixer_errors.clone();
+        let (mixer_commands, mut requests) = tokio::sync::mpsc::channel::<bw_core::audio::Request>(64);
+        let (audience, mut authority) = tokio::sync::watch::channel(bw_server::MixerAudience::default());
         worker.reader = Some(std::thread::Builder::new().name("audio-output".into()).spawn(move || {
             let mut ready = [0];
             if stdout.read_exact(&mut ready).is_err() || ready != [1] { return; }
             let _ = ready_tx.send(());
             loop {
-                let mut pts = [0; 8];
-                if stdout.read_exact(&mut pts).is_err() { break; }
-                let Ok(data) = read_packet(&mut stdout) else { break; };
-                if data.is_empty() { break; }
-                let _ = audio.try_send(bw_core::StreamMsg::Audio { pts_us: u64::from_le_bytes(pts), data: data.into() });
+                let mut kind = [0];
+                if stdout.read_exact(&mut kind).is_err() { break; }
+                match kind[0] {
+                    1 => {
+                        let mut pts = [0; 8];
+                        if stdout.read_exact(&mut pts).is_err() { break; }
+                        let Ok(data) = read_packet(&mut stdout) else { break; };
+                        if data.is_empty() { break; }
+                        let _ = audio.try_send(bw_core::StreamMsg::Audio { pts_us: u64::from_le_bytes(pts), data: data.into() });
+                    }
+                    2 => {
+                        let Ok(data) = read_limited(&mut stdout, 4 * 1024 * 1024) else { break; };
+                        let Ok(event) = serde_json::from_slice::<bw_core::audio::Event>(&data) else { break; };
+                        match event {
+                            bw_core::audio::Event::State(state) => { mixer_state.send_replace(state); }
+                            bw_core::audio::Event::Levels(levels) => { mixer_levels.send_replace(levels); }
+                            bw_core::audio::Event::Error { viewer, message } => { let _ = mixer_errors.try_send((viewer, message)); }
+                        }
+                    }
+                    _ => break,
+                }
             }
+            mixer_state.send_replace(bw_core::audio::Snapshot { error: Some("Session mixer disconnected.".into()), ..Default::default() });
+            mixer_levels.send_replace(Vec::new());
         })?);
         let mut stdin = worker.child.stdin.take().context("audio worker input")?;
         let (mic, mut packets) = tokio::sync::mpsc::channel::<bw_core::Bytes>(64);
@@ -234,16 +267,30 @@ impl Session {
         worker.stop = Some(stop_tx);
         worker.writer = Some(std::thread::Builder::new().name("microphone-input".into()).spawn(move || runtime.block_on(async {
             loop {
-                let packet = tokio::select! {
-                    _ = &mut stop_rx => None,
-                    packet = packets.recv() => packet,
+                let result = tokio::select! {
+                    biased;
+                    _ = &mut stop_rx => break,
+                    changed = authority.changed() => {
+                        if changed.is_err() { break; }
+                        let audience = *authority.borrow();
+                        write_request(&mut stdin, &bw_core::audio::Request::Audience { subscribed: audience.subscribed, controller: audience.controller, epoch: audience.epoch })
+                    }
+                    Some(request) = requests.recv() => {
+                        let audience = *authority.borrow();
+                        if matches!(&request, bw_core::audio::Request::Command { viewer, epoch, .. } if audience.controller != Some(*viewer) || audience.epoch != *epoch) {
+                            if let bw_core::audio::Request::Command { viewer, .. } = request { let _ = writer_errors.try_send((viewer, "Audio control permission changed.".into())); }
+                            Ok(())
+                        } else { write_request(&mut stdin, &request) }
+                    }
+                    Some(packet) = packets.recv() => write_tagged(&mut stdin, 1, &packet),
+                    else => break,
                 };
-                let Some(packet) = packet else {
-                    let _ = write_packet(&mut stdin, &[]);
-                    break;
-                };
-                if write_packet(&mut stdin, &packet).is_err() { break; }
+                if result.is_err() { break; }
+                if let Ok(packet) = packets.try_recv() {
+                    if write_tagged(&mut stdin, 1, &packet).is_err() { break; }
+                }
             }
+            let _ = stdin.write_all(&[0]);
         }))?);
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
@@ -257,13 +304,14 @@ impl Session {
             ensure!(Instant::now() < deadline, "native audio pipeline startup timed out");
             std::thread::sleep(Duration::from_millis(10));
         }
-        Ok(Self { worker, services, mic })
+        Ok(Self { worker, services, mic, mixer: Some(bw_server::Mixer { commands: mixer_commands, audience, epoch, state, levels, errors: Some(errors) }) })
     }
 
     pub fn check(&mut self) -> Result<()> {
         self.services.check()?;
         ensure!(self.worker.child.try_wait()?.is_none(), "audio pipeline process exited");
         ensure!(!self.mic.is_closed(), "microphone transport ended");
+        ensure!(!self.worker.reader.as_ref().is_some_and(|reader| reader.is_finished()), "audio output transport ended");
         Ok(())
     }
 
@@ -291,11 +339,13 @@ impl Drop for Worker {
     }
 }
 
-fn read_packet(input: &mut impl Read) -> Result<Vec<u8>> {
+fn read_packet(input: &mut impl Read) -> Result<Vec<u8>> { read_limited(input, 65536) }
+
+fn read_limited(input: &mut impl Read, limit: usize) -> Result<Vec<u8>> {
     let mut size = [0; 4];
     input.read_exact(&mut size)?;
     let size = u32::from_le_bytes(size) as usize;
-    ensure!(size <= 65536, "invalid audio packet size");
+    ensure!(size <= limit, "invalid audio packet size");
     let mut data = vec![0; size];
     input.read_exact(&mut data)?;
     Ok(data)
@@ -307,7 +357,38 @@ fn write_packet(output: &mut impl Write, packet: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Runs only in the private helper process. Standard output carries framed Opus, never logs.
+fn write_tagged(output: &mut impl Write, kind: u8, packet: &[u8]) -> Result<()> {
+    output.write_all(&[kind])?;
+    write_packet(output, packet)
+}
+
+fn write_request(output: &mut impl Write, request: &bw_core::audio::Request) -> Result<()> {
+    write_tagged(output, 2, &serde_json::to_vec(request)?)
+}
+
+fn write_mixer(output: &mut impl Write, event: &bw_core::audio::Event) -> Result<()> {
+    let mut packet = serde_json::to_vec(event)?;
+    if packet.len() > 4 * 1024 * 1024 {
+        packet = serde_json::to_vec(&bw_core::audio::Event::State(bw_core::audio::Snapshot {
+            error: Some("Session mixer state exceeds its size limit.".into()), ..Default::default()
+        }))?;
+    }
+    write_tagged(output, 2, &packet)
+}
+
+struct MixerThread {
+    stopped: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for MixerThread {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+    }
+}
+
+/// Runs only in the private helper process. Standard output carries framed Opus and mixer events.
 pub fn worker() -> Result<()> {
     let socket = std::env::var_os("PIPEWIRE_REMOTE").context("private PipeWire socket is required")?;
     let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel(16);
@@ -317,15 +398,47 @@ pub fn worker() -> Result<()> {
     let ended = Arc::new(AtomicBool::new(false));
     let input_ended = ended.clone();
     let mic_health = mic_tx.clone();
-    std::thread::Builder::new().name("microphone-packets".into()).spawn(move || {
+    let (control, mut requests) = mixer::channel();
+    let epoch_path = std::env::var_os("BW_MIXER_EPOCH").context("private mixer epoch is required")?;
+    let epoch_file = fs::OpenOptions::new().read(true).write(true).open(epoch_path)?;
+    // The parent owns the fixed-size file; both processes access it only through Epoch.
+    requests.epoch = Some(Arc::new(unsafe { bw_core::audio::Epoch::map(epoch_file)? }));
+    let (mixer_events, mut mixer_rx) = tokio::sync::mpsc::channel(32);
+    let input_events = mixer_events.clone();
+    let mixer_stop = ended.clone();
+    let thread = std::thread::Builder::new().name("session-mixer".into()).spawn(move || mixer::run(socket.into(), requests, mixer_events, mixer_stop))?;
+    let mixer_thread = MixerThread { stopped: ended.clone(), thread: Some(thread) };
+    std::thread::Builder::new().name("audio-input".into()).spawn(move || {
         let mut input = std::io::stdin().lock();
-        while let Ok(data) = read_packet(&mut input) {
-            if data.is_empty() || mic_tx.blocking_send(data.into()).is_err() { break; }
-        }
+        let result = (|| -> Result<()> {
+            loop {
+                let mut kind = [0];
+                input.read_exact(&mut kind)?;
+                match kind[0] {
+                    0 => return Ok(()),
+                    1 => {
+                        let data = read_packet(&mut input)?;
+                        if let Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) = mic_tx.try_send(data.into()) { return Ok(()); }
+                    }
+                    2 => {
+                        let request = serde_json::from_slice::<bw_core::audio::Request>(&read_limited(&mut input, 4096)?)?;
+                        if let Err(error) = control.send(request) {
+                            let request = match error { std::sync::mpsc::TrySendError::Full(request) | std::sync::mpsc::TrySendError::Disconnected(request) => request };
+                            if let bw_core::audio::Request::Command { viewer, .. } = request {
+                                let _ = input_events.try_send(bw_core::audio::Event::Error { viewer, message: "Session mixer is busy or disconnected. Try again.".into() });
+                            }
+                        }
+                    }
+                    _ => bail!("invalid audio input frame"),
+                }
+            }
+        })();
+        if let Err(error) = result { tracing::debug!("audio input ended: {error}"); }
         input_ended.store(true, Ordering::Relaxed);
     })?;
     let mut stdout = std::io::stdout().lock();
     let mut ready = false;
+    let mut mixer_failed = false;
     tokio::runtime::Builder::new_current_thread().enable_time().build()?.block_on(async {
         let mut health = tokio::time::interval(Duration::from_millis(50));
         loop {
@@ -335,12 +448,22 @@ pub fn worker() -> Result<()> {
                     output.check()?;
                     microphone.check()?;
                     ensure!(!mic_health.is_closed(), "microphone pipeline ended");
+                    if ready && !mixer_failed && mixer_thread.thread.as_ref().is_some_and(|thread| thread.is_finished()) {
+                        mixer_failed = true;
+                        write_mixer(&mut stdout, &bw_core::audio::Event::State(bw_core::audio::Snapshot { error: Some("Session mixer stopped.".into()), ..Default::default() }))?;
+                        stdout.flush()?;
+                    }
                 }
                 packet = audio_rx.recv() => {
                     let Some(bw_core::StreamMsg::Audio { pts_us, data }) = packet else { bail!("audio capture ended"); };
                     if !ready { stdout.write_all(&[1])?; ready = true; }
+                    stdout.write_all(&[1])?;
                     stdout.write_all(&pts_us.to_le_bytes())?;
                     write_packet(&mut stdout, &data)?;
+                    stdout.flush()?;
+                }
+                Some(event) = mixer_rx.recv(), if ready => {
+                    write_mixer(&mut stdout, &event)?;
                     stdout.flush()?;
                 }
             }

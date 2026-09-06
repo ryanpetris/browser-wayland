@@ -1,7 +1,7 @@
 //! Session mixer messages. Object identifiers include the graph generation and object serial.
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Output,
@@ -30,10 +30,13 @@ pub struct Node {
     /// Perceptual percent: a value of 50 corresponds to linear gain 0.125.
     pub volume: Option<f32>,
     pub mute: Option<bool>,
-    pub writable: bool,
-    pub target: Option<String>,
+    pub volume_writable: bool,
+    pub mute_writable: bool,
+    pub routing_writable: bool,
+    pub targets: Vec<String>,
     pub is_default: bool,
     pub meter_before_volume: bool,
+    pub meter_active: bool,
     pub meter_error: Option<String>,
 }
 
@@ -41,6 +44,7 @@ pub struct Node {
 pub struct Snapshot {
     pub generation: String,
     pub available: bool,
+    /// With available=true this describes degraded service; existing rows remain valid.
     pub error: Option<String>,
     pub routing: bool,
     pub nodes: Vec<Node>,
@@ -52,7 +56,7 @@ pub struct Level {
     pub peak: f32,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Subscribe { enabled: bool },
@@ -110,6 +114,36 @@ pub enum Event {
     State(Snapshot),
     Levels(Vec<Level>),
     Error { viewer: u64, message: String },
+}
+
+/// Shared dispatch epoch, published before the server announces a control handoff.
+/// The private helper maps the same fixed-size file through its own descriptor.
+pub struct Epoch {
+    memory: memmap2::MmapMut,
+    _file: std::fs::File,
+}
+
+impl Epoch {
+    /// # Safety
+    /// The file must remain eight bytes for the lifetime of every mapping. After
+    /// initialization, all access to its contents must use aligned AtomicU64 operations.
+    pub unsafe fn map(file: std::fs::File) -> std::io::Result<Self> {
+        if file.metadata()?.len() != 8 {
+            return Err(std::io::Error::other("invalid mixer epoch size"));
+        }
+        // The owner creates eight zero bytes before mapping and never resizes the file.
+        // mmap is page-aligned; all subsequent accesses use the same AtomicU64 type.
+        let memory = unsafe { memmap2::MmapOptions::new().len(8).map_mut(&file)? };
+        Ok(Self { memory, _file: file })
+    }
+
+    fn value(&self) -> &std::sync::atomic::AtomicU64 {
+        // The shared mapping outlives every access and its base satisfies atomic alignment.
+        unsafe { &*self.memory.as_ptr().cast::<std::sync::atomic::AtomicU64>() }
+    }
+
+    pub fn load(&self) -> u64 { self.value().load(std::sync::atomic::Ordering::SeqCst) }
+    pub fn publish(&self, epoch: u64) { self.value().store(epoch, std::sync::atomic::Ordering::SeqCst); }
 }
 
 #[cfg(test)]
