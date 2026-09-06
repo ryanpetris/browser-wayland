@@ -33,6 +33,10 @@ struct Cli {
     /// and a Wayland session's environment set for it.
     #[arg(long)]
     exec: Option<String>,
+    /// Keep the desktop at WIDTHxHEIGHT pixels and scale it to fit each browser.
+    /// Both dimensions must be even and between 2 and 8192.
+    #[arg(long, value_name = "WIDTHxHEIGHT", value_parser = parse_screen_size)]
+    screen_size: Option<(u32, u32)>,
     /// Fullscreen every window: for running a nested desktop such as
     /// `--exec 'dbus-run-session -- gnome-shell --devkit'`.
     #[arg(long)]
@@ -81,6 +85,13 @@ struct Cli {
 }
 
 const DEFAULT_RENDER_NODE: &str = "/dev/dri/renderD128";
+
+fn parse_screen_size(value: &str) -> std::result::Result<(u32, u32), String> {
+    let invalid = || "expected WIDTHxHEIGHT with even dimensions between 2 and 8192".to_string();
+    let (w, h) = value.split_once('x').ok_or_else(invalid)?;
+    let dimension = |s: &str| s.parse::<u32>().ok().filter(|n| (2..=8192).contains(n) && n % 2 == 0).ok_or_else(invalid);
+    Ok((dimension(w)?, dimension(h)?))
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -177,13 +188,21 @@ fn main() -> Result<()> {
     tracing::info!(?accepted_formats, "render target formats the encoders take (fourcc, modifier)");
     let data_dir = bw_server::Config::default_data_dir()?;
     let files_dir = std::path::absolute(cli.files_dir.unwrap_or_else(bw_server::files::default_dir))?;
+    let mut initial = bw_core::OutputGeometry {
+        // The CPU encoders get every frame at half the rate instead of every other frame.
+        refresh_mhz: if software { 30_000 } else { 60_000 },
+        ..bw_core::INITIAL_OUTPUT
+    };
+    if let Some((width, height)) = cli.screen_size {
+        initial.width_px = width;
+        initial.height_px = height;
+    }
     let runtime = tokio::runtime::Runtime::new()?;
     let bw_compositor::CompositorHandle { commands, socket_name, x11_display, join } = bw_compositor::spawn(
         bw_compositor::Config {
             render_node,
             socket_name: cli.socket_name,
-            // the CPU encoders get every frame at half the rate instead of every other frame
-            initial: bw_core::OutputGeometry { refresh_mhz: if software { 30_000 } else { 60_000 }, ..bw_core::INITIAL_OUTPUT },
+            initial,
             exec: cli.exec.clone(),
             exec_env,
             kiosk: cli.kiosk,
@@ -205,7 +224,7 @@ fn main() -> Result<()> {
         }
         bw_server::rtc::Config { port: cli.rtc_port.unwrap_or(cli.listen.port()), addr: cli.rtc_addr, ice_servers }
     });
-    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, software, bitrate_kbps: cli.bitrate, refresh_mhz: if software { 30_000 } else { 60_000 }, data_dir, elements: cli.elements, files_dir, version: env!("BW_VERSION"), sinks, audio_available: audio.is_some(), mixer: audio.as_mut().and_then(|session| session.mixer.take()), mic: audio.as_ref().map(|session| session.mic.clone()), cam: cam.as_ref().map(|(_, tx)| tx.clone()), rtc };
+    let server = bw_server::Config { listen: cli.listen, tls: !cli.no_tls, codec, codecs, software, bitrate_kbps: cli.bitrate, initial, fixed_size: cli.screen_size.is_some(), data_dir, elements: cli.elements, files_dir, version: env!("BW_VERSION"), sinks, audio_available: audio.is_some(), mixer: audio.as_mut().and_then(|session| session.mixer.take()), mic: audio.as_ref().map(|session| session.mic.clone()), cam: cam.as_ref().map(|(_, tx)| tx.clone()), rtc };
     // Ctrl+C and SIGTERM (`docker stop`, a service manager) return here so the audio devices get unloaded
     // and the pipelines stopped.
     let result = runtime.block_on(async {

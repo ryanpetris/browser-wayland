@@ -64,8 +64,10 @@ pub struct Config {
     pub software: bool,
     /// `--bitrate`: the Medium quality level's bitrate ceiling.
     pub bitrate_kbps: u32,
-    /// The compositor's frame clock, which every resize keeps.
-    pub refresh_mhz: i32,
+    /// The compositor's initial output geometry.
+    pub initial: bw_core::OutputGeometry,
+    /// Keep the initial resolution when viewers resize or take control.
+    pub fixed_size: bool,
     /// Where `cert.pem`, `key.pem` and `token` live.
     pub data_dir: PathBuf,
     /// Serve /api/windows/{id}/elements (see `elements.rs`).
@@ -107,6 +109,7 @@ pub struct App {
     codecs: Vec<Codec>,
     software: bool,
     bitrate_kbps: u32,
+    fixed_size: bool,
     viewers: Mutex<Viewers>,
     sinks: SinkFactory,
     audio_available: std::sync::atomic::AtomicBool,
@@ -200,7 +203,8 @@ pub async fn run(cfg: Config, commands: calloop::channel::Sender<Command>, audio
         codecs: cfg.codecs,
         software: cfg.software,
         bitrate_kbps: cfg.bitrate_kbps,
-        viewers: Mutex::new(Viewers { output: bw_core::OutputGeometry { refresh_mhz: cfg.refresh_mhz, ..bw_core::INITIAL_OUTPUT }, ..Default::default() }),
+        fixed_size: cfg.fixed_size,
+        viewers: Mutex::new(Viewers { output: cfg.initial, ..Default::default() }),
         sinks: cfg.sinks,
         audio_available: cfg.audio_available.into(),
         mixer,

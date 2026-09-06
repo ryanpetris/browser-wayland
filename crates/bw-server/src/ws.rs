@@ -673,13 +673,13 @@ impl App {
                 if let Some(s) = v.sessions.get_mut(&id) {
                     s.size = Some(geo);
                 }
-                if controls {
+                if controls && !self.fixed_size {
                     v.output = geo;
                     self.retarget(&v);
                     Some(Command::Resize(geo))
                 } else {
                     if let Some(s) = v.sessions.get(&id) {
-                        s.control.set_size(Some(fit(&v.output, &geo)));
+                        s.control.set_size((!controls).then(|| fit(&v.output, &geo)));
                     }
                     None
                 }
@@ -742,8 +742,8 @@ impl App {
         }
     }
 
-    /// Hand control to `next` (none: nobody drives). The desktop takes the new controller's size, every
-    /// stream is re-fitted, and the two sessions concerned learn their roles.
+    /// Hand control to `next` (none: nobody drives). Unless fixed, the desktop takes the new
+    /// controller's size. Every stream is re-fitted, and the two sessions learn their roles.
     fn set_controller(&self, v: &mut Viewers, next: Option<u64>) {
         let old = v.controller;
         if old == next {
@@ -756,7 +756,7 @@ impl App {
         let _ = self.commands.send(Command::ReleaseAllInput);
         let _ = self.commands.send(Command::ReleasePointerLock);
         // targets first, so the frame the compositor renders for the new size finds them in place
-        let size = next.and_then(|id| v.sessions.get(&id)).and_then(|s| s.size);
+        let size = next.filter(|_| !self.fixed_size).and_then(|id| v.sessions.get(&id)).and_then(|s| s.size);
         if let Some(size) = size {
             v.output = size;
         }
@@ -771,8 +771,8 @@ impl App {
         }
     }
 
-    /// Every viewer's encoder scales the output to that viewer's window; the controller's window is the
-    /// output, so its encoder takes the frames as they are.
+    /// Viewers' encoders scale the output to their windows. The controller receives native frames
+    /// and the browser scales the canvas to fit, preserving exact logical input coordinates.
     // ponytail: set_size takes the sink's lock, which the compositor holds while it builds a pipeline
     // (~100 ms), under the viewers lock; hand the controls out as Arcs and call past the lock if that shows
     fn retarget(&self, v: &Viewers) {

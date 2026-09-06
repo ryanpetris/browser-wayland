@@ -47,6 +47,12 @@ Any number of people can watch at once, each with a stream scaled to their own w
 connect with the control token drives the pointer and keyboard; anyone else with that token sees a
 "Take control" button, and the desktop then takes their window's size. Whoever opens the view-only URL
 can watch, read the window list and elements, and take snapshots, but not act.
+
+Use `--screen-size 1920x1080` to set a fixed desktop resolution from startup. Browser resizes and
+control handoffs keep that resolution; each browser scales the picture to fit while preserving its
+aspect ratio. Both dimensions must be even and between 2 and 8192 pixels. Without this option, the
+desktop follows the controlling browser's size.
+
 Each viewer picks its own codec and quality in the status bar: the codec list is what both the server
 and that browser can do ("Auto (HEVC)" shows the pick). All five quality levels adapt under their
 selected ceiling: Very Low (2 Mbit/s), Low (5), Medium (`--bitrate`, 8 by default), High (12), and
