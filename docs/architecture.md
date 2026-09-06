@@ -115,9 +115,9 @@ buffers. The rendered slot leaves as a `Frame` whose lease (the `Slot`) is attac
 
 **Client buffer safety.** A pre-commit hook blocks the commit until the client's GPU work is done:
 the explicit-sync acquire point when the client uses linux-drm-syncobj (GTK's Vulkan renderer puts no
-implicit fences on its dmabufs), else the dmabuf's implicit fences. Clients started with `--exec` also
-get `GSK_RENDERER=ngl`, because GTK 4.22's default Vulkan renderer intermittently drew hairline
-slivers from window corners into our stream.
+implicit fences on its dmabufs), else the dmabuf's implicit fences.
+GTK renderer and Qt backend overrides are inherited from the launcher environment; see the
+[application environment settings](../README.md#run).
 
 **Output.** One `Output` ("BROWSER-1") whose mode is the browser's canvas in device pixels and whose
 scale is the browser's `devicePixelRatio`, so logical pixels equal CSS pixels and pointer coordinates

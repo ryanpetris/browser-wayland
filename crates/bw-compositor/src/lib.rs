@@ -411,10 +411,6 @@ impl State {
             // session type, which Chromium's and Electron's `auto` platform hints go by
             .env("XDG_SESSION_TYPE", "wayland")
             .env("GDK_BACKEND", "wayland")
-            // GTK 4.22's default Vulkan renderer intermittently draws hairline slivers from the window corner
-            // (seen with gnome-text-editor and mutter-devkit, never with its GL renderer). Drop when GTK fixes it.
-            .env("GSK_RENDERER", "ngl")
-            .env("QT_QPA_PLATFORM", "wayland;xcb") // Xwayland when a Qt build has no wayland plugin
             .env("SDL_VIDEODRIVER", "wayland")
             .env("SDL_VIDEO_DRIVER", "wayland") // SDL 3's name for it
             .env("MOZ_ENABLE_WAYLAND", "1")

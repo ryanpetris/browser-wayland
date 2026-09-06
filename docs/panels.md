@@ -84,5 +84,6 @@ desktop has nowhere to come back from.
   and `xfce4-appfinder`; without those packages they show a generic gear.
 - **Waybar icons.** The default config draws with Font Awesome glyphs (`otf-font-awesome`); without the
   font they render as hex boxes. Add `"wlr/taskbar"` to `modules-left` for a taskbar.
-- **GTK 3 is fine.** The `GSK_RENDERER=ngl` workaround is for GTK 4's Vulkan renderer; panels aren't affected.
+- **GTK rendering.** For GTK 4 Vulkan artifacts, set `GSK_RENDERER=ngl` in the environment launching
+  browser-wayland. GTK 3 panels do not need this setting.
 

@@ -110,8 +110,18 @@ backend switches, `DISPLAY` for X11 programs), and `--kiosk` fullscreens every w
 cargo run --release -- --kiosk --exec 'dbus-run-session -- gnome-shell --devkit'
 ```
 
-Clients from `--exec` also get `GSK_RENDERER=ngl`: GTK 4.22's default Vulkan renderer intermittently
-flashes thin dark triangles (the nested shell's viewer is GTK too). Set it yourself for GTK apps you start by hand.
+Applications launched by the desktop inherit `GSK_RENDERER` and `QT_QPA_PLATFORM` from the
+browser-wayland process. Set them in its launcher environment when needed:
+
+```sh
+GSK_RENDERER=ngl QT_QPA_PLATFORM='wayland;xcb' browser-wayland
+```
+
+`GSK_RENDERER=ngl` selects GTK's GL renderer to work around intermittent thin dark triangles
+with GTK 4.22's Vulkan renderer, including the nested shell's GTK viewer.
+`QT_QPA_PLATFORM='wayland;xcb'` makes Qt try Wayland, then X11 for builds without a Wayland plugin.
+For Docker, pass `-e GSK_RENDERER=ngl -e 'QT_QPA_PLATFORM=wayland;xcb'` before the image name.
+Without these settings, applications choose their toolkit defaults.
 
 The devkit's window follows the browser size. Don't add `--virtual-monitor`: that adds a second
 monitor, and GNOME puts its top bar only on the first one.
