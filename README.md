@@ -151,8 +151,15 @@ The server listens on UDP on the listen port's number (`--rtc-port` for another;
 the one browsers reach, so add `--rtc-addr <the host's address>` after the image name (or run with
 `--network host`); the same for a NAT with the port forwarded. For browsers behind a strict NAT give
 them a STUN server (`--stun stun:host:3478`) or a TURN server (`--turn turn:host:3478 --turn-user …
---turn-pass …`, its address as the browsers reach it; coturn is easy to self-host). `--no-rtc` leaves
-the option out entirely.
+--turn-pass …`, its address as the browsers reach it). coturn is one container to self-host:
+
+```sh
+docker run -d --name turn -p 3478:3478/udp -p 3478:3478 -p 49160-49200:49160-49200/udp coturn/coturn \
+  -n --lt-cred-mech --user=USER:PASS --realm=browser-wayland --listening-port=3478 \
+  --min-port=49160 --max-port=49200 --relay-ip=<the address the server reaches it at>
+```
+
+`--no-rtc` leaves the option out entirely.
 
 ## Without a GPU
 

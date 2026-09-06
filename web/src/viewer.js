@@ -33,7 +33,7 @@ export function createViewer() {
     touchMouse: pref.get('touchmouse', false), // fingers as a mouse with gestures, instead of real touch points
     mic: false, // the local microphone is going to the desktop
     micAvailable: false, // the desktop takes one (audio is on there)
-    transport: pref.getStr('transport', 'websocket') === 'webrtc' ? 'webrtc' : 'websocket', // this viewer's pick
+    transport: pref.getStr('transport') === 'webrtc' ? 'webrtc' : 'websocket', // this viewer's pick
     rtcAvailable: false, // the server does WebRTC (it sent ICE servers)
     videoVia: 'websocket', // where the video comes from now
     cam: false, // the local webcam is going to the desktop
@@ -344,12 +344,13 @@ export function createViewer() {
       }
       case VIDEO: {
         if (dropNext) { dropNext = false; return; } // debug: bw.dropNext() simulates a lost message
-        received++;
         if (!decoder) return;
+        received++;
         const key = (dv.getUint8(1) & 1) !== 0, seq = dv.getUint16(2, true);
-        if (key) { keyframes++; sinceKey = 0; } else sinceKey++;
-        // A frame from behind (the other pipe delivering late at a transport switch) is nothing new.
+        // A frame from behind is nothing new: a retransmit on the data channel arriving after the frames
+        // that overtook it, or the other pipe delivering late at a transport switch.
         if (videoSeq >= 0 && seq !== videoSeq && ((videoSeq - seq) & 0xffff) < 0x8000) return;
+        if (key) { keyframes++; sinceKey = 0; } else sinceKey++;
         // A gap in seq means the server dropped frames for us; a delta after a gap can't be decoded.
         const gap = videoSeq >= 0 ? (seq - videoSeq - 1) & 0xffff : 0;
         videoSeq = seq;
@@ -456,21 +457,29 @@ export function createViewer() {
 
   // --- WebRTC transport ------------------------------------------------------------------------
   // The data channel is opened when the viewer picks it: measured against the socket it is even on a
-  // clean link and behind it under packet loss, so Auto stays on the socket (see the README). The video
-  // moves to the channel when it opens and comes back to the socket when it closes; the pick gives up
-  // after 3 s (UDP blocked, say).
+  // clean link and behind it under packet loss, so the socket keeps the video unless it is picked (see
+  // the README). The video moves to the channel when it opens and comes back to the socket when it
+  // closes; a pick that hasn't opened three seconds after the offer goes back to the socket.
   let rtc = null, iceServers = [], rtcTimer, rtcGen = 0;
   function maybeRtc() {
     if (rtc || state().transport !== 'webrtc' || !state().rtcAvailable || ws?.readyState !== WebSocket.OPEN) return;
     const mine = (rtc = openRtc({
       iceServers,
       g: ++rtcGen,
-      signal: o => sendText(RTC_CLIENT, JSON.stringify(o)),
+      signal: o => {
+        sendText(RTC_CLIENT, JSON.stringify(o));
+        clearTimeout(rtcTimer); // the channel has three seconds from the offer, however long gathering took
+        rtcTimer = setTimeout(() => {
+          if (rtc === mine && state().videoVia !== 'webrtc') {
+            closeRtc();
+            store.set({ transport: 'websocket' }); // it didn't open: the select says so, and picking it again tries again
+          }
+        }, 3000);
+      },
       onMessage,
       onOpen: () => { if (rtc === mine) { clearTimeout(rtcTimer); store.set({ videoVia: 'webrtc' }); } },
       onClose: () => { if (rtc === mine) { closeRtc(); } },
     }));
-    rtcTimer = setTimeout(() => { if (rtc === mine && state().videoVia !== 'webrtc') closeRtc(); }, 3000); // no channel in three seconds: the socket keeps it
   }
   // back to the socket: the server is told (the channel may still look open to it); a frame lost on the
   // way shows as a seq gap, which asks for a keyframe
@@ -485,7 +494,7 @@ export function createViewer() {
   function setTransport(transport) {
     pref.setStr('transport', transport);
     store.set({ transport });
-    if (transport === 'webrtc') maybeRtc(); // a channel already open stays
+    if (transport === 'webrtc') maybeRtc();
     else closeRtc();
   }
 

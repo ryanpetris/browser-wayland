@@ -9,7 +9,9 @@
 //! the session's channel is open and to the socket otherwise. A frame goes as numbered fragments the page
 //! reassembles, written as the SCTP send buffer (128 kB, freed by the browser's acknowledgements) has
 //! room: a keyframe of a few hundred kB takes a few rounds, and frames that arrive meanwhile are dropped
-//! (a keyframe replaces whatever waits), which the session's rate controller hears of.
+//! (a keyframe replaces whatever waits, though what was written of it still has to go out), which the
+//! session's rate controller hears of. A fragment on its way is retransmitted if it is lost, so what the
+//! page misses is what was dropped here, never what the network ate.
 
 use std::{
     collections::HashMap,
@@ -25,7 +27,7 @@ use tokio::{net::UdpSocket, sync::mpsc};
 
 use crate::protocol;
 
-/// Fragments of this size go down the channel: every browser takes them, and a lost one costs one frame.
+/// Fragments of this size go down the channel: every browser takes them, and a lost one is retransmitted.
 const FRAGMENT: usize = 16 * 1024;
 
 /// What the CLI decided: the UDP port, the address to advertise, and the ICE servers the browser should use.

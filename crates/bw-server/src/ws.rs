@@ -201,7 +201,8 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                         let (backlog, dropped) = (rx.len(), app.rtc.as_ref().map_or(0, |hub| hub.take_dropped(id))); // channel drops are congestion too
                         let t = Instant::now();
                         match &app.rtc {
-                            // the data channel, while the page has one open: a lost packet costs one frame, not a stall
+                            // the data channel, while the page has one open: unordered, so a retransmit holds up
+                            // its own frame and not the ones behind it
                             Some(hub) if hub.is_open(id) => hub.frame(id, protocol::video(&f, seq)),
                             _ => if !send(&mut socket, protocol::video(&f, seq)).await { break None },
                         }

@@ -9,7 +9,7 @@ export function openRtc({ iceServers, g, signal, onMessage, onOpen, onClose }) {
   const ch = pc.createDataChannel('video', { ordered: false });
   ch.binaryType = 'arraybuffer';
   const parts = new Map(); // frame id -> { got, chunks } while its fragments come in
-  let incomplete = 0; // frames given up on: a fragment never came
+  let incomplete = 0; // frames given up on: the server abandoned one half-sent
   ch.onmessage = e => {
     const dv = new DataView(e.data); // every message is a fragment, a whole frame a fragment of one
     const id = dv.getUint32(1, true), index = dv.getUint16(5, true), count = dv.getUint16(7, true);
