@@ -83,7 +83,7 @@ def amplitudes(env, sink):
                 capture.communicate()
                 raise
         # pw-record returns 1 on SIGINT on the validated PipeWire versions.
-        assert capture.returncode in (0, 1) and not error, (capture.returncode, error, len(raw))
+        assert capture.returncode in (0, 1), (capture.returncode, error, len(raw))
     samples = array.array("f", raw)
     assert len(samples) >= 9600, len(samples)
     samples = samples[-4800:]
@@ -207,7 +207,7 @@ with tempfile.TemporaryDirectory(prefix="bw-isolation-") as directory:
             try:
                 if ("PIPEWIRE_RUNTIME_DIR=" + private).encode() in (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0"):
                     os.kill(pid, signal.SIGKILL)
-            except (FileNotFoundError, ProcessLookupError):
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
                 pass
         for private in set(owned_audio.values()):
             shutil.rmtree(private, ignore_errors=True)

@@ -55,7 +55,7 @@ withdraws playback and microphone capabilities from connected viewers. It does n
 SIGTERM and Ctrl+C are handled from startup. Audio children have separate process groups so terminal
 signals go through the owner's cleanup path. Shutdown asks the pipeline helper to stop, gives it
 500 ms to exit, then kills and reaps it if necessary before removing services and their directory.
-The compositor thread is also joined before process exit.
+The compositor thread is also joined before process exit. Repeated signals do not interrupt this join.
 The container runs the compositor as PID 1 so `docker stop` reaches its signal handler.
 Forced termination such as SIGKILL cannot run this cleanup. Outside a container, it can leave audio
 children and the temporary directory behind.
