@@ -228,6 +228,8 @@ pub struct State {
     pub drag_action: DndAction,
     pub drag_dropping: Option<Instant>,
     pub drag_taken: bool,
+    /// A client's drag icon and its offset from the pointer, drawn there while the drag lasts.
+    pub dnd_icon: Option<(WlSurface, Point<i32, Logical>)>,
     pub x11_display: Option<u32>,
     pub xwayland_pending: bool,
 }
@@ -325,6 +327,7 @@ impl State {
             drag_action: DndAction::empty(),
             drag_dropping: None,
             drag_taken: false,
+            dnd_icon: None,
             dirty: true,
             force_full_frame: true,
             space,

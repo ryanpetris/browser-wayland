@@ -339,6 +339,9 @@ impl State {
         // the pointer goes where it is sent, past the output's edge too: a window that hangs over it
         // (a popped-out one sized by its own tab) is still a window
         self.pointer_location = location;
+        if self.dnd_icon.is_some() {
+            self.dirty = true; // the drag icon rides the pointer
+        }
         let under = self.surface_under(location);
         // relative-pointer clients get the delta too, except on the frame that enters a new surface: the
         // pointer arrived there from nowhere they know of, and Xwayland, which warps its device to the

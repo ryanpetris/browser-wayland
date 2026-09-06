@@ -197,7 +197,9 @@ next loop turn: the accept and action callbacks run inside the offer's request h
 lock the drop takes. The page is told whether the application took the files (`Notice`); a refused drop
 leaves them in the transfer folder. A blur, disconnect or handover mid-drag cancels it (`release_all`),
 and a drop whose upload outlived the grab is answered as not taken. X11 applications get no drop
-(Smithay's XWM does not speak XDND).
+(Smithay's XWM does not speak XDND). A drag an application starts itself (a file out of Thunar) is
+Smithay's client drag (`ClientDndGrabHandler`): its icon surface is drawn at the pointer, offset by its
+buffer offsets, while the drag lasts (`dnd_icon`), and pointer motion renders a frame so it moves.
 
 ## Notifications
 

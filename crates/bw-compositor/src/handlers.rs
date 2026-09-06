@@ -2,6 +2,7 @@
 
 use std::{borrow::Cow, cell::RefCell, os::unix::io::OwnedFd};
 
+use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::{
     backend::renderer::utils::with_renderer_surface_state,
     input::pointer::CursorImageSurfaceData,
@@ -269,6 +270,11 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
+        if let Some((icon, offset)) = self.dnd_icon.as_mut() && icon == surface {
+            // a drag icon's hotspot moves with its buffer offsets
+            with_states(surface, |s| *offset += s.cached_state.get::<SurfaceAttributes>().current().buffer_delta.take().unwrap_or_default());
+            self.dirty = true;
+        }
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();
             while let Some(parent) = get_parent(&root) {
@@ -678,7 +684,17 @@ impl PrimarySelectionHandler for State {
         &self.primary_selection_state
     }
 }
-impl ClientDndGrabHandler for State {}
+/// A client's drag: its icon follows the pointer in the picture while it lasts.
+impl ClientDndGrabHandler for State {
+    fn started(&mut self, _source: Option<WlDataSource>, icon: Option<WlSurface>, _seat: Seat<Self>) {
+        self.dnd_icon = icon.map(|s| (s, Point::default()));
+        self.dirty = true;
+    }
+    fn dropped(&mut self, _target: Option<WlSurface>, _validated: bool, _seat: Seat<Self>) {
+        self.dnd_icon = None;
+        self.dirty = true;
+    }
+}
 /// The browser's drag (`State::drag`): the target reads the URI list like our clipboard, once it exists.
 impl ServerDndGrabHandler for State {
     /// Before the drop there is nothing yet, and the pipe is closed at once (EOF) rather than left pending:

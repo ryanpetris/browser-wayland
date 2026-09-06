@@ -12,7 +12,7 @@ use smithay::{
     desktop::Window,
     utils::{Logical, Point},
     backend::allocator::Buffer as _,
-    backend::renderer::{ImportAll, ImportMem, utils::with_renderer_surface_state, element::{AsRenderElements, Id, memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer},
+    backend::renderer::{ImportAll, ImportMem, utils::with_renderer_surface_state, element::{AsRenderElements, Id, Kind, memory::MemoryRenderBufferRenderElement, surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree}}, gles::GlesRenderer},
     desktop::{
         WindowSurface, layer_map_for_output,
         utils::{OutputPresentationFeedback, send_frames_surface_tree},
@@ -81,6 +81,12 @@ impl State {
             out.extend(self.bar_element(&w, scale).map(Into::into)); // under the window's popups, which may open upward
         }
         out.extend(bottom);
+        // a client's drag icon rides the pointer, over everything
+        if let Some((icon, offset)) = &self.dnd_icon {
+            let loc = (self.pointer_location + offset.to_f64()).to_physical_precise_round(scale);
+            let icon: Vec<OutputElement<GlesRenderer>> = render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(&mut self.gpu.renderer, icon, loc, s, 1.0, Kind::Cursor).into_iter().map(Into::into).collect();
+            out.splice(0..0, icon);
+        }
         out
     }
 
@@ -169,6 +175,9 @@ impl State {
         }
         if let CursorImageStatus::Surface(s) = &self.cursor_status {
             send_frames_surface_tree(s, &self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
+        }
+        if let Some((icon, _)) = &self.dnd_icon {
+            send_frames_surface_tree(icon, &self.output, now, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
         }
 
         // ponytail: CPU wait for the GPU; export the fence instead if it ever shows up in profiles.
