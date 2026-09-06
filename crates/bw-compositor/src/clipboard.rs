@@ -156,10 +156,9 @@ impl State {
 
     /// The browser drags local files over the desktop. `Start` presses the left button over nothing (so no
     /// client sees a press it never gets the release of) and starts a compositor-owned drag offering
-    /// `text/uri-list` from there, to copy or to move (Thunar moves, so the file leaves the transfer folder
-    /// for the folder shown, and a drop on that folder itself changes nothing; Nautilus copies, as GTK 4
-    /// prefers when both are offered, and so does an application that only copies, leaving the file in the
-    /// transfer folder too); the browser's pointer motion moves it, and the application under it is
+    /// `text/uri-list` from there, to copy or to move (Thunar moves the staged file into the folder
+    /// shown; Nautilus copies, as GTK 4 prefers when both are offered, and so does an application that only
+    /// copies, leaving the staged file to the sweep); the browser's pointer motion moves it, and the application under it is
     /// told what is coming. `Drop` supplies the list, which the files were uploaded for after the user let
     /// go, so the target only now learns what it is being given: it is left and entered again with a fresh
     /// offer (Thunar reads the list during the drag to decide, once per offer, and refuses without it;

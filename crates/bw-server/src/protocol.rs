@@ -59,8 +59,9 @@ pub const NOTIFY: u8 = 0x8E;
 /// optional: this session's choice, applied live. Any session.
 pub const STREAM: u8 = 0x8F;
 /// `[DRAG][JSON]`: the browser drags local files over the desktop: `{"op": "start"}` where the pointer is,
-/// `{"op": "drop", "names": [...]}` with the files' names as staged (`PUT /api/drop/{name}` first), or
-/// `{"op": "cancel"}`. Controlling session only.
+/// `{"op": "drop", "batch": "…", "names": [...]}` with the batch the files were staged in (`PUT
+/// /api/drop/{batch}/{name}` first) and their names, or `{"op": "cancel"}`, with the batch when files
+/// were staged for a drop that isn't happening. Controlling session only.
 pub const DRAG: u8 = 0x90;
 /// `[INPUT][JSON]`: one input action as `POST /api/input` takes it (`{"type": "text", "text": …}`,
 /// `{"type": "key", "keys": …}`, …), resolved on the compositor thread; the on-screen keyboard types with
@@ -275,8 +276,11 @@ pub enum ClientMsg {
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum DragMsg {
     Start,
-    Drop { names: Vec<String> },
-    Cancel,
+    Drop { batch: String, names: Vec<String> },
+    Cancel {
+        #[serde(default)]
+        batch: Option<String>,
+    },
 }
 
 /// `{"codec": "auto" | "h264" | …, "quality": "auto" | "low" | …}`, either optional (unchanged).
@@ -357,6 +361,9 @@ mod tests {
         );
         assert_eq!(control(r#"{"op":"spawn","cmd":"foot"}"#), Some(ClientMsg::Control(bw_core::ControlMsg { id: 0, op: bw_core::ControlOp::Spawn { cmd: "foot".into() } })));
         assert_eq!(control(r#"{"op":"dance"}"#), None);
+        let drag = |json: &str| decode(&[&[DRAG][..], json.as_bytes()].concat());
+        assert_eq!(drag(r#"{"op":"drop","batch":"b1","names":["a.txt"]}"#), Some(ClientMsg::Drag(DragMsg::Drop { batch: "b1".into(), names: vec!["a.txt".into()] })));
+        assert_eq!(drag(r#"{"op":"cancel"}"#), Some(ClientMsg::Drag(DragMsg::Cancel { batch: None })));
         assert_eq!(decode(&[0x85, 0x10]), None);
         assert_eq!(decode(&[]), None);
     }

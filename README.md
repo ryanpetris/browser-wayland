@@ -185,8 +185,9 @@ browsers without drag and drop. The same folder is `GET`, `PUT` and `DELETE /api
 Drag a file over the desktop itself and the application under the pointer sees a drag coming; let go and,
 once the file is uploaded, it is dropped there as a `file://` URI, to copy or to move. Since the
 application picks the folder, such a file is not uploaded to Downloads but staged under the cache
-directory (`~/.cache/browser-wayland/drops`, a randomly named folder per drop): Thunar moves it out into
-the folder shown, Nautilus and an editor opening it copy, and whatever is left there is swept after a day.
+directory (`~/.cache/browser-wayland/drops`, a folder with a random name per drop): Thunar moves it out into
+the folder shown, Nautilus copies, an editor opens it where it is, and whatever is left there is swept after
+a day (an editor still showing the file loses it then).
 A drop no application took goes to the transfer folder. Files copied in a file manager inside the desktop
 show up in the status bar with a download button, and files copied on your machine paste into the
 desktop's file manager, staged the same way.

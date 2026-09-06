@@ -42,7 +42,7 @@ export const windowIcon = (id, key) => {
 // The transfer folder: list, upload (the final name comes back), download through a blob (no token in URLs), delete.
 const ok = r => (r.ok ? r : Promise.reject(new Error(`HTTP ${r.status}`)));
 export const files = async () => ok(await api('/api/files')).json();
-export const uploadFile = async (file, staged = false) => ok(await api(`/api/${staged ? 'drop' : 'files'}/${encodeURIComponent(file.name)}`, { method: 'PUT', body: file })).json();
+export const uploadFile = async (file, batch) => ok(await api(`/api/${batch ? `drop/${batch}` : 'files'}/${encodeURIComponent(file.name)}`, { method: 'PUT', body: file })).json();
 export const deleteFile = async name => ok(await api(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' }));
 // Saved under the name the server serves it as (a clipboard file may have changed since its name was shown).
 const download = async (path, name) => {
@@ -54,8 +54,8 @@ const download = async (path, name) => {
 };
 export const downloadFile = name => download(`/api/files/${encodeURIComponent(name)}`, name);
 
-// Files on the clipboard: put files of the transfer folder there; fetch the i-th file copied in the desktop.
-export const clipboardFiles = (names, staged = false) => api('/api/clipboard/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names, staged }) });
+// Files on the clipboard: put files of the transfer folder, or of a staged batch, there; fetch the i-th file copied in the desktop.
+export const clipboardFiles = (names, batch) => api('/api/clipboard/files', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names, batch }) });
 export const downloadClipboardFile = (index, name) => download(`/api/clipboard/files/${index}`, name);
 
 // A notification's icon as a blob URL (the caller revokes it), or null.

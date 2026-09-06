@@ -689,24 +689,24 @@ export function createViewer() {
 
   // --- files ---------------------------------------------------------------------------------
   // Files dropped anywhere on the page go to the desktop's transfer folder, one after the other. A drag
-  // onto the desktop or a paste into an application there stages them instead (`staged`): the application
-  // picks the folder, and the drop or the paste says how it went.
-  async function uploadFiles(list, staged = false) {
+  // onto the desktop or a paste into an application there stages them instead, in a batch named here
+  // (`batch`): the application picks the folder, and the drop or the paste says how it went.
+  async function uploadFiles(list, batch) {
     const files = [...list], saved = [];
     for (const [index, file] of files.entries()) {
       store.set({ upload: { name: file.name, index: index + 1, count: files.length } });
-      try { saved.push((await uploadFile(file, staged)).name); } catch {}
+      try { saved.push((await uploadFile(file, batch)).name); } catch {}
     }
-    store.set({ upload: null, filesRev: state().filesRev + (staged ? 0 : 1) });
-    if (!staged) notice(saved.length ? `${saved.length} file${saved.length === 1 ? '' : 's'} saved to the desktop's transfer folder` : 'upload failed');
+    store.set({ upload: null, filesRev: state().filesRev + (batch ? 0 : 1) });
+    if (!batch) notice(saved.length ? `${saved.length} file${saved.length === 1 ? '' : 's'} saved to the desktop's transfer folder` : 'upload failed');
     else if (saved.length < files.length) notice('upload failed');
     return saved; // the names they got there
   }
   document.addEventListener('dragover', e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
   // Over the stage, a controller's drag is carried on as a drag on the desktop: the application under the
-  // pointer sees a text/uri-list coming and shows its drop zone; on drop the files are uploaded to the
-  // transfer folder first (the drag holds still meanwhile), then dropped as their URIs. Elsewhere on the
-  // page a drop is a plain upload.
+  // pointer sees a text/uri-list coming and shows its drop zone; on drop the files are staged in a batch
+  // of their own (the drag holds still meanwhile), then dropped as their URIs. Elsewhere on the page a
+  // drop is a plain upload to the transfer folder.
   let dragging = false; // 'over' while the files are over the stage, 'dropping' until the upload is done and the desktop told
   const drag = msg => sendText(DRAG, JSON.stringify(msg));
   function onDragEnter(e) {
@@ -724,8 +724,9 @@ export function createViewer() {
     dragging = 'dropping';
     onPointerMove(e);
     const files = e.dataTransfer.files;
-    const names = await uploadFiles(files, true);
-    drag(names.length === files.length ? { op: 'drop', names } : { op: 'cancel' });
+    const batch = crypto.randomUUID();
+    const names = await uploadFiles(files, batch);
+    drag(names.length === files.length ? { op: 'drop', batch, names } : { op: 'cancel', batch });
     dragging = false;
   }
   document.addEventListener('drop', e => {
@@ -799,7 +800,7 @@ export function createViewer() {
       swallowKeyup = pendingPaste; pendingPaste = null; clearTimeout(pasteTimer);
       const put = image
         ? api('/api/clipboard', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: image, signal: AbortSignal.timeout(5000) })
-        : uploadFiles(files, true).then(names => (names.length === files.length ? clipboardFiles(names, true) : { ok: false })); // a file that didn't land isn't pasted, and the notice says what did
+        : (batch => uploadFiles(files, batch).then(names => (names.length === files.length ? clipboardFiles(names, batch) : { ok: false })))(crypto.randomUUID()); // a file that didn't land isn't pasted, and the notice says what did
       put.then(r => { if (r.ok) return api('/api/input', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'key', keys: chord }) }); }).catch(() => {});
       return;
     }

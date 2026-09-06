@@ -19,7 +19,7 @@ const ROUTES: &str = "\
 | `PUT /api/files/{name}` | the file's bytes | saved in the folder under `name`, or `name (2)` if taken; `201` with `{\"name\"}` |
 | `GET /api/files/{name}` | | the file, as an attachment; `404` |
 | `DELETE /api/files/{name}` | | `204`; `404` |
-| `PUT /api/drop/{name}` | the file's bytes | staged for the drag or paste under way, for the application that takes it (the page's business; the transfer folder is for uploads); `201` with `{\"name\": \"…\"}` |
+| `PUT /api/drop/{batch}/{name}` | the file's bytes | staged in batch `batch` (a random id of the page's) for a drag or a paste onto the desktop, where the application picks the folder; the transfer folder is for uploads; `201` with `{\"name\": \"…\"}` |
 | `GET /api/notifications` | | JSON array of **Notification**: what applications reported and the viewers show |
 | `POST /api/notifications/{id}` | `{\"action\": \"default\" \\| \"<key>\"}`, or `{}` to dismiss | click, invoke an action of, or dismiss a notification; `202`, `404` |
 | `GET /api/notifications/{id}/icon` | | the notification's picture (the application's, else its launcher's); `404` none |
@@ -30,7 +30,7 @@ const ROUTES: &str = "\
 | `POST /api/input` | **Input** | `202`, with `{\"warning\": …}` when a click aims past the desktop's edge at an X11 window (Xwayland pins it to the edge); `404` unknown window; `503` compositor gone |
 | `GET /api/clipboard` | | what an application last copied: `text/plain`, `image/png`, or `text/uri-list` (files copied in a file manager); `204` before any |
 | `PUT /api/clipboard` | UTF-8 text body, a PNG with `Content-Type: image/png`, or `file://` URIs with `text/uri-list` | becomes the desktop clipboard; `202`; `413` over 1 MiB (text) or 16 MiB (PNG) |
-| `POST /api/clipboard/files` | `{\"names\": [...]}` from the transfer folder | those files become the desktop clipboard, as a file manager's copy; `202` |
+| `POST /api/clipboard/files` | `{\"names\": [...]}` from the transfer folder, or with `\"batch\"` from that staged batch | those files become the desktop clipboard, as a file manager's copy; `202` |
 | `GET /api/clipboard/files/{index}` | | the `index`th file on the desktop clipboard (a file manager's copy), as an attachment; `404` |
 | `POST /api/token/rotate` | | `{\"token\": …, \"viewer_token\": …}`: new tokens replace both at once (files, viewers, API); the server prints the new URLs |
 | `POST /mcp` | MCP Streamable HTTP | the tools below |

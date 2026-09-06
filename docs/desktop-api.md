@@ -171,12 +171,17 @@ upload is complete (a taken name gets ` (2)` before its extension; the reply car
 /api/files/{name}` streams one back as an attachment (a symlink is not followed), `DELETE` removes one.
 A name is a single visible entry of the folder: anything with a `/` or starting with a `.` is `404`.
 Files an application on the desktop is to take, a drag's or a paste's, are not uploaded there but staged:
-`PUT /api/drop/{name}` writes into the batch under way, a randomly named directory under
-`$XDG_CACHE_HOME/browser-wayland/drops` (`~/.cache/…`) opened by the first file and closed by the drop
-(`Drag` `drop`) or the paste (`POST /api/clipboard/files` with `"staged": true`). The desktop's word on
-the drop (`DragEnded`) settles the batch: taken, it is left as it is, moved out or copied from; refused,
-or a `cancel` with files staged, its files go to the transfer folder. Nothing but the sweep removes. An hourly sweep removes batches older than a day; instances share the
-directory, batch names are random, and a batch already gone is no error to either.
+`PUT /api/drop/{batch}/{name}` writes into batch `batch`, a directory under
+`$XDG_CACHE_HOME/browser-wayland/drops` (`~/.cache/…`) named by the page with a random id it then
+carries in the drop (`Drag` `drop`) or the paste (`POST /api/clipboard/files` with `"batch"`), so no
+state waits on the server between the uploads and their use. The desktop's word on the drop (`DragEnded`)
+settles a drag's batch: taken, it is left as it is, moved out or copied from; refused, or a `cancel`
+naming the batch, its files go to the transfer folder (claimed with hard links, so nothing there is
+replaced; a copy through a `.part` file across filesystems), and the page hears once they are there.
+A paste's batch is the sweep's whether pasted or not. Nothing else removes: an hourly sweep removes
+batches older than a day; instances share the directory, batch names are random, and a batch already
+gone is no error to either. An application that opened a dropped file where it is (an editor) loses it
+then.
 Each upload writes its own `.part` file and claims the final name with a hard link, so two uploads of the
 same name can't collide. Listing and downloading work with the view-only token; uploads and
 deletions need the control token. There is no size limit beyond the disk.
@@ -202,7 +207,7 @@ read is pending), then releases the button once the target has accepted a mime a
 sending a motion every 100 ms so it looks again, or after 1.5 s regardless. The release happens on the
 next loop turn: the accept and action callbacks run inside the offer's request handler, which holds the
 lock the drop takes. The page is told whether the application took the files (`Notice`); a refused drop
-leaves them in the transfer folder. A blur, disconnect or handover mid-drag cancels it (`release_all`),
+sends them to the transfer folder. A blur, disconnect or handover mid-drag cancels it (`release_all`),
 and a drop whose upload outlived the grab is answered as not taken. X11 applications get no drop
 (Smithay's XWM does not speak XDND). A drag an application starts itself (a file out of Thunar) is
 Smithay's client drag (`ClientDndGrabHandler`): its icon surface is drawn at the pointer, offset by its
@@ -252,8 +257,8 @@ Files: a file manager's copy offers `text/uri-list` and `x-special/gnome-copied-
 with a `copy` first line) besides the paths as text; the compositor reads the URI list then, the page
 shows "N files copied" with a download button, and `GET /api/clipboard/files/{index}` streams the
 `index`th file of the list currently on the clipboard (only that list: the route can't read anything
-else). The other way, files pasted into the page are staged first (`PUT /api/drop/{name}`), then `POST
-/api/clipboard/files` with `"staged": true` makes them the desktop clipboard as a URI list offered under both mimes (the
+else). The other way, files pasted into the page are staged first (`PUT /api/drop/{batch}/{name}`), then
+`POST /api/clipboard/files` with that `"batch"` makes them the desktop clipboard as a URI list offered under both mimes (the
 gnome one rewritten the way file managers write it: `copy`, then one URI per line, LF only, no trailing
 newline; Nautilus refuses a CR or an empty line), and the paste chord follows through the API; Thunar
 and Nautilus paste them as copies.

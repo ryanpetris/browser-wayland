@@ -3,10 +3,11 @@
 //! that folder; a name in use gets " (2)" before its extension.
 //!
 //! Files an application on the desktop is to take, a drag's or a paste's, where the target folder is
-//! picked in Wayland, are staged instead: each batch in a directory of its own, randomly named, under
-//! the cache directory. A file manager moves or copies them from there; what is left is swept after a
-//! day (another instance may be sweeping too, so a batch already gone is no error), and a batch nobody
-//! took goes to the transfer folder, where the page says it is.
+//! picked in Wayland, are staged instead: each batch in a directory of its own under the cache directory,
+//! named by the page with a random id it carries through the uploads and the drop or paste. A file
+//! manager moves or copies them from there; what is left is swept after a day (another instance may be
+//! sweeping too, so a batch already gone is no error), and a drag's batch nobody took goes to the
+//! transfer folder, where the page says it is.
 
 use std::{
     path::{Path, PathBuf},
@@ -90,13 +91,16 @@ impl App {
 
     /// Write an upload into the transfer folder (see `store_into`).
     pub async fn store_file(&self, name: &str, body: Body) -> Result<String, ApiError> {
-        self.store_into(&self.files_dir.clone(), name, body).await
+        self.store_into(&self.files_dir, name, body).await
     }
 
-    /// Write an upload into the batch a drag or a paste is staging, opened for its first file.
-    pub async fn stage_file(&self, name: &str, body: Body) -> Result<String, ApiError> {
-        let dir = self.staging.lock().unwrap().get_or_insert_with(|| self.drops_dir.join(crate::random_hex(16))).clone();
-        self.store_into(&dir, name, body).await
+    /// Write an upload into the batch `batch`, a drag's or a paste's, for the application that will take it.
+    pub async fn stage_file(&self, batch: &str, name: &str, body: Body) -> Result<String, ApiError> {
+        self.store_into(&self.batch_dir(batch)?, name, body).await
+    }
+
+    fn batch_dir(&self, batch: &str) -> Result<PathBuf, ApiError> {
+        Ok(self.drops_dir.join(safe(batch)?))
     }
 
     /// Write an upload into `dir` under `name`, or the first `name (n)` that is free, through a `.part`
@@ -132,67 +136,51 @@ impl App {
         stream_file(&self.files_dir.join(safe(name)?)).await
     }
 
-    /// Files of the transfer folder, or of the batch a paste staged, as the desktop clipboard's URI list
-    /// (a file manager's copy); `404` when nothing is staged.
-    pub fn set_clipboard_files(&self, names: &[String], staged: bool) -> Result<(), ApiError> {
-        let dir = if staged { self.staging.lock().unwrap().take().ok_or(ApiError::NoSuchFile)? } else { self.files_dir.clone() };
+    /// Files of the transfer folder, or with `batch` of the batch a paste staged, as the desktop clipboard's
+    /// URI list (a file manager's copy).
+    pub fn set_clipboard_files(&self, names: &[String], batch: Option<&str>) -> Result<(), ApiError> {
+        let dir = match batch {
+            Some(b) => self.batch_dir(b)?,
+            None => self.files_dir.clone(),
+        };
         self.set_clipboard(crate::api::URI_LIST, uri_list(&dir, names)?.into())
     }
 
-    /// The browser's drag as a compositor command. A drop names the files of the batch it staged and
-    /// drops their URIs; the batch waits for the desktop's word (`drop_ended`). Nothing staged, or a name
-    /// that isn't a plain file name, cancels instead, so the desktop lets go; a cancel with files staged
-    /// (a drag whose upload half failed) sends them to the transfer folder.
+    /// The browser's drag as a compositor command. A drop names the files of its batch and drops their
+    /// URIs; the batch waits for the desktop's word (`dropped_batch`). A name that isn't a plain file name
+    /// cancels instead, so the desktop lets go; a cancel that names a batch (a drag whose upload half
+    /// failed) sends its files to the transfer folder.
     pub fn drag_command(&self, msg: crate::protocol::DragMsg) -> bw_core::Command {
         use crate::protocol::DragMsg;
         bw_core::Command::Drag(match msg {
             DragMsg::Start => bw_core::Drag::Start,
-            DragMsg::Drop { names } => match self.staging.lock().unwrap().take() {
-                Some(dir) => match uri_list(&dir, &names) {
-                    Ok(list) => {
-                        *self.dropped.lock().unwrap() = Some(dir);
-                        bw_core::Drag::Drop(list)
-                    }
-                    Err(_) => {
-                        self.rescue(dir);
-                        bw_core::Drag::Cancel
-                    }
-                },
-                None => bw_core::Drag::Cancel,
+            DragMsg::Drop { batch, names } => match self.batch_dir(&batch).and_then(|dir| Ok((uri_list(&dir, &names)?, dir))) {
+                Ok((list, dir)) => {
+                    *self.dropped.lock().unwrap() = Some(dir);
+                    bw_core::Drag::Drop(list)
+                }
+                Err(_) => bw_core::Drag::Cancel,
             },
-            DragMsg::Cancel => {
-                if let Some(dir) = self.staging.lock().unwrap().take() {
-                    self.rescue(dir);
+            DragMsg::Cancel { batch } => {
+                if let Some(dir) = batch.and_then(|b| self.batch_dir(&b).ok()) {
+                    let files_dir = self.files_dir.clone();
+                    tokio::task::spawn_blocking(move || rescue_files(&dir, &files_dir));
                 }
                 bw_core::Drag::Cancel
             }
         })
     }
 
-    /// The desktop's word on the drop: a refused batch goes to the transfer folder, where the page says it
-    /// is; a taken one, its files moved out or copied, is the sweep's.
-    pub fn drop_ended(&self, taken: bool) {
-        if let Some(dir) = self.dropped.lock().unwrap().take()
-            && !taken
-        {
-            self.rescue(dir);
-        }
+    /// The batch just dropped, for the desktop's word on it.
+    pub fn dropped_batch(&self) -> Option<PathBuf> {
+        self.dropped.lock().unwrap().take()
     }
 
-    /// Staged files nobody took go to the transfer folder, off the async threads (a copy when the cache
-    /// is on another filesystem); one that is gone already is no loss, and the directory is the sweep's.
-    fn rescue(&self, dir: PathBuf) {
+    /// Staged files nobody took go to the transfer folder, off the async threads; whether every one got
+    /// there. The directory stays for the sweep.
+    pub async fn rescue(&self, dir: PathBuf) -> bool {
         let files_dir = self.files_dir.clone();
-        tokio::task::spawn_blocking(move || {
-            let _ = std::fs::create_dir_all(&files_dir);
-            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let Some(free) = candidates(&name).map(|c| files_dir.join(c)).find(|p| !p.exists()) else { continue };
-                if std::fs::rename(entry.path(), &free).is_err() && std::fs::copy(entry.path(), &free).is_ok() {
-                    let _ = std::fs::remove_file(entry.path());
-                }
-            }
-        });
+        tokio::task::spawn_blocking(move || rescue_files(&dir, &files_dir)).await.unwrap_or(false)
     }
 
     /// The `index`th `file://` URI of the list on the desktop clipboard, streamed: its name, size and body.
@@ -211,6 +199,40 @@ impl App {
     pub async fn delete_file(&self, name: &str) -> Result<(), ApiError> {
         tokio::fs::remove_file(self.files_dir.join(safe(name)?)).await.map_err(|_| ApiError::NoSuchFile)
     }
+}
+
+/// Every file of `dir` into `files_dir` under the first free of its names, claimed with a hard link so
+/// nothing there is replaced; across filesystems the bytes go through a `.part` file of ours first.
+/// A source gone already (another rescue, a file manager) is no loss.
+fn rescue_files(dir: &Path, files_dir: &Path) -> bool {
+    let _ = std::fs::create_dir_all(files_dir);
+    let mut all = true;
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let claim = |from: &Path| {
+            candidates(&name).find_map(|c| match std::fs::hard_link(from, files_dir.join(c)) {
+                Ok(()) => Some(true),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(_) => Some(false),
+            })
+        };
+        let source = entry.path();
+        let ok = claim(&source) == Some(true) || {
+            let tmp = files_dir.join(format!(".rescue-{}-{}.part", std::process::id(), UPLOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+            let copied = std::fs::copy(&source, &tmp).is_ok() && claim(&tmp) == Some(true);
+            let _ = std::fs::remove_file(&tmp);
+            copied
+        };
+        if ok {
+            let _ = std::fs::remove_file(&source);
+        } else {
+            all = false;
+        }
+    }
+    all
 }
 
 /// A `text/uri-list` naming files of `dir`.
