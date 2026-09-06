@@ -78,7 +78,7 @@ pub const MIC: u8 = 0x93;
 pub const CAM: u8 = 0x94;
 /// `[RTC][JSON]`: WebRTC signalling, browser side: `{"offer": "<sdp>", "g": n}` to connect the video data
 /// channel (`g` numbers the attempt and comes back with the answer, so a late one is known for what it is),
-/// `{"close": true}` to go back to the socket. Desktop viewer sessions, each its own connection only.
+/// `{"close": true}` to go back to the socket. Any session (a window tab too), each its own connection only.
 pub const RTC_CLIENT: u8 = 0x95;
 
 /// What a session may do, as sent in `ROLE`.

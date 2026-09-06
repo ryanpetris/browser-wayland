@@ -7,6 +7,7 @@ export function openRtc({ iceServers, g, signal, onMessage, onOpen, onClose }) {
   const ch = pc.createDataChannel('video', { ordered: false, maxRetransmits: 0 });
   ch.binaryType = 'arraybuffer';
   const parts = new Map(); // frame id -> { got, chunks } while its fragments come in
+  let incomplete = 0; // frames given up on: a fragment never came
   ch.onmessage = e => {
     const dv = new DataView(e.data); // every message is a fragment, a whole frame a fragment of one
     const id = dv.getUint32(1, true), index = dv.getUint16(5, true), count = dv.getUint16(7, true);
@@ -14,7 +15,7 @@ export function openRtc({ iceServers, g, signal, onMessage, onOpen, onClose }) {
     if (!p) {
       p = { got: 0, chunks: new Array(count) };
       parts.set(id, p);
-      if (parts.size > 8) parts.delete(parts.keys().next().value); // a frame that lost a fragment is forgotten
+      if (parts.size > 8) { parts.delete(parts.keys().next().value); incomplete++; } // a frame that lost a fragment is forgotten
     }
     p.chunks[index] = new Uint8Array(e.data, 9);
     if (++p.got < count) return;
@@ -36,6 +37,14 @@ export function openRtc({ iceServers, g, signal, onMessage, onOpen, onClose }) {
   return {
     answer: sdp => pc.setRemoteDescription({ type: 'answer', sdp }).catch(e => console.warn('WebRTC answer:', e)),
     close: () => { closed = true; pc.close(); },
-    stats: () => pc.getStats(),
+    // the numbers the Statistics tab shows: the path's round trip, what the channel carried, frames lost to it
+    stats: async () => {
+      const out = { incomplete, rttMs: null, bytes: 0, messages: 0 };
+      (await pc.getStats()).forEach(r => {
+        if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.currentRoundTripTime !== undefined) out.rttMs = r.currentRoundTripTime * 1000;
+        if (r.type === 'data-channel') { out.bytes = r.bytesReceived; out.messages = r.messagesReceived; }
+      });
+      return out;
+    },
   };
 }

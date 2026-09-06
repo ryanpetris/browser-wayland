@@ -193,6 +193,7 @@ function StatsPanel({ viewer }) {
   const stream = useStore(viewer.store, st => st.stream);
   const renderer = useStore(viewer.store, st => st.renderer);
   const locked = useStore(viewer.store, st => st.locked);
+  const videoVia = useStore(viewer.store, st => st.videoVia);
   const t = s.timings;
   return (
     <div className="flex flex-col gap-4 p-3 text-xs">
@@ -227,6 +228,14 @@ function StatsPanel({ viewer }) {
         ) : <Row label="State" value="off" />}
       </Section>
       <Section title="Connection">
+        <Row label="Video via" value={videoVia === 'webrtc' ? 'WebRTC data channel' : 'WebSocket'} />
+        {s.rtc && (
+          <>
+            <Row label="Round trip" value={s.rtc.rttMs === null ? '–' : `${s.rtc.rttMs.toFixed(0)} ms`} />
+            <Row label="Channel received" value={`${s.rtc.messages} messages, ${(s.rtc.bytes / 1e6).toFixed(1)} MB`} />
+            <Row label="Frames incomplete" value={s.rtc.incomplete} warn={s.rtc.incomplete > 0} />
+          </>
+        )}
         <Row label="Connects / closes" value={`${s.connects} / ${s.closes.length}`} />
         {s.closes.length > 0 && <Row label="Last close" value={s.closes[s.closes.length - 1]} />}
         <Row label="Pointer lock" value={`${locked ? 'locked' : 'free'} (${s.lockRequests} requests${s.lockError ? ', ' + s.lockError : ''})`} />

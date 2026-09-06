@@ -340,6 +340,10 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     for msg in replay {
         let _ = socket.send(Message::Binary(msg)).await;
     }
+    let rtc_key = stream | 1 << 63; // the hub's sessions: desktop ids below, window streams above
+    if let Some(hub) = &app.rtc {
+        let _ = socket.send(Message::Binary(protocol::rtc(&serde_json::json!({ "ice_servers": *hub.ice_servers })))).await;
+    }
     let _ = app.commands.send(Command::WindowStream { key: stream, window: id, sink: Some(sink) });
 
     let (mut info, mut seq, mut failed) = (None::<bw_core::StreamInfo>, 0u16, false);
@@ -357,9 +361,12 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                 }
                 Some(StreamMsg::Frame(f)) => {
                     if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
-                        let backlog = rx.len();
+                        let backlog = rx.len() + app.rtc.as_ref().map_or(0, |hub| hub.take_dropped(rtc_key) as usize);
                         let t = Instant::now();
-                        if !send(&mut socket, protocol::video(&f, seq)).await { break None }
+                        match &app.rtc {
+                            Some(hub) if hub.is_open(rtc_key) => hub.frame(rtc_key, protocol::video(&f, seq)),
+                            _ => if !send(&mut socket, protocol::video(&f, seq)).await { break None },
+                        }
                         seq = seq.wrapping_add(1);
                         if let Some(q) = auto.frame(backlog, t.elapsed()) {
                             quality = q;
@@ -422,6 +429,14 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                             let _ = etx.try_send(state(codec, quality, preset, want_codec));
                             cmd
                         }
+                        Some(ClientMsg::Rtc(v)) => {
+                            match (&app.rtc, v.get("offer").and_then(|o| o.as_str())) {
+                                (Some(hub), Some(sdp)) => hub.offer(rtc_key, sdp.to_string(), v.get("g").cloned().unwrap_or_default(), etx.clone()).await,
+                                (Some(hub), None) => hub.close(rtc_key).await,
+                                (None, _) => {}
+                            }
+                            None
+                        }
                         Some(_) if key != Key::Control => None, // the viewer token watches
                         Some(ClientMsg::Control(m)) => app.command_for(m).ok(),
                         // window-relative, resolved against the live geometry on the compositor thread
@@ -465,6 +480,9 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
         }
     };
     app.window_viewers.lock().unwrap().remove(&stream);
+    if let Some(hub) = &app.rtc {
+        hub.close(rtc_key).await;
+    }
     let _ = app.commands.send(Command::WindowStream { key: stream, window: id, sink: None });
     if key == Key::Control {
         let _ = app.commands.send(Command::ReleaseAllInput);
