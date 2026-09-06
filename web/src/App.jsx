@@ -30,7 +30,10 @@ export function App({ viewer }) {
   const [elements, setElements] = usePref('elements', false);
   const [tab, setTab] = useState('windows');
   const [menu, setMenu] = useState(null); // One top-bar menu at a time.
-  const closeMenu = () => { setMenu(null); document.getElementById(`${menu}-toggle`)?.focus(); };
+  const closeMenu = event => {
+    setMenu(null);
+    if (event?.type === 'keydown' || event?.detail === 0) document.getElementById(`${menu}-toggle`)?.focus();
+  };
   const [fullscreen, setFullscreen] = useState(false); // the chrome is gone then, so nothing is collected for it
   const windowMode = !!WINDOW;
   useEffect(() => {

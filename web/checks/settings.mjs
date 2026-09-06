@@ -109,7 +109,6 @@ try {
   await search.press('Enter');
   await search.waitFor({ state: 'detached' });
   assert.equal(await search.count(), 0);
-  assert(await apps.evaluate(el => el === document.activeElement));
   assert(await page.evaluate(() => controlRequests.some(p => p.op === 'launch' && p.app === 'local-test.desktop')), 'search Enter launches the selected application');
   await page.getByRole('button', { name: 'Quit browser-wayland', exact: true }).click();
   await page.getByRole('button', { name: 'Quit browser-wayland', exact: true }).last().click();
@@ -120,6 +119,41 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Cancel', exact: true }).count(), 0);
   await page.keyboard.press('Escape');
 
+  await apps.click();
+  await page.mouse.click(5, 500);
+  await page.evaluate(() => { window.sent = []; });
+  await page.keyboard.press('a');
+  assert.equal(await page.evaluate(() => sent.filter(p => p[0] === 0x87).length), 2, 'outside dismissal restores desktop typing');
+  await apps.click();
+  await search.fill('Local Test');
+  await page.evaluate(() => { window.sent = []; });
+  await search.press('Enter');
+  await search.waitFor({ state: 'detached' });
+  assert.equal(await page.evaluate(() => sent.filter(p => p[0] === 0x87).length), 0, 'launch Enter remains local through keyup');
+  await page.keyboard.press('a');
+  assert.equal(await page.evaluate(() => sent.filter(p => p[0] === 0x87).length), 2, 'typing after launch reaches desktop');
+  for (const key of ['Enter', 'Space']) {
+    await apps.click();
+    await page.evaluate(() => { window.sent = []; window.controlRequests = []; });
+    await page.getByRole('button', { name: 'Local Test', exact: true }).press(key);
+    await search.waitFor({ state: 'detached' });
+    assert.equal(await page.evaluate(() => controlRequests.filter(p => p.op === 'launch').length), 1, `result ${key} launches once`);
+    assert.equal(await page.evaluate(() => sent.filter(p => p[0] === 0x87).length), 0, `result ${key} stays local`);
+    await page.keyboard.press('a');
+    assert.equal(await page.evaluate(() => sent.filter(p => p[0] === 0x87).length), 2, 'typing after result activation reaches desktop');
+  }
+  const power = page.locator('#power-toggle');
+  for (const action of ['Cancel', 'Quit']) {
+    await power.click();
+    await page.getByRole('button', { name: 'Quit browser-wayland', exact: true }).last().click();
+    await page.evaluate(() => { window.sent = []; });
+    const button = page.getByRole('button', { name: action, exact: true });
+    await button.press('Enter');
+    await button.waitFor({ state: 'detached' });
+    assert(await power.evaluate(el => el === document.activeElement));
+    assert.equal(await page.evaluate(() => sent.filter(p => p[0] === 0x87).length), 0, `${action} Enter stays local`);
+  }
+  assert.equal(await page.evaluate(() => controlRequests.filter(p => p.op === 'quit').length), 1);
   await page.reload(); await ready(); await trigger.click();
   assert(await borders.isChecked() && await elements.isChecked());
   await elements.uncheck();

@@ -12,12 +12,12 @@ const CATEGORIES = [
 const groupOf = app => CATEGORIES.find(([c]) => app.categories.includes(c))?.[1] ?? 'Other';
 
 /// A popover under the top bar; a click outside or Escape closes it.
-export function Popover({ onClose, onEscape = onClose, className = '', children, ...props }) {
+export function Popover({ onClose, className = '', children, ...props }) {
   useEffect(() => {
-    const key = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onEscape(); } };
+    const key = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(e); } };
     document.addEventListener('keydown', key, true);
     return () => document.removeEventListener('keydown', key, true);
-  }, [onEscape]);
+  }, [onClose]);
   return (
     <>
       <div className="absolute inset-x-0 top-11 bottom-0 z-20" onClick={onClose} />
@@ -43,7 +43,8 @@ export function Launcher({ viewer, onClose }) {
           value={q}
           onChange={e => setQ(e.target.value)}
           onFocus={viewer.releaseInput}
-          onKeyDown={e => { if (e.key === 'Enter' && needle && shown[0]) { e.preventDefault(); launch(shown[0]); } }}
+          onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+          onKeyUp={e => { if (e.key === 'Enter' && needle && shown[0]) launch(shown[0]); }}
           placeholder="Search applications…"
           spellCheck={false}
           autoComplete="off"
@@ -57,7 +58,9 @@ export function Launcher({ viewer, onClose }) {
           <section key={label} className="mb-2">
             <h3 className="px-2 pt-1 pb-0.5 text-[10px] font-semibold tracking-wider text-zinc-500 uppercase">{label}</h3>
             {list.map(app => (
-              <button key={app.id} type="button" onClick={() => launch(app)} title={app.comment} className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800">
+              <button key={app.id} type="button" onClick={() => launch(app)}
+                onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+                onKeyUp={e => { if (e.key === 'Enter') launch(app); }} title={app.comment} className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left hover:bg-zinc-800">
                 <AppIcon id={app.id} />
                 <span className="min-w-0">
                   <span className="block truncate text-sm text-zinc-100">{app.name}</span>
@@ -95,7 +98,7 @@ export function PowerMenu({ viewer, onClose }) {
           <p className="mb-3 text-sm text-zinc-300">Quit browser-wayland? Every window closes with it, and the desktop is gone until it is started again.</p>
           <div className="flex justify-end gap-2">
             <button ref={ref} type="button" onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800">Cancel</button>
-            <button type="button" onClick={() => { viewer.quit(); onClose(); }} className="rounded-md bg-rose-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-400">Quit</button>
+            <button type="button" onClick={event => { viewer.quit(); onClose(event); }} className="rounded-md bg-rose-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-400">Quit</button>
           </div>
         </>
       ) : (
