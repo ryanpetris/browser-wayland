@@ -228,6 +228,8 @@ pub struct State {
     pub drag_action: DndAction,
     pub drag_dropping: Option<Instant>,
     pub drag_taken: bool,
+    /// The app id of the window that took the drop, for the page's word on it.
+    pub drag_target: Option<String>,
     /// The batch the dropped files are staged in, for `DragEnded`.
     pub drag_batch: String,
     /// A client's drag icon and its offset from the pointer, drawn there while the drag lasts. (A drag a
@@ -330,6 +332,7 @@ impl State {
             drag_action: DndAction::empty(),
             drag_dropping: None,
             drag_taken: false,
+            drag_target: None,
             drag_batch: String::new(),
             dnd_icon: None,
             dirty: true,

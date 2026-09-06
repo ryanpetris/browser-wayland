@@ -1,7 +1,7 @@
 // The display: the video canvas, sized by its container (the desktop's output takes that size), with
 // the overlays and status banners on top. Fullscreen is requested on this element, so the chrome goes away.
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, MonitorX, TriangleAlert } from 'lucide-react';
+import { CheckCircle2, Loader2, MonitorX, TriangleAlert } from 'lucide-react';
 import { useStore } from '../store.js';
 import { hue, windowColor } from './ui.jsx';
 import { Notifications } from './Notifications.jsx';
@@ -74,9 +74,10 @@ function Overlay({ viewer, size, borders, elements }) {
 function Notice({ viewer }) {
   const notice = useStore(viewer.store, s => s.notice);
   if (!notice) return null;
+  const good = notice.kind === 'success';
   return (
-    <div className="pointer-events-none absolute bottom-3 left-1/2 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-500/40 bg-zinc-900/95 px-3 py-2 text-xs text-amber-100 shadow-lg">
-      <TriangleAlert className="size-4 shrink-0 text-amber-400" /> {notice}
+    <div className={`pointer-events-none absolute bottom-3 left-1/2 flex max-w-[90%] -translate-x-1/2 items-center gap-2 rounded-lg border bg-zinc-900/95 px-3 py-2 text-xs shadow-lg ${good ? 'border-emerald-500/40 text-emerald-100' : 'border-amber-500/40 text-amber-100'}`}>
+      {good ? <CheckCircle2 className="size-4 shrink-0 text-emerald-400" /> : <TriangleAlert className="size-4 shrink-0 text-amber-400" />} {notice.text}
     </div>
   );
 }

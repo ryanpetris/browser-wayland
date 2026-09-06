@@ -720,10 +720,18 @@ impl ServerDndGrabHandler for State {
     }
     fn dropped(&mut self, _seat: Seat<Self>) {
         self.drag_taken = true;
+        self.drag_target = self.surface_under(self.pointer_location).and_then(|(s, _)| {
+            let mut root = s;
+            while let Some(parent) = get_parent(&root) {
+                root = parent;
+            }
+            self.window_for(&root).map(|w| Self::title_app_id(&w).1)
+        });
     }
     /// Follows `dropped` when nothing under the pointer took it.
     fn cancelled(&mut self, _seat: Seat<Self>) {
         self.drag_taken = false;
+        self.drag_target = None;
     }
 }
 

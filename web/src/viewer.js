@@ -25,7 +25,7 @@ export function createViewer() {
     windowTitle: '', // window mode: the streamed window's title
     clipboardText: '',
     clipboardFiles: [], // names of the files a desktop application copied (downloadable by index)
-    notice: '', // what the server just told us about our last action, shown for a few seconds
+    notice: null, // { text, kind: 'warning' | 'success' }: a word about our last action, shown for a few seconds
     notifications: [], // open desktop notifications, oldest first
     upload: null, // { name, index, count } while files dropped on the page go up
     streamState: null, // { codec, auto_codec, bitrate_kbps, max_fps } from the server
@@ -331,7 +331,7 @@ export function createViewer() {
         onClipboard(new TextDecoder().decode(new Uint8Array(buf, 1)));
         break;
       case NOTICE:
-        notice(new TextDecoder().decode(new Uint8Array(buf, 1)));
+        notice(new TextDecoder().decode(new Uint8Array(buf, 2)), dv.getUint8(1) ? 'success' : 'warning');
         break;
       case ROLE: {
         const role = ROLES[dv.getUint8(1)] ?? 'viewer';
@@ -410,11 +410,11 @@ export function createViewer() {
     }
   }, 1000);
 
-  /// A line over the stage for a few seconds.
-  function notice(text) {
-    store.set({ notice: text });
+  /// A line over the stage for a few seconds: a warning, or good news.
+  function notice(text, kind = 'warning') {
+    store.set({ notice: { text, kind } });
     clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
+    noticeTimer = setTimeout(() => store.set({ notice: null }), 6000);
   }
 
   // --- pointer lock -----------------------------------------------------------------

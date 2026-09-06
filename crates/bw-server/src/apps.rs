@@ -127,6 +127,12 @@ fn entry(id: &str) -> Option<Entry> {
 }
 
 /// The command line that starts an application.
+/// A window's application by its app id, for a message: the launcher's name when a desktop file has
+/// that id (`thunar` → "Thunar File Manager", `org.gnome.Nautilus` → "Files"), else the id's last part.
+pub fn display_name(app_id: &str) -> String {
+    list().into_iter().find(|a| a.id == app_id).map(|a| a.name).unwrap_or_else(|| app_id.rsplit('.').next().unwrap_or(app_id).to_string())
+}
+
 pub fn exec(id: &str) -> Option<String> {
     entry(id).map(|e| e.exec)
 }

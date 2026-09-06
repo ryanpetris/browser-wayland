@@ -257,8 +257,9 @@ pub enum Event {
     /// A desktop application put text (a `text/*` mime) or a PNG on the clipboard.
     Clipboard { mime: String, data: Bytes },
     /// A drag from the browser was dropped: the application under the pointer took it, or nobody did.
-    /// The browser's drag ended: whether an application took the files, and the batch they were staged in.
-    DragEnded { taken: bool, batch: String },
+    /// The browser's drag ended: whether an application took the files (and which, by app id), and the
+    /// batch they were staged in.
+    DragEnded { taken: bool, target: Option<String>, batch: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

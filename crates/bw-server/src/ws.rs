@@ -10,7 +10,7 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use bw_core::{AxisSource, Bytes, Codec, Command, ControlMsg, ControlOp, Event, InputMsg, OutputGeometry, StreamMsg, TouchKind};
 use tokio::sync::mpsc;
 
-use crate::{App, Key, ViewerSession, Viewers, api, protocol::{self, ClientMsg, Preset, Role}};
+use crate::{apps, App, Key, ViewerSession, Viewers, api, protocol::{self, ClientMsg, Preset, Role}};
 
 /// Close codes the page understands.
 const UNAUTHORIZED: u16 = 4001;
@@ -67,19 +67,19 @@ pub async fn forward_events(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<Event
                 v.clipboard = Some((mime, data));
                 msg
             }
-            Event::DragEnded { taken, batch } => {
+            Event::DragEnded { taken, target, batch } => {
                 // files nobody took go to the transfer folder; then the controller, if still here, hears how it went
                 let events = v.controller.and_then(|c| v.sessions.get(&c)).map(|s| s.events.clone());
                 let app = app.clone();
                 tokio::spawn(async move {
                     let saved = taken || app.rescue(&batch).await.unwrap_or(false);
-                    let text = match (taken, saved) {
-                        (true, _) => "the application took the files",
-                        (false, true) => "no application took the files; they are in the desktop's transfer folder",
-                        (false, false) => "no application took the files, and they could not be saved to the transfer folder",
+                    let word = match (taken, saved) {
+                        (true, _) => protocol::success(&format!("Delivered to {}", target.map_or("the desktop".to_string(), |id| apps::display_name(&id)))),
+                        (false, true) => protocol::notice("no application took the files; they are in the desktop's transfer folder"),
+                        (false, false) => protocol::notice("no application took the files, and they could not be saved to the transfer folder"),
                     };
                     if let Some(events) = events {
-                        let _ = events.try_send(protocol::notice(text));
+                        let _ = events.try_send(word);
                     }
                 });
                 continue;

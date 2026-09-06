@@ -145,9 +145,20 @@ pub fn rtc(v: &serde_json::Value) -> Bytes {
     b.into()
 }
 
+/// A warning: something didn't happen, or happened instead.
 pub fn notice(text: &str) -> Bytes {
-    let mut b = Vec::with_capacity(1 + text.len());
+    notice_kind(0, text)
+}
+
+/// Good news, shown as such.
+pub fn success(text: &str) -> Bytes {
+    notice_kind(1, text)
+}
+
+fn notice_kind(kind: u8, text: &str) -> Bytes {
+    let mut b = Vec::with_capacity(2 + text.len());
     b.push(NOTICE);
+    b.push(kind);
     b.extend_from_slice(text.as_bytes());
     b.into()
 }

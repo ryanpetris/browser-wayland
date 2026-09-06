@@ -191,7 +191,7 @@ impl State {
             }
             Drag::Drop { batch, .. } if !self.drag_active => {
                 // the grab ended while the files were uploading (the viewer blurred or lost control)
-                let _ = self.events.send(Event::DragEnded { taken: false, batch });
+                let _ = self.events.send(Event::DragEnded { taken: false, target: None, batch });
             }
             Drag::Drop { list, batch } => {
                 self.drag_data = Some(Arc::new(list));
@@ -246,7 +246,7 @@ impl State {
         pointer.frame(self);
         self.pressed_buttons.remove(&crate::input::BTN_LEFT);
         if ended {
-            let _ = self.events.send(Event::DragEnded { taken: self.drag_taken, batch: std::mem::take(&mut self.drag_batch) });
+            let _ = self.events.send(Event::DragEnded { taken: self.drag_taken, target: self.drag_target.take(), batch: std::mem::take(&mut self.drag_batch) });
         }
     }
 
