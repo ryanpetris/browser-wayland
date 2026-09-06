@@ -156,7 +156,9 @@ impl State {
 
     /// The browser drags local files over the desktop. `Start` presses the left button over nothing (so no
     /// client sees a press it never gets the release of) and starts a compositor-owned drag offering
-    /// `text/uri-list` from there; the browser's pointer motion moves it, and the application under it is
+    /// `text/uri-list` from there, to copy or to move (a file manager moves, so the file leaves the transfer
+    /// folder for the folder shown, and a drop on that folder itself changes nothing; an application that
+    /// only copies keeps it there); the browser's pointer motion moves it, and the application under it is
     /// told what is coming. `Drop` supplies the list, which the files were uploaded for after the user let
     /// go, so the target only now learns what it is being given: it is left and entered again with a fresh
     /// offer (Thunar reads the list during the drag to decide, once per offer, and refuses without it;
@@ -180,7 +182,7 @@ impl State {
                 pointer.frame(self);
                 self.pressed_buttons.insert(crate::input::BTN_LEFT);
                 let start = GrabStartData { focus: None, button: crate::input::BTN_LEFT, location };
-                let source = SourceMetadata { mime_types: vec![URI_LIST.into()], dnd_action: DndAction::Copy };
+                let source = SourceMetadata { mime_types: vec![URI_LIST.into()], dnd_action: DndAction::Copy | DndAction::Move };
                 let (dh, seat) = (self.dh.clone(), self.seat.clone());
                 start_dnd(&dh, &seat, self, serial, Some(start), None, source);
                 self.pointer_motion(location); // enter the application under the pointer
