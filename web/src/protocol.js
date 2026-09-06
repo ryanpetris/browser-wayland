@@ -4,9 +4,10 @@ export const AUTH = 0x80, HELLO = 0x81, RESIZE = 0x82, MOTION_ABS = 0x83, MOTION
   REQUEST_KEYFRAME = 0x88, BLUR = 0x89, POINTER_LOCK_LOST = 0x8A, CONTROL = 0x8B, SET_CLIPBOARD = 0x8C, TAKE_CONTROL = 0x8D, NOTIFY = 0x8E, STREAM = 0x8F, DRAG = 0x90, INPUT = 0x91, TOUCH = 0x92, MIC = 0x93, CAM = 0x94, RTC_CLIENT = 0x95, REPORT = 0x96, MIXER_CLIENT = 0x97;
 // ROLE payload: what this session may do, then what the desktop takes: bit 0 the microphone, bit 1 the webcam, bit 2 session playback available
 export const ROLES = ['viewer', 'participant', 'controller'];
-// codec families in Hello bit / id order (id = index + 1; 0 is Auto), and the quality presets (id = index)
+// codec families in Hello bit / id order (id = index + 1; 0 is Auto), and explicit quality IDs
 export const CODEC_FAMILIES = ['h264', 'hevc', 'vp9', 'av1', 'vp8'];
-export const PRESETS = ['auto', 'low', 'medium', 'high', 'max'];
+export const PRESETS = ['very-low', 'low', 'medium', 'high', 'max'];
+export const PRESET_IDS = { 'very-low': 1, low: 2, medium: 3, high: 4, max: 5 };
 // how the video travels; the socket carries it unless a viewer picks the WebRTC data channel
 export const TRANSPORTS = ['websocket', 'webrtc'];
 // PointerEvent.button -> BTN_LEFT, MIDDLE, RIGHT, SIDE, EXTRA

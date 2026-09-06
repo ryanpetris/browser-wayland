@@ -191,7 +191,9 @@ H.264, VP9, HEVC, AV1). `--codec` wins when both sides can, else the first the b
 hardware, else any it decodes; a browser with none in common is closed. The AV1 and VP9 codec strings carry a level chosen from the picture size, not read
 from the stream. A resize, size or codec change tears the pipeline down and rebuilds it with a new
 stream id; the page resets its decoder when it sees a new id. Each session also has a quality: a preset's
-bitrate (Auto's is `--bitrate`), the ceiling a rate controller works under. Per second of frames it halves
+bitrate, the ceiling a rate controller works under. Very Low, Low, Medium, High and Max use 2, 5,
+`--bitrate` (8 by default), 12 and 25 Mbit/s. Max is the default. StreamState carries the selected
+preset, its ceiling, the configured Medium ceiling, and the current encoder target separately. Per second of frames it halves
 the bitrate when more than a third of the frames found the transport behind (a backlog in the encoder's
 channel or the data channel's queue, a channel drop, or a send over two frame times), when a ping's
 answer came back 200 ms later than the quickest (it queues behind the video the kernel still holds), or

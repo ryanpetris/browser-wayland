@@ -188,7 +188,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
         }
         let id = v.next_id;
         v.next_id += 1;
-        v.sessions.insert(id, ViewerSession { key, events: etx.clone(), audio: atx, audio_seq: 0, size: None, control, hw, sw, want_codec, codec, quality, cam_wait_key: false, mixer_subscribed: false });
+        v.sessions.insert(id, ViewerSession { key, events: etx.clone(), audio: atx, audio_seq: 0, size: None, control, hw, sw, want_codec, codec, quality, preset, cam_wait_key: false, mixer_subscribed: false });
         if key == Key::Control && v.controller.is_none() {
             v.controller = Some(id);
             v.control_epoch = v.control_epoch.wrapping_add(1);
@@ -353,7 +353,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     if !app.viewers.lock().unwrap().window_list.iter().any(|w| w.id == id) {
         return close(&mut socket, GONE, "no such window").await;
     }
-    let Some((hw, sw, mut want_codec, preset)) = hello(&mut socket).await else { return };
+    let Some((hw, sw, mut want_codec, mut preset)) = hello(&mut socket).await else { return };
     let (tx, mut rx) = mpsc::channel::<StreamMsg>(16);
     let (sink, control) = match (app.sinks)(tx) {
         Ok(x) => x,
@@ -367,7 +367,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
     let mut quality = preset.quality(app.bitrate_kbps);
     control.set_quality(quality);
     let mut auto = AutoRate::new(quality.bitrate_kbps);
-    let state = |codec, quality, want: Option<Codec>| protocol::stream_state(codec, want.is_none(), quality);
+    let state = |codec, quality, want: Option<Codec>, preset| protocol::stream_state(codec, want.is_none(), quality, preset, app.bitrate_kbps);
     static KEY: AtomicU64 = AtomicU64::new(1);
     let stream = KEY.fetch_add(1, Ordering::Relaxed);
     let (etx, mut erx) = mpsc::channel::<Bytes>(32);
@@ -404,7 +404,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                     seq = 0;
                     if !send(&mut socket, protocol::config(&i)).await { break None }
                     info = Some(i);
-                    if !send(&mut socket, state(codec, quality, want_codec)).await { break None }
+                    if !send(&mut socket, state(codec, quality, want_codec, preset)).await { break None }
                 }
                 Some(StreamMsg::Frame(f)) => {
                     if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
@@ -419,7 +419,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                         if let Some(q) = auto.frame(backlog + queued, dropped, t.elapsed()) {
                             quality = q;
                             control.set_quality(q);
-                            if !send(&mut socket, state(codec, quality, want_codec)).await { break None }
+                            if !send(&mut socket, state(codec, quality, want_codec, preset)).await { break None }
                         }
                     }
                 }
@@ -469,11 +469,12 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                                 }
                             }
                             if let Some(p) = choice.quality.as_deref().and_then(Preset::named) {
+                                preset = p;
                                 quality = p.quality(app.bitrate_kbps);
                                 auto = AutoRate::new(quality.bitrate_kbps);
                                 control.set_quality(quality);
                             }
-                            let _ = etx.try_send(state(codec, quality, want_codec));
+                            let _ = etx.try_send(state(codec, quality, want_codec, preset));
                             cmd
                         }
                         Some(ClientMsg::Rtc(v)) => {
@@ -516,7 +517,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                     if let Some(q) = rtt_of(&p, started).and_then(|rtt| auto.rtt(rtt)) {
                         quality = q;
                         control.set_quality(q);
-                        if !send(&mut socket, state(codec, quality, want_codec)).await { break None }
+                        if !send(&mut socket, state(codec, quality, want_codec, preset)).await { break None }
                     }
                 }
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break None,
@@ -618,6 +619,7 @@ impl App {
         }
         let preset = choice.quality.as_deref().and_then(Preset::named);
         if let Some(p) = preset {
+            s.preset = p;
             s.quality = p.quality(self.bitrate_kbps);
             s.control.set_quality(s.quality);
         }
@@ -628,7 +630,7 @@ impl App {
     fn stream_state(&self, id: u64) -> Option<Bytes> {
         let v = self.viewers.lock().unwrap();
         let s = v.sessions.get(&id)?;
-        Some(protocol::stream_state(s.codec, s.want_codec.is_none(), s.quality))
+        Some(protocol::stream_state(s.codec, s.want_codec.is_none(), s.quality, s.preset, self.bitrate_kbps))
     }
 
     /// Pick the codec for a browser whose `hw` mask passed the prefer-hardware probe and `sw` the plain one
@@ -835,7 +837,7 @@ struct AutoRate {
 
 impl AutoRate {
     fn new(ceiling: u32) -> AutoRate {
-        AutoRate { ceiling, quality: Preset::Auto.quality(ceiling), frames: 0, congested: 0, slow: 0, best_rtt: Duration::MAX, clean_secs: 0, hold: 0, window: Instant::now() }
+        AutoRate { ceiling, quality: bw_core::Quality { bitrate_kbps: ceiling, max_fps: if ceiling < 3000 { 30 } else { 0 } }, frames: 0, congested: 0, slow: 0, best_rtt: Duration::MAX, clean_secs: 0, hold: 0, window: Instant::now() }
     }
 
     /// One frame went out; `backlog` frames were waiting behind it and the send took `took`.
@@ -883,7 +885,7 @@ impl AutoRate {
         } else if frames > 0 {
             self.clean_secs += 1;
             if self.clean_secs >= 5 && q.bitrate_kbps < self.ceiling {
-                q.bitrate_kbps = (q.bitrate_kbps * 5 / 4).min(self.ceiling);
+                q.bitrate_kbps = (u64::from(q.bitrate_kbps) * 5 / 4).min(u64::from(self.ceiling)) as u32;
                 self.clean_secs = 0;
             }
         }
@@ -923,6 +925,27 @@ mod tests {
             changed = a.frame(if i < bad { 2 } else { 0 }, 0, Duration::ZERO).or(changed);
         }
         changed
+    }
+
+    #[test]
+    fn every_quality_recovers_to_its_ceiling() {
+        for medium in [500, 2500, 3000, 8000, 40000, u32::MAX] {
+            for (preset, _) in Preset::NAMES {
+                let ceiling = preset.quality(medium);
+                let mut rate = AutoRate::new(ceiling.bitrate_kbps);
+                assert_eq!(rate.quality, ceiling);
+                for _ in 0..100 {
+                    second(&mut rate, 1, 1);
+                }
+                assert_eq!(rate.quality.bitrate_kbps, 1000.min(ceiling.bitrate_kbps));
+                for _ in 0..600 {
+                    second(&mut rate, 1, 0);
+                    assert!(rate.quality.bitrate_kbps <= ceiling.bitrate_kbps);
+                    assert_eq!(rate.quality.max_fps, if rate.quality.bitrate_kbps < 3000 { 30 } else { 0 });
+                }
+                assert_eq!(rate.quality, ceiling);
+            }
+        }
     }
 
     #[test]

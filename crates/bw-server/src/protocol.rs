@@ -24,7 +24,7 @@ pub const NOTICE: u8 = 0x09;
 pub const CLIPBOARD_DATA: u8 = 0x0A;
 /// The open desktop notifications, as a JSON array of `Notification`, whenever they change (and in the replay).
 pub const NOTIFICATIONS: u8 = 0x0B;
-/// JSON `{"codec","auto_codec","bitrate_kbps","max_fps"}`: what this session's encoder does right now;
+/// JSON `{"codec","auto_codec","preset","ceiling_kbps","medium_kbps","bitrate_kbps","max_fps"}`: what this session's encoder does right now;
 /// after every `Config` and whenever the rate controller steps the quality.
 pub const STREAM_STATE: u8 = 0x0C;
 /// `[RTC][JSON]`: WebRTC signalling, server side: `{"ice_servers": [...]}` once the session is up (the
@@ -61,7 +61,7 @@ pub const SET_CLIPBOARD: u8 = 0x8C;
 pub const TAKE_CONTROL: u8 = 0x8D;
 /// JSON `{"id":N,"action":"key"}`: the viewer clicked a notification (`default`) or one of its actions; without `action` it dismissed it. Control token only.
 pub const NOTIFY: u8 = 0x8E;
-/// JSON `{"codec": "auto" | name, "quality": "auto" | "low" | "medium" | "high" | "max"}`, either field
+/// JSON `{"codec": "auto" | name, "quality": "very-low" | "low" | "medium" | "high" | "max"}`, either field
 /// optional: this session's choice, applied live. Any session.
 pub const STREAM: u8 = 0x8F;
 /// `[DRAG][JSON]`: the browser drags local files over the desktop: `{"op": "start"}` where the pointer is,
@@ -208,43 +208,58 @@ pub fn codec_named(name: &str) -> Option<Codec> {
     CODECS.iter().find(|(_, n)| *n == name).map(|(c, _)| *c)
 }
 
-/// A viewer's quality choice: the ceiling its bitrate adapts under (`--bitrate` for Auto).
+/// A viewer's adaptive bitrate ceiling (`--bitrate` configures Medium).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u8)]
 pub enum Preset {
+    VeryLow = 1,
+    Low = 2,
+    Medium = 3,
+    High = 4,
     #[default]
-    Auto,
-    Low,
-    Medium,
-    High,
-    Max,
+    Max = 5,
 }
 
 impl Preset {
-    pub const NAMES: [(Preset, &'static str); 5] = [(Preset::Auto, "auto"), (Preset::Low, "low"), (Preset::Medium, "medium"), (Preset::High, "high"), (Preset::Max, "max")];
+    pub const NAMES: [(Preset, &'static str); 5] = [(Preset::VeryLow, "very-low"), (Preset::Low, "low"), (Preset::Medium, "medium"), (Preset::High, "high"), (Preset::Max, "max")];
 
     pub fn named(name: &str) -> Option<Preset> {
         Self::NAMES.iter().find(|(_, n)| *n == name).map(|(p, _)| *p)
     }
 
-    fn from_id(id: u8) -> Preset {
-        Self::NAMES.get(id as usize).map_or(Preset::Auto, |(p, _)| *p)
+    pub fn name(self) -> &'static str {
+        Self::NAMES.iter().find(|(p, _)| *p == self).unwrap().1
     }
 
-    /// The preset's ceiling, where its stream starts; under 3 Mbit/s the frame rate is capped at 30.
-    pub fn quality(self, ceiling_kbps: u32) -> Quality {
-        match self {
-            Preset::Auto => Quality { bitrate_kbps: ceiling_kbps, max_fps: if ceiling_kbps < 3000 { 30 } else { 0 } },
-            Preset::Low => Quality { bitrate_kbps: 2000, max_fps: 30 },
-            Preset::Medium => Quality { bitrate_kbps: 5000, max_fps: 0 },
-            Preset::High => Quality { bitrate_kbps: 12000, max_fps: 0 },
-            Preset::Max => Quality { bitrate_kbps: 25000, max_fps: 0 },
+    fn from_id(id: u8) -> Preset {
+        match id {
+            1 => Preset::VeryLow,
+            2 => Preset::Low,
+            3 => Preset::Medium,
+            4 => Preset::High,
+            5 => Preset::Max,
+            _ => Preset::default(),
         }
+    }
+
+    /// The stream starts at this ceiling; under 3 Mbit/s its frame rate is capped at 30.
+    pub fn quality(self, medium_kbps: u32) -> Quality {
+        let bitrate_kbps = match self {
+            Preset::VeryLow => 2000,
+            Preset::Low => 5000,
+            Preset::Medium => medium_kbps,
+            Preset::High => 12000,
+            Preset::Max => 25000,
+        };
+        Quality { bitrate_kbps, max_fps: if bitrate_kbps < 3000 { 30 } else { 0 } }
     }
 }
 
-/// What a session's encoder does, for the page's quality labels.
-pub fn stream_state(codec: Codec, auto_codec: bool, quality: Quality) -> Bytes {
-    let json = serde_json::json!({ "codec": codec_name(codec), "auto_codec": auto_codec, "bitrate_kbps": quality.bitrate_kbps, "max_fps": quality.max_fps });
+/// The selected ceiling and current encoder target, separate from measured throughput.
+pub fn stream_state(codec: Codec, auto_codec: bool, quality: Quality, preset: Preset, medium_kbps: u32) -> Bytes {
+    let json = serde_json::json!({ "codec": codec_name(codec), "auto_codec": auto_codec,
+        "preset": preset.name(), "ceiling_kbps": preset.quality(medium_kbps).bitrate_kbps, "medium_kbps": medium_kbps,
+        "bitrate_kbps": quality.bitrate_kbps, "max_fps": quality.max_fps });
     let mut b = vec![STREAM_STATE];
     b.extend_from_slice(json.to_string().as_bytes());
     b.into()
@@ -282,7 +297,7 @@ pub fn audio(pts_us: u64, data: &[u8], seq: u16) -> Bytes {
 
 #[derive(Debug, PartialEq)]
 pub enum ClientMsg {
-    /// The browser's decoders and, from newer pages, its codec and quality choice.
+    /// The browser's decoders and optional codec and quality choices.
     Hello { hw: u8, sw: u8, codec: Option<Codec>, quality: Preset },
     Resize { css_w: u16, css_h: u16, dpr: f32 },
     MotionAbs { x: f32, y: f32 },
@@ -319,7 +334,7 @@ pub enum DragMsg {
     Cancel { batch: Option<String> },
 }
 
-/// `{"codec": "auto" | "h264" | …, "quality": "auto" | "low" | …}`, either optional (unchanged).
+/// `{"codec": "auto" | "h264" | …, "quality": "very-low" | "low" | …}`, either optional (unchanged).
 #[derive(Debug, PartialEq, Default, serde::Deserialize)]
 pub struct StreamChoice {
     pub codec: Option<String>,
@@ -344,7 +359,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
             hw: u8_at(1)?,
             sw: u8_at(2)?,
             codec: u8_at(3).and_then(|id| CODECS.get(id.checked_sub(1)? as usize)).map(|(c, _)| *c),
-            quality: u8_at(4).map_or(Preset::Auto, Preset::from_id),
+            quality: u8_at(4).map_or(Preset::default(), Preset::from_id),
         },
         RESIZE => ClientMsg::Resize { css_w: u16_at(1)?, css_h: u16_at(3)?, dpr: f32_at(5)? },
         MOTION_ABS => ClientMsg::MotionAbs { x: f32_at(1)?, y: f32_at(5)? },
@@ -375,6 +390,35 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quality_levels_and_handshake_defaults() {
+        for (id, name, preset, kbps) in [(1, "very-low", Preset::VeryLow, 2000), (2, "low", Preset::Low, 5000),
+            (3, "medium", Preset::Medium, 8000), (4, "high", Preset::High, 12000), (5, "max", Preset::Max, 25000)] {
+            assert_eq!(Preset::named(name), Some(preset));
+            assert_eq!(preset.name(), name);
+            assert_eq!(preset as u8, id);
+            assert_eq!(preset.quality(8000).bitrate_kbps, kbps);
+            assert_eq!(decode(&[HELLO, 0, 16, 5, id]), Some(ClientMsg::Hello { hw: 0, sw: 16, codec: Some(Codec::Vp8), quality: preset }));
+            for medium in [2500, 3000, 40000] {
+                let quality = preset.quality(medium);
+                assert_eq!(quality.bitrate_kbps, if preset == Preset::Medium { medium } else { kbps });
+                assert_eq!(quality.max_fps, if quality.bitrate_kbps < 3000 { 30 } else { 0 });
+                let packet = stream_state(Codec::Vp8, true, Quality { bitrate_kbps: 1000, max_fps: 30 }, preset, medium);
+                let state: serde_json::Value = serde_json::from_slice(&packet[1..]).unwrap();
+                assert_eq!(state["preset"], name);
+                assert_eq!(state["ceiling_kbps"], quality.bitrate_kbps);
+                assert_eq!(state["medium_kbps"], medium);
+                assert_eq!(state["bitrate_kbps"], 1000);
+                assert_eq!(state["auto_codec"], true);
+            }
+        }
+        assert_eq!(Preset::named("auto"), None);
+        assert_eq!(Preset::default(), Preset::Max);
+        for packet in [vec![HELLO, 0, 16], vec![HELLO, 0, 16, 0], vec![HELLO, 0, 16, 0, 0], vec![HELLO, 0, 16, 0, 255]] {
+            assert_eq!(decode(&packet), Some(ClientMsg::Hello { hw: 0, sw: 16, codec: None, quality: Preset::Max }));
+        }
+    }
 
     #[test]
     fn mixer_packets_and_commands() {

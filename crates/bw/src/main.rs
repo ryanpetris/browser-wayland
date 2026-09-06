@@ -18,7 +18,7 @@ struct Cli {
     /// Plain HTTP (WebCodecs then only works from localhost).
     #[arg(long)]
     no_tls: bool,
-    /// Encoder bitrate in kbit/s.
+    /// Medium quality bitrate ceiling in kbit/s; other quality levels have their own ceilings.
     #[arg(long, default_value_t = 8000)]
     bitrate: u32,
     /// Video codec: auto picks AV1, HEVC, VP9 or H.264 (or VP8 with --software-encoding) by what the

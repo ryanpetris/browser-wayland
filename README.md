@@ -48,10 +48,13 @@ connect with the control token drives the pointer and keyboard; anyone else with
 "Take control" button, and the desktop then takes their window's size. Whoever opens the view-only URL
 can watch, read the window list and elements, and take snapshots, but not act.
 Each viewer picks its own codec and quality in the status bar: the codec list is what both the server
-and that browser can do ("Auto (HEVC)" shows the pick), and the quality is a ceiling: Low (2 Mbit/s,
-30 fps), Medium, High, Max, or Auto (`--bitrate`). The stream starts there, and while the connection or
-the browser can't keep up the server halves the bitrate and holds it, then climbs back a quarter at a
-time ("High (12 Mbit/s), now 6 Mbit/s"); `GET /api/codecs` lists the server's side. After the picture stops changing one more frame
+and that browser can do ("Auto (HEVC)" shows the pick). All five quality levels adapt under their
+selected ceiling: Very Low (2 Mbit/s), Low (5), Medium (`--bitrate`, 8 by default), High (12), and
+Max (25). Max is the default. The stream starts at its ceiling; under pressure the server halves the
+bitrate and holds it, then climbs back a quarter at a time. Targets below 3 Mbit/s have a 30 fps cap.
+The status bar shows the selected ceiling and current encoder target separately from measured video
+throughput. A custom Medium ceiling is displayed as configured, even if it exceeds another level.
+`GET /api/codecs` lists the server's codecs. After the picture stops changing one more frame
 goes out, at four times the bitrate with the software encoders, so text left rough by motion sharpens.
 Frames are painted on a 2D canvas. `?renderer=webgpu` in the URL uses a WebGPU external-texture path
 instead; it is opt-in because Chromium on Linux occasionally presents a blank frame that way, which looks like flicker.
@@ -142,7 +145,7 @@ The video travels on the WebSocket. A viewer can move it to a WebRTC data channe
 reliable) with the Transport select in the status bar: the page offers, the server answers with its own
 addresses, and the frames move to the channel once it opens; input, audio, events and the signalling
 stay on the WebSocket either way, so the socket is needed whatever carries the video. Measured against
-each other on a container link with a 4 Mbit/s desktop stream under an 8 Mbit/s Auto ceiling, the two
+each other on a container link with a 4 Mbit/s desktop stream under an 8 Mbit/s Medium ceiling, the two
 are even on a clean link and the channel is behind under packet loss, which is why the socket carries
 the video unless the channel is picked:
 
@@ -308,7 +311,7 @@ embeds at compile time; `make` builds the viewer (Node 24) and then the binary, 
 viewer, and a `cargo build` without `web/dist` stops with that hint. `npm run dev` in `web/` serves the
 page with hot reload, proxying `/ws` and `/api` to a server started with `--no-tls --listen 127.0.0.1:8080`.
 
-Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>`,
+Useful flags: `--no-tls` (localhost development), `--listen`, `--bitrate <kbps>` (Medium ceiling),
 `--codec auto|h264|hevc|vp9|av1|vp8` (what Auto resolves to when the browser decodes it; a codec this
 machine can't encode stops startup; auto prefers whatever the browser decodes in hardware, among what
 this machine encodes: AV1, then HEVC, VP9, H.264 on the GPU; VP8 first on the CPU),

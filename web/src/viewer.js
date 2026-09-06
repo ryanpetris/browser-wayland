@@ -7,9 +7,10 @@ import { createStore } from './store.js';
 import { startMic, stopMic } from './mic.js';
 import { startCam, stopCam } from './cam.js';
 import { openRtc } from './rtc.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, PRESET_IDS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
+const qualityName = name => PRESETS.includes(name) ? name : 'max';
 
 export function createViewer() {
   const store = createStore({
@@ -28,8 +29,8 @@ export function createViewer() {
     notice: null, // { text, kind: 'warning' | 'success' }: a word about our last action, shown for a few seconds
     notifications: [], // open desktop notifications, oldest first
     upload: null, // { name, index, count } while files dropped on the page go up
-    streamState: null, // { codec, auto_codec, bitrate_kbps, max_fps } from the server
-    choice: { codec: pref.getStr('codec', 'auto'), quality: pref.getStr('quality', 'auto') }, // this viewer's picks
+    streamState: null, // { codec, auto_codec, preset, ceiling_kbps, medium_kbps, bitrate_kbps, max_fps } from the server
+    choice: { codec: pref.getStr('codec', 'auto'), quality: qualityName(pref.getStr('quality', 'max')) }, // this viewer's picks
     touchMouse: pref.get('touchmouse', false), // fingers as a mouse with gestures, instead of real touch points
     audioAvailable: false,
     mixer: { available: false, generation: '', nodes: [], routing: false, error: null },
@@ -242,7 +243,7 @@ export function createViewer() {
   const sendControl = obj => sendText(CONTROL, JSON.stringify(obj));
 
   // Which codec families this browser decodes, in hardware and at all (bit0 H.264, bit1 HEVC, bit2 VP9,
-  // bit3 AV1, bit4 VP8), and this viewer's codec and quality choice (0 = Auto).
+  // bit3 AV1, bit4 VP8), and this viewer's codec and quality choice (codec 0 = Auto; quality uses PRESET_IDS).
   async function sendHello() {
     const probes = ['avc1.640028', 'hev1.1.6.L120.90', 'vp09.00.40.08', 'av01.0.09M.08', 'vp8'];
     let hw = 0, sw = 0;
@@ -253,11 +254,12 @@ export function createViewer() {
     }
     store.set({ decodable: CODEC_FAMILIES.filter((_, i) => sw & (1 << i)) });
     const { codec, quality } = state().choice;
-    send(HELLO, 4, dv => { dv.setUint8(1, hw); dv.setUint8(2, sw); dv.setUint8(3, CODEC_FAMILIES.indexOf(codec) + 1); dv.setUint8(4, Math.max(0, PRESETS.indexOf(quality))); });
+    send(HELLO, 4, dv => { dv.setUint8(1, hw); dv.setUint8(2, sw); dv.setUint8(3, CODEC_FAMILIES.indexOf(codec) + 1); dv.setUint8(4, PRESET_IDS[quality]); });
     if (!state().codecs.length) serverCodecs().then(list => store.set({ codecs: list })).catch(() => {});
   }
   // A new codec or quality for this session, remembered for the next connection.
   function setChoice(patch) {
+    if (patch.quality !== undefined) patch = { ...patch, quality: qualityName(patch.quality) };
     const choice = { ...state().choice, ...patch };
     store.set({ choice });
     if (patch.codec !== undefined) pref.setStr('codec', patch.codec);

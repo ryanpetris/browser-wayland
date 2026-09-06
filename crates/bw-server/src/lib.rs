@@ -62,7 +62,7 @@ pub struct Config {
     /// What the encoder side can produce (`bw_stream::codecs`), best first, and whether on the CPU.
     pub codecs: Vec<Codec>,
     pub software: bool,
-    /// `--bitrate`: what a viewer on Auto starts at and never exceeds.
+    /// `--bitrate`: the Medium quality level's bitrate ceiling.
     pub bitrate_kbps: u32,
     /// The compositor's frame clock, which every resize keeps.
     pub refresh_mhz: i32,
@@ -174,6 +174,7 @@ pub(crate) struct ViewerSession {
     want_codec: Option<Codec>,
     codec: Codec,
     quality: bw_core::Quality,
+    preset: protocol::Preset,
     /// A webcam frame of this session was dropped: the next ones are too, until a keyframe (a VP8 delta
     /// without its reference would corrupt the picture until the next one anyway).
     cam_wait_key: bool,
