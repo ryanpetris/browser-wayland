@@ -289,7 +289,8 @@ lease, so the slot is free when the last encoder is done) and encodes nothing wh
 Frames go from each session's own channel to its socket in order, with a ten-second send deadline, the
 way window streams do; audio and events are broadcast with `try_send`. A session's video goes to its
 WebRTC data channel instead while one is open (`rtc.rs`: the page's offer arrives as an `Rtc` message,
-the hub task answers as an ICE-lite str0m peer with the host's addresses as candidates, drives every
+the page includes its hostname and port in the offer, which the server resolves for the answer
+unless `--rtc-addr` sets the advertised endpoint. The hub answers as an ICE-lite str0m peer. The hub drives every
 session's peer connection over one UDP socket per local address, and fragments frames into 16 kB
 channel messages; `Hub::is_open` says whether a session's channel is up; window sessions use the same
 hub under keys with the top bit set); a channel that closes, a `{"close": true}`, or the session's end

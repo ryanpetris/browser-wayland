@@ -142,8 +142,8 @@ rotated"; the tokens change with the data directory, e.g. a fresh container with
 ## Transport
 
 The video travels on the WebSocket. A viewer can move it to a WebRTC data channel (UDP, ordered and
-reliable) with the Transport select in the status bar: the page offers, the server answers with its own
-addresses, and the frames move to the channel once it opens; input, audio, events and the signalling
+reliable) with the Transport select in the status bar. The page offers and the server answers with
+candidates for the page's hostname and port, unless `--rtc-addr` overrides them. The frames move to the channel once it opens; input, audio, events and the signalling
 stay on the WebSocket either way, so the socket is needed whatever carries the video. Measured against
 each other on a container link with a 4 Mbit/s desktop stream under an 8 Mbit/s Medium ceiling, the two
 are even on a clean link and the channel is behind under packet loss, which is why the socket carries
@@ -172,11 +172,17 @@ also shows the reason, retry count and next attempt. Selecting WebSocket cancels
 or browser without WebRTC support stays on the socket without retrying, preserving the preference.
 Quality selection and its adaptive ceiling are independent of transport recovery.
 
-The server listens on UDP on the listen port's number (`--rtc-port` for another; Docker needs `-p
-8443:8443/udp`) on every local address. In Docker's bridge network the container's own address is not
-the one browsers reach, so add `--rtc-addr <the host's address>` after the image name (or run with
-`--network host`); the same for a NAT with the port forwarded. For browsers behind a strict NAT give
-them a STUN server (`--stun stun:host:3478`) or a TURN server (`--turn turn:host:3478 --turn-user …
+The server listens on UDP on the listen port's number (`--rtc-port` changes the local UDP port).
+By default, the browser sends WebRTC traffic to the page's hostname and port. The backend resolves
+the hostname to IP addresses for ICE, so the hostname must resolve to the reachable address from
+inside the container too. Use `--rtc-addr` if the browser and backend see different DNS results.
+An omitted page port means 443 for HTTPS or 80 for HTTP. Docker needs both TCP and UDP published, for example `-p 8443:8443 -p 8443:8443/udp`. If the page uses a different
+external port, publish UDP on that same external port too.
+
+When UDP uses a different endpoint from the page, such as behind an HTTPS-only proxy, set
+`--rtc-addr <reachable IP>` after the image name. This advertises that IP with `--rtc-port`,
+or the listen port's number if omitted; the advertised UDP port must be forwarded unchanged.
+For browsers behind a strict NAT give them a STUN server (`--stun stun:host:3478`) or a TURN server (`--turn turn:host:3478 --turn-user …
 --turn-pass …`, its address as the browsers reach it). coturn is one container to self-host:
 
 ```sh

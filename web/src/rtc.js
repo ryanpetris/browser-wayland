@@ -3,12 +3,12 @@
 // the page took the wait for a gap and asked for a keyframe, and the keyframes were what the link then
 // spent itself on.) Measured against the socket it is even on a clean link and behind it under loss
 // (see the README), so it is a choice, not the default. The page offers one channel, the server (ICE
-// lite) answers with its addresses;
+// lite) answers with candidates for the page endpoint, unless --rtc-addr overrides it;
 // frames above 16 kB come as numbered fragments, reassembled here and handed to the same message handler
 // as the socket's.
 export const RTC_TIMING = { gather: 1500, gatherWithServers: 5000, attempt: 10000, retry: 1000, retryMax: 30000, healthy: 10000 };
 
-export function openRtc({ iceServers, g, signal, onMessage, onOpen, onClose }) {
+export function openRtc({ iceServers, endpoint, g, signal, onMessage, onOpen, onClose }) {
   const pc = new RTCPeerConnection({ iceServers });
   let ch;
   try { ch = pc.createDataChannel('video', { ordered: true }); } catch (e) { pc.close(); throw e; }
@@ -43,8 +43,8 @@ export function openRtc({ iceServers, g, signal, onMessage, onOpen, onClose }) {
   };
   // the offer goes out with the candidates in it, once gathering is done (host ones come at once; a STUN
   // or TURN one takes a round trip or an allocation, so the wait is longer with servers configured): the
-  // server answers with its own and does no trickle; `g` comes back with the answer
-  const offer = () => { if (!offered && !closed && pc.localDescription) { offered = true; clearTimeout(gatherTimer); signal({ offer: pc.localDescription.sdp, g }); } };
+  // server answers with the reachable endpoint and does no trickle; `g` comes back with the answer
+  const offer = () => { if (!offered && !closed && pc.localDescription) { offered = true; clearTimeout(gatherTimer); signal({ offer: pc.localDescription.sdp, g, ...(endpoint && { endpoint }) }); } };
   pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') offer(); };
   pc.createOffer().then(o => { if (!closed) return pc.setLocalDescription(o); }).then(() => {
     if (!closed && !offered) gatherTimer = setTimeout(offer, iceServers.length ? RTC_TIMING.gatherWithServers : RTC_TIMING.gather);
@@ -70,4 +70,9 @@ export function openRtc({ iceServers, g, signal, onMessage, onOpen, onClose }) {
       return out;
     },
   };
+}
+
+// The page endpoint includes Docker's external port. The server resolves hostnames for ICE.
+export function pageEndpoint({ hostname, port, protocol }) {
+  return { host: hostname.replace(/^\[|\]$/g, ''), port: Number(port || (protocol === 'https:' ? 443 : 80)) };
 }

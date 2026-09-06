@@ -292,7 +292,7 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                             if !send(&mut socket, state).await { break None }
                         }
                         Some(ClientMsg::Rtc(v)) => match (&app.rtc, v.get("offer").and_then(|o| o.as_str())) {
-                            (Some(hub), Some(sdp)) => hub.offer(id, sdp.to_string(), v.get("g").cloned().unwrap_or_default(), etx.clone()).await,
+                            (Some(hub), Some(sdp)) => hub.offer(id, sdp.to_string(), v.get("g").cloned().unwrap_or_default(), etx.clone(), v.get("endpoint")).await,
                             (Some(hub), None) if v.get("close").and_then(|b| b.as_bool()) == Some(true) => {
                                 let g = v.get("g").cloned().unwrap_or_default();
                                 if hub.close_attempt(id, g.clone()).await {
@@ -485,7 +485,7 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                         }
                         Some(ClientMsg::Rtc(v)) => {
                             match (&app.rtc, v.get("offer").and_then(|o| o.as_str())) {
-                                (Some(hub), Some(sdp)) => hub.offer(rtc_key, sdp.to_string(), v.get("g").cloned().unwrap_or_default(), etx.clone()).await,
+                                (Some(hub), Some(sdp)) => hub.offer(rtc_key, sdp.to_string(), v.get("g").cloned().unwrap_or_default(), etx.clone(), v.get("endpoint")).await,
                                 (Some(hub), None) if v.get("close").and_then(|b| b.as_bool()) == Some(true) => {
                                     let g = v.get("g").cloned().unwrap_or_default();
                                     if hub.close_attempt(rtc_key, g.clone()).await {

@@ -6,7 +6,7 @@ import { TOKEN, WINDOW, api, elementsOf, snapshot, control, uploadFile, clipboar
 import { createStore } from './store.js';
 import { startMic, stopMic } from './mic.js';
 import { startCam, stopCam } from './cam.js';
-import { openRtc, RTC_TIMING } from './rtc.js';
+import { openRtc, pageEndpoint, RTC_TIMING } from './rtc.js';
 import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, PRESET_IDS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
@@ -620,7 +620,7 @@ export function createViewer() {
     rtcTimer = setTimeout(() => { if (current()) failRtc('Connection attempt timed out'); }, RTC_TIMING.attempt);
     try {
       rtc = openRtc({
-        iceServers, g: attempt.g,
+        iceServers, endpoint: pageEndpoint(location), g: attempt.g,
         signal: o => { if (current()) sendText(RTC_CLIENT, JSON.stringify(o)); },
         onMessage: buf => { if (current()) onMessage(buf); },
         onOpen: () => {

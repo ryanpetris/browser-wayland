@@ -1,6 +1,15 @@
 // Run inside the Docker rig: node checks/rtc-peer.mjs.
 import assert from 'node:assert/strict';
-import { openRtc } from '../src/rtc.js';
+import { openRtc, pageEndpoint } from '../src/rtc.js';
+
+for (const [url, address, port] of [
+  ['https://desktop.example:9443/', 'desktop.example', '9443'],
+  ['https://192.0.2.1/', '192.0.2.1', '443'],
+  ['http://localhost/', 'localhost', '80'],
+  ['https://[2001:db8::1]:9443/', '2001:db8::1', '9443'],
+]) {
+  assert.deepEqual(pageEndpoint(new URL(url)), { host: address, port: Number(port) });
+}
 
 let pc;
 const timers = new Map();
@@ -12,13 +21,13 @@ class Peer {
   createDataChannel(name, options) { assert.equal(name, 'video'); assert.equal(options.ordered, true); return this.channel; }
   createOffer() { return new Promise(resolve => { this.offerReady = resolve; }); }
   async setLocalDescription(o) { this.localCalls++; this.localDescription = o; if (!this.gatherPending) { this.iceGatheringState = 'complete'; this.onicegatheringstatechange?.(); } }
-  async setRemoteDescription() { throw new Error('invalid answer'); }
+  async setRemoteDescription(answer) { this.remoteDescription = answer; throw new Error('invalid answer'); }
   close() { this.closed = true; this.channel.onclose?.(); }
 }
 globalThis.RTCPeerConnection = Peer;
 const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
 let messages = 0, opens = 0, failures = [], offers = [];
-const start = () => openRtc({ iceServers: [], g: 7, signal: o => offers.push(o), onMessage: () => messages++, onOpen: () => opens++, onClose: reason => failures.push(reason) });
+const start = () => openRtc({ iceServers: [], endpoint: { host: 'localhost', port: 8080 }, g: 7, signal: o => offers.push(o), onMessage: () => messages++, onOpen: () => opens++, onClose: reason => failures.push(reason) });
 let peer = start();
 const oldOpen = pc.channel.onopen, oldMessage = pc.channel.onmessage, oldClose = pc.channel.onclose;
 peer.close();
@@ -31,10 +40,11 @@ assert.deepEqual([messages, opens, failures.length, offers.length], [0, 0, 0, 0]
 peer = start();
 pc.offerReady({ sdp: 'current' });
 await settle();
-assert.deepEqual(offers, [{ offer: 'current', g: 7 }]);
+assert.deepEqual(offers, [{ offer: 'current', g: 7, endpoint: { host: 'localhost', port: 8080 } }]);
 pc.channel.onopen();
 assert.equal(opens, 1);
 peer.answer('bad');
+assert.equal(pc.remoteDescription.sdp, 'bad');
 await settle();
 assert.deepEqual(failures, ['Answer rejected']);
 pc.connectionState = 'failed'; pc.onconnectionstatechange();

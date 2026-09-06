@@ -49,11 +49,11 @@ struct Cli {
     /// No WebRTC: the video stays on the WebSocket (TCP) for every viewer.
     #[arg(long)]
     no_rtc: bool,
-    /// UDP port for the WebRTC data channels (default: the listen port's number), on every local address.
+    /// Local UDP port for WebRTC (default: the listen port's number). Without --rtc-addr, viewers use the page's port.
     #[arg(long)]
     rtc_port: Option<u16>,
-    /// The address browsers reach this machine at for WebRTC when it isn't one of its own: a Docker bridge
-    /// (the host's address; the container's port must be mapped), a NAT with the port forwarded.
+    /// Advertise this WebRTC IP and --rtc-port instead of the page's hostname and port.
+    /// Use when UDP is reached at a different endpoint from HTTPS; forward the UDP port to this server.
     #[arg(long)]
     rtc_addr: Option<std::net::IpAddr>,
     /// A STUN server for the browsers (`stun:host:3478`); none means host candidates only, enough on a LAN.
