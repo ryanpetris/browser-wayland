@@ -101,7 +101,7 @@ export function MixerPanel({ viewer, hidden, onClose }) {
         <h2 className="font-semibold text-zinc-100">Session audio mixer</h2>
         <button ref={close} type="button" className={`${button} ml-auto`} onClick={onClose}>Close mixer</button>
       </div>
-      <p className="mt-1 text-xs text-zinc-400">Changes affect all viewers. Each application row is one audio stream. Use the microphone button to control browser capture.</p>
+      <p className="mt-1 text-xs text-zinc-400">Changes affect all viewers. Each application row is one audio stream.</p>
       {role !== 'controller' && <p className="mt-2 text-xs text-amber-200">Only the controlling viewer can make changes.
         {role === 'participant' && <button type="button" className={`${button} ml-2`} onClick={viewer.takeControl}>Take control</button>}
       </p>}
