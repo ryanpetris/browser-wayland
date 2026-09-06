@@ -91,7 +91,8 @@ fn software_tail(codec: Codec, enc: &str, bitrate_kbps: u32) -> String {
         (Codec::H264, _) => format!("openh264enc name=enc rate-control=bitrate bitrate={bps} gop-size=0"),
         (Codec::Hevc, _) => format!("x265enc name=enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate_kbps} key-int-max=2147483647 ! video/x-h265,profile=main"),
         // a two-frame mini-GOP: about six frames of delay instead of thirty-odd (the library insists on
-        // some lookahead); keyframes on request
+        // some lookahead); keyframes on request (the documented -1, no periodic intra, is refused in the
+        // bitrate mode, so the period is the largest the property takes)
         (Codec::Av1, _) => format!("svtav1enc name=enc preset=12 target-bitrate={bitrate_kbps} intra-period-length=2147483647 parameters-string=hierarchical-levels=1:force-key-frames=1"),
     };
     format!("{encoder} {}", parse_tail(codec))

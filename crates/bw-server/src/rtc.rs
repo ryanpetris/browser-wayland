@@ -1,5 +1,5 @@
 //! WebRTC data-channel transport for the video: the same messages the WebSocket carries, over a `video`
-//! data channel the browser opens (unordered, reliable), for viewers who need UDP to reach the desktop
+//! data channel the browser opens (ordered, reliable), for viewers who need UDP to reach the desktop
 //! at all: through NAT, or through a TURN relay. It is a viewer's choice, not the default, because the
 //! socket carries the picture better under packet loss (measured in the README). str0m does ICE (lite,
 //! host candidates), DTLS and SCTP without I/O of its own; one hub task drives every session's peer
@@ -92,14 +92,10 @@ impl Hub {
         Ok(hub)
     }
 
-    pub fn is_open(&self, session: u64) -> bool {
-        self.open.lock().unwrap().contains_key(&session)
-    }
-
-    /// The session's channel under pressure: frames dropped since the last call, and frames waiting in its
-    /// queue now; congestion, to its rate controller.
-    pub fn pressure(&self, session: u64) -> (u32, usize) {
-        self.open.lock().unwrap().get_mut(&session).map_or((0, 0), |(dropped, queued)| (std::mem::take(dropped), *queued))
+    /// The session's channel, while it is open, under pressure: frames dropped since the last call, and
+    /// frames waiting in its queue now; congestion, to its rate controller.
+    pub fn pressure(&self, session: u64) -> Option<(u32, usize)> {
+        self.open.lock().unwrap().get_mut(&session).map(|(dropped, queued)| (std::mem::take(dropped), *queued))
     }
 
     /// Signalling waits for room in the queue: an offer without an answer, or a close that never arrives,
@@ -141,12 +137,13 @@ struct Peer {
     queue: VecDeque<Bytes>,
     sent: usize,
     front_since: Instant,
-    /// The session's socket, for the word that the channel is given up.
+    /// The session's socket and the offer's number, for the word that the channel is given up.
     reply: mpsc::Sender<Bytes>,
+    g: serde_json::Value,
 }
 
-/// A frame at the front of the queue this long means the link can't move one: the channel is given up
-/// and the socket takes the video.
+/// A frame at the front of the queue this long, moving or not, is too slow for a desktop: the channel
+/// is given up and the socket takes the video.
 const STALL: Duration = Duration::from_secs(3);
 
 /// Frames a channel's queue holds before a new one is dropped: half a second at 60 fps.
@@ -180,8 +177,8 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
         let mut deadline = Instant::now() + Duration::from_secs(1);
         for (id, peer) in peers.iter_mut() {
             if !peer.queue.is_empty() && peer.front_since.elapsed() > STALL {
-                tracing::info!(session = id, "WebRTC: a frame stuck for {STALL:?}; the socket takes the video");
-                let _ = peer.reply.try_send(protocol::rtc(&serde_json::json!({ "close": true })));
+                tracing::info!(session = id, "WebRTC: a frame {STALL:?} at the queue's front; the socket takes the video");
+                let _ = peer.reply.try_send(protocol::rtc(&serde_json::json!({ "close": true, "g": peer.g })));
                 peer.rtc.disconnect(); // and the peer goes below, with its channel's claim on the frames
             }
             flush(peer, &open, *id);
@@ -280,7 +277,7 @@ fn answer(sdp: &str, g: serde_json::Value, addrs: &[SocketAddr], reply: mpsc::Se
     }
     let answer = rtc.sdp_api().accept_offer(offer).context("accept offer")?;
     let _ = reply.try_send(protocol::rtc(&serde_json::json!({ "answer": answer.to_sdp_string(), "g": g })));
-    Ok(Peer { rtc, channel: None, frame_id: 0, queue: VecDeque::new(), sent: 0, front_since: Instant::now(), reply })
+    Ok(Peer { rtc, channel: None, frame_id: 0, queue: VecDeque::new(), sent: 0, front_since: Instant::now(), reply, g })
 }
 
 fn event(session: u64, peer: &mut Peer, e: Event, open: &Open) {
@@ -333,7 +330,7 @@ fn flush(peer: &mut Peer, open: &Open, session: u64) {
             match channel.write(true, &msg) {
                 Ok(true) => peer.sent += 1,
                 Ok(false) => break 'frames, // no room: the browser's acknowledgements make some
-                Err(_) => break,            // this frame is lost to the channel; the next may do better
+                Err(_) => break 'frames,    // the frame stays at the front, and a channel that keeps refusing is given up above
             }
         }
         peer.queue.pop_front();

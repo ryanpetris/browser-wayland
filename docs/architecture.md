@@ -162,7 +162,7 @@ appsrc (memory:DMABuf, DMA_DRM caps) ! vapostproc ! video/x-raw(memory:VAMemory)
   ! va{h264,h265,vp9,av1}enc ! {h264,h265,vp9,av1}parse ! appsink
 ```
 
-with low-latency encoder settings (constant bitrate from `--bitrate`, no B-frames, one reference);
+with low-latency encoder settings (constant bitrate at the session's quality, no B-frames, one reference);
 `vapostproc` scales the shared frame to the viewer's size on the GPU. With `--software-encoding` the
 compositor renders into linear dmabufs instead, the pipeline maps them as plain raw video
 (`videoconvertscale` on the CPU) and encodes with vp8enc, x264enc (or openh264enc), vp9enc, x265enc or
@@ -186,8 +186,8 @@ when the page's once-a-second report (`0x96`) says frames arrived a hundred mill
 their best over ten seconds or its decoder dropped some; the new rate then holds two seconds. Five clean
 seconds with frames raise it a quarter, up to the ceiling; under 3 Mbit/s the rate is capped at 30 fps.
 The steps are few and large because the VA encoders open a new GOP on any rate change, so each is a
-keyframe, and keyframes are otherwise only on request: the encoders' periodic keyframe is pushed out
-of reach. The refine frame is encoded at four times the bitrate only by the CPU encoders. The bitrate
+keyframe, and keyframes otherwise come on request, the encoders' periodic one pushed as far out as
+each allows (the VA encoders' to 1024 frames). The refine frame is encoded at four times the bitrate only by the CPU encoders. The bitrate
 changes on the running encoder where the element allows (the VA encoders, x264, x265, libvpx); the
 frame cap holds frames in the sink (`Submit::Held`), which the compositor treats like a failed frame. 150 ms after the picture settles the compositor renders it once
 more as a refine frame, which the sink encodes at four times the bitrate before restoring it. Pipeline errors reach the server through a bus

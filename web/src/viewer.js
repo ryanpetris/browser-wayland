@@ -64,7 +64,7 @@ export function createViewer() {
   const stage_ = { decode: [], paint: [], interval: [] };
   const inflight = new Map(); // pts -> {at, output}
   let lastPaint = 0, sinceKey = 0, audioUnderruns = 0;
-  let videoLost = 0, lastLost = 0, lossy = [], lastDropped = 0, delaySec = Infinity, delayBase = []; // the second's report to the server, and the channel's record
+  let videoLost = 0, freezes = 0, lastArrival = 0, lastPts = 0, lastLost = 0, lossy = [], lastDropped = 0, delaySec = Infinity, delayBase = []; // the second's report to the server, and the channel's record
   const pct = (a, p) => (a.length ? a.slice().sort((x, y) => x - y)[Math.max(0, Math.ceil(a.length * p) - 1)] : null);
 
   // --- rendering ----------------------------------------------------------------
@@ -263,6 +263,7 @@ export function createViewer() {
       case CONFIG:
         stream = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
         videoSeq = -1; // a new stream counts from 0
+        delayBase = []; delaySec = Infinity; lastPts = 0; // and its timestamps from zero: the lateness baseline starts over
         if (pendingFrame) { pendingFrame.close(); pendingFrame = null; }
         canvas.width = stream.width;
         canvas.height = stream.height;
@@ -317,7 +318,7 @@ export function createViewer() {
         const v = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 1)));
         if (v.ice_servers) { iceServers = v.ice_servers; store.set({ rtcAvailable: true }); maybeRtc(); }
         if (v.answer && v.g === rtcGen) rtc?.answer(v.answer); // an answer to an attempt since given up is no use
-        if (v.close && rtc) { closeRtc(); store.set({ transport: 'websocket' }); notice('The data channel stalled; the video is back on the socket.'); }
+        if (v.close && rtc && v.g === rtcGen) { closeRtc(); store.set({ transport: 'websocket' }); notice('The data channel stalled; the video is back on the socket.'); }
         break;
       }
       case STREAM_STATE:
@@ -346,9 +347,11 @@ export function createViewer() {
         if (dropNext) { dropNext = false; return; } // debug: bw.dropNext() simulates a lost message
         if (!decoder) return;
         received++;
-        const key = (dv.getUint8(1) & 1) !== 0, seq = dv.getUint16(2, true);
-        // A frame from behind is nothing new: a retransmit on the data channel arriving after the frames
-        // that overtook it, or the other pipe delivering late at a transport switch.
+        const key = (dv.getUint8(1) & 1) !== 0, seq = dv.getUint16(2, true), pts = Number(dv.getBigUint64(4, true)), now = performance.now();
+        delaySec = Math.min(delaySec, now - pts / 1000); // how late the frame is against its stamp; the second's least is what the link added
+        if (lastPts && pts - lastPts < 100e3 && now - lastArrival > 500) freezes++; // frames made together arriving apart: the link held them
+        lastArrival = now; lastPts = pts;
+        // A frame from behind is nothing new: the other pipe delivering late at a transport switch.
         if (videoSeq >= 0 && seq !== videoSeq && ((videoSeq - seq) & 0xffff) < 0x8000) return;
         if (key) { keyframes++; sinceKey = 0; } else sinceKey++;
         // A gap in seq means the server dropped frames for us; a delta after a gap can't be decoded.
@@ -361,8 +364,6 @@ export function createViewer() {
           return;
         }
         try {
-          const pts = Number(dv.getBigUint64(4, true));
-          delaySec = Math.min(delaySec, performance.now() - pts / 1000); // how late the frame is against its stamp; the second's least is what the link added
           if (state().statsOn) inflight.set(pts, { at: performance.now(), output: 0 });
           decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: pts, data: new Uint8Array(buf, 12), transfer: [buf] }));
           awaitingKey = false;
@@ -396,16 +397,16 @@ export function createViewer() {
       send(REPORT, 4, dv => { dv.setUint16(1, late, true); dv.setUint16(3, Math.min(65535, dropped - lastDropped), true); });
     }
     lastDropped = dropped; delaySec = Infinity;
-    // a channel that loses frames in three of five seconds gives the video back to the socket
-    const lostNow = videoLost + (rtc?.incomplete() ?? 0);
+    // a channel that loses or holds up frames in three of ten seconds gives the video back to the socket
+    const lostNow = videoLost + freezes + (rtc?.incomplete() ?? 0);
     lossy.push(s.videoVia === 'webrtc' && lostNow > lastLost);
-    if (lossy.length > 5) lossy.shift();
+    if (lossy.length > 10) lossy.shift();
     lastLost = lostNow;
     if (lossy.filter(Boolean).length >= 3) {
       lossy = [];
       closeRtc();
       store.set({ transport: 'websocket' });
-      notice('The data channel kept losing frames; the video is back on the socket.');
+      notice('The data channel kept stalling; the video is back on the socket.');
     }
   }, 1000);
 
@@ -487,7 +488,9 @@ export function createViewer() {
   // The data channel is opened when the viewer picks it: measured against the socket it is even on a
   // clean link and behind it under packet loss, so the socket keeps the video unless it is picked (see
   // the README). The video moves to the channel when it opens and comes back to the socket when it
-  // closes; a pick that hasn't opened three seconds after the offer goes back to the socket.
+  // closes, when it loses or holds up frames in three of ten seconds, or when the server gives it up
+  // (a frame three seconds at the front of its queue); the pick goes back with it. A pick that hasn't opened three seconds after
+  // the offer goes back too.
   let rtc = null, iceServers = [], rtcTimer, rtcGen = 0;
   function maybeRtc() {
     if (rtc || state().transport !== 'webrtc' || !state().rtcAvailable || ws?.readyState !== WebSocket.OPEN) return;
@@ -505,7 +508,7 @@ export function createViewer() {
         }, 3000);
       },
       onMessage,
-      onOpen: () => { if (rtc === mine) { clearTimeout(rtcTimer); store.set({ videoVia: 'webrtc' }); } },
+      onOpen: () => { if (rtc === mine) { clearTimeout(rtcTimer); store.set({ videoVia: 'webrtc' }); delayBase = []; } }, // a new path, a new lateness baseline
       onClose: () => { if (rtc === mine) { closeRtc(); store.set({ transport: 'websocket' }); notice('The data channel closed; the video is back on the socket.'); } },
     }));
   }
@@ -518,6 +521,7 @@ export function createViewer() {
     rtc = null;
     if (ws?.readyState === WebSocket.OPEN) sendText(RTC_CLIENT, '{"close":true}');
     store.set({ videoVia: 'websocket' });
+    lossy = []; delayBase = []; // this channel's record and path go with it
   }
   function setTransport(transport) {
     pref.setStr('transport', transport);
@@ -536,9 +540,7 @@ export function createViewer() {
       if (state().role === 'controller') store.set({ mic: true }); // control may have gone while the permission prompt was up
       else micStop();
     } catch (e) {
-      store.set({ notice: `microphone: ${e.message}` });
-      clearTimeout(noticeTimer);
-      noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
+      notice(`microphone: ${e.message}`);
     }
   }
 
@@ -550,9 +552,7 @@ export function createViewer() {
       if (state().role === 'controller') store.set({ cam: true });
       else camStop();
     } catch (e) {
-      store.set({ notice: `webcam: ${e.message}` });
-      clearTimeout(noticeTimer);
-      noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
+      notice(`webcam: ${e.message}`);
     }
   }
 
@@ -695,9 +695,8 @@ export function createViewer() {
       store.set({ upload: { name: file.name, index: index + 1, count: files.length } });
       try { saved.push((await uploadFile(file)).name); } catch {}
     }
-    store.set({ upload: null, filesRev: state().filesRev + 1, notice: saved.length ? `${saved.length} file${saved.length === 1 ? '' : 's'} saved to the desktop's transfer folder` : 'upload failed' });
-    clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000);
+    store.set({ upload: null, filesRev: state().filesRev + 1 });
+    notice(saved.length ? `${saved.length} file${saved.length === 1 ? '' : 's'} saved to the desktop's transfer folder` : 'upload failed');
     return saved; // the names they got there
   }
   document.addEventListener('dragover', e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
@@ -730,7 +729,7 @@ export function createViewer() {
     if (!e.dataTransfer?.files.length) return;
     e.preventDefault();
     if (state().role !== 'viewer') uploadFiles(e.dataTransfer.files);
-    else { store.set({ notice: 'a view-only session cannot send files' }); clearTimeout(noticeTimer); noticeTimer = setTimeout(() => store.set({ notice: '' }), 6000); }
+    else notice('a view-only session cannot send files');
   });
 
   // --- clipboard ---------------------------------------------------------------------------

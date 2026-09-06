@@ -198,15 +198,15 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                     if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
                         // sent in order, waiting for the socket: the pipeline drops raw frames upstream of the encoder
                         // while we do, so nothing goes missing between encoder and page (no keyframe dance)
-                        let (backlog, (dropped, queued)) = (rx.len(), app.rtc.as_ref().map_or((0, 0), |hub| hub.pressure(id))); // the channel's drops and queue are congestion too
+                        let (backlog, pressure) = (rx.len(), app.rtc.as_ref().and_then(|hub| hub.pressure(id))); // the channel's drops and queue are congestion too
                         let t = Instant::now();
-                        match &app.rtc {
-                            // the data channel, while the page has one open: unordered, so a retransmit holds up
-                            // its own frame and not the ones behind it
-                            Some(hub) if hub.is_open(id) => hub.frame(id, protocol::video(&f, seq)),
+                        match (&app.rtc, pressure) {
+                            // the data channel, while the page has one open
+                            (Some(hub), Some(_)) => hub.frame(id, protocol::video(&f, seq)),
                             _ => if !send(&mut socket, protocol::video(&f, seq)).await { break None },
                         }
                         seq = seq.wrapping_add(1);
+                        let (dropped, queued) = pressure.unwrap_or((0, 0));
                         if let Some(q) = auto.frame(backlog + queued, dropped, t.elapsed()) {
                             app.set_quality(id, q);
                             let Some(state) = app.stream_state(id) else { break Some((UNAUTHORIZED, "token rotated")) };
@@ -366,13 +366,14 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                 }
                 Some(StreamMsg::Frame(f)) => {
                     if info.as_ref().is_some_and(|i| i.stream_id == f.stream_id) {
-                        let (backlog, (dropped, queued)) = (rx.len(), app.rtc.as_ref().map_or((0, 0), |hub| hub.pressure(rtc_key)));
+                        let (backlog, pressure) = (rx.len(), app.rtc.as_ref().and_then(|hub| hub.pressure(rtc_key)));
                         let t = Instant::now();
-                        match &app.rtc {
-                            Some(hub) if hub.is_open(rtc_key) => hub.frame(rtc_key, protocol::video(&f, seq)),
+                        match (&app.rtc, pressure) {
+                            (Some(hub), Some(_)) => hub.frame(rtc_key, protocol::video(&f, seq)),
                             _ => if !send(&mut socket, protocol::video(&f, seq)).await { break None },
                         }
                         seq = seq.wrapping_add(1);
+                        let (dropped, queued) = pressure.unwrap_or((0, 0));
                         if let Some(q) = auto.frame(backlog + queued, dropped, t.elapsed()) {
                             quality = q;
                             control.set_quality(q);

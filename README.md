@@ -128,7 +128,7 @@ rotated"; the tokens change with the data directory, e.g. a fresh container with
 
 ## Transport
 
-The video travels on the WebSocket. A viewer can move it to a WebRTC data channel (UDP, unordered but
+The video travels on the WebSocket. A viewer can move it to a WebRTC data channel (UDP, ordered and
 reliable) with the Transport select in the status bar: the page offers, the server answers with its own
 addresses, and the frames move to the channel once it opens; input, audio, events and the signalling
 stay on the WebSocket either way, so the socket is needed whatever carries the video. Measured against
@@ -139,13 +139,14 @@ the video unless the channel is picked:
 | link | WebSocket | data channel |
 | --- | --- | --- |
 | clean, or 20 ms delay | 56 fps, 23–37 ms longest gap | 56 fps, 23 ms |
-| 0.5 % loss | 56 fps, 37 ms, settles at 6 Mbit/s | 39 fps, 109 ms, falls to 1 Mbit/s |
-| 2 % loss, 20 ms delay | 56 fps, 60 ms, 5 Mbit/s | 29 fps, then given up: the socket takes over |
-| 1 % loss, 100 ms delay | 20–38 fps, 244 ms, 1 Mbit/s | 9–22 fps, gaps up to seconds, then given up |
+| 0.5 % loss | 56 fps, 36 ms | 52–56 fps, a one-second gap in one run of two |
+| 2 % loss, 20 ms delay | 56 fps, 60 ms | 24–26 fps, gaps over a second, then given up |
+| 1 % loss, 100 ms delay | 26–38 fps, 277 ms, at the 1 Mbit/s floor | 16–21 fps, gaps of a second, then given up |
 
-TCP retransmits a lost packet and the picture barely notices; the channel's SCTP recovers slowly, its
-send buffer fills, and a keyframe behind it is a stall of seconds. So a channel that loses frames in
-three of five seconds, or holds one frame at the front of its queue for three seconds, is given up:
+TCP retransmits a lost packet and the picture barely notices; the channel's SCTP waits a second at the
+least before it retransmits (sctp-proto's minimum RTO), its send buffer fills, and a keyframe behind it
+is a stall of seconds. So a channel that loses or holds up
+frames (half a second and more) in three of ten seconds, or holds one frame for three seconds, is given up:
 the video goes back to the socket, the Transport select says so, and picking the channel again tries
 again. What the channel offers is smoother pacing on a clean link (the socket's frames bunch behind
 TCP's acknowledgements; Firefox showed a 58 ms longest gap on the socket against 23 ms on the channel)
