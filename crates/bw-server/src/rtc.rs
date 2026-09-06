@@ -46,11 +46,11 @@ pub struct Config {
 enum Msg {
     /// A session's browser offered (`g` numbers its attempt; the answer carries it back through `reply`,
     /// the session's own event queue).
-    Offer { session: u64, sdp: String, g: serde_json::Value, reply: mpsc::Sender<Bytes>, endpoint: Option<Vec<SocketAddr>> },
+    Offer { session: u64, sdp: String, g: u64, reply: mpsc::Sender<Bytes>, endpoint: Option<Vec<SocketAddr>> },
     /// A frame for a session's channel.
     Frame { session: u64, data: Bytes },
     /// The session ended, or went back to its socket.
-    Close { session: u64, g: Option<serde_json::Value>, reply: Option<oneshot::Sender<bool>> },
+    Close { session: u64, g: Option<u64>, reply: Option<oneshot::Sender<bool>> },
 }
 
 /// A session's way to the hub; cheap to clone.
@@ -101,10 +101,10 @@ impl Hub {
 
     /// Signalling waits for room in the queue: an offer without an answer, or a close that never arrives,
     /// would be a stuck viewer or a lingering peer.
-    pub async fn offer(&self, session: u64, sdp: String, g: serde_json::Value, reply: mpsc::Sender<Bytes>, endpoint: Option<&serde_json::Value>) {
+    pub async fn offer(&self, session: u64, sdp: String, g: u64, reply: mpsc::Sender<Bytes>, endpoint: Option<&serde_json::Value>) {
         let endpoint = if self.page_endpoint {
             match resolve_endpoint(endpoint).await {
-                Ok(endpoint) => endpoint,
+                Ok(endpoint) => Some(endpoint),
                 Err(e) => {
                     tracing::warn!(session, "WebRTC endpoint refused: {e:#}");
                     let _ = reply.try_send(protocol::rtc(&serde_json::json!({ "close": true, "g": g, "reason": "Page endpoint resolution failed" })));
@@ -125,7 +125,7 @@ impl Hub {
 
     /// Releases only the named attempt, returning whether it held video and needs a refresh.
     /// Delayed client closes cannot remove its successor.
-    pub async fn close_attempt(&self, session: u64, g: serde_json::Value) -> bool {
+    pub async fn close_attempt(&self, session: u64, g: u64) -> bool {
         let (reply, rx) = oneshot::channel();
         let _ = self.tx.send(Msg::Close { session, g: Some(g), reply: Some(reply) }).await;
         rx.await.unwrap_or(false)
@@ -137,9 +137,8 @@ impl Hub {
 }
 
 /// Resolve outside the shared hub so a slow DNS lookup cannot stall other viewers.
-async fn resolve_endpoint(value: Option<&serde_json::Value>) -> Result<Option<Vec<SocketAddr>>> {
-    // Older viewers omit the endpoint and use the server's local candidates.
-    let Some(value) = value else { return Ok(None) };
+async fn resolve_endpoint(value: Option<&serde_json::Value>) -> Result<Vec<SocketAddr>> {
+    let value = value.context("page endpoint is required")?;
     #[derive(serde::Deserialize)]
     struct Endpoint { host: String, port: u16 }
     let endpoint: Endpoint = serde_json::from_value(value.clone())?;
@@ -150,7 +149,7 @@ async fn resolve_endpoint(value: Option<&serde_json::Value>) -> Result<Option<Ve
     addrs.dedup();
     anyhow::ensure!(!addrs.is_empty(), "page endpoint has no addresses");
     for addr in &addrs { Candidate::host(*addr, "udp").context("invalid page endpoint address")?; }
-    Ok(Some(addrs))
+    Ok(addrs)
 }
 
 /// Only the wire SDP uses external candidates. ICE receives packets on the actual local sockets.
@@ -193,7 +192,7 @@ struct Peer {
     front_since: Instant,
     /// The session's socket and the offer's number, for the word that the channel is given up.
     reply: mpsc::Sender<Bytes>,
-    g: serde_json::Value,
+    g: u64,
     close_reason: &'static str,
 }
 
@@ -207,7 +206,7 @@ const QUEUE: usize = 30;
 
 /// The latest channel claim, with live queue pressure or an inactive claim awaiting close acknowledgement.
 struct Claim {
-    g: serde_json::Value,
+    g: u64,
     active: bool,
     dropped: u32,
     queued: usize,
@@ -291,7 +290,7 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
                 Some(Msg::Offer { session, sdp, g, reply, endpoint }) => {
                     peers.remove(&session);
                     open.lock().unwrap().remove(&session);
-                    match answer(&sdp, g.clone(), &addrs, reply.clone(), endpoint.as_deref()) {
+                    match answer(&sdp, g, &addrs, reply.clone(), endpoint.as_deref()) {
                         Ok(peer) => {
                             peers.insert(session, peer); // a second offer replaces the first connection
                         }
@@ -323,8 +322,8 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
                 }
                 Some(Msg::Close { session, g, reply }) => {
                     let mut claims = open.lock().unwrap();
-                    let claimed = claims.get(&session).is_some_and(|c| g.is_none() || g.as_ref() == Some(&c.g));
-                    if g.is_none() || peers.get(&session).is_some_and(|p| g.as_ref() == Some(&p.g)) {
+                    let claimed = claims.get(&session).is_some_and(|c| g.is_none() || g == Some(c.g));
+                    if g.is_none() || peers.get(&session).is_some_and(|p| g == Some(p.g)) {
                         peers.remove(&session);
                     }
                     if claimed { claims.remove(&session); }
@@ -338,7 +337,7 @@ async fn run(sockets: HashMap<SocketAddr, Arc<UdpSocket>>, mut rx: mpsc::Receive
 
 /// ICE lite uses local candidates internally. The wire answer advertises the page endpoint unless
 /// --rtc-addr supplied the advertised address. The answer goes out through `reply`.
-fn answer(sdp: &str, g: serde_json::Value, addrs: &[SocketAddr], reply: mpsc::Sender<Bytes>, endpoint: Option<&[SocketAddr]>) -> Result<Peer> {
+fn answer(sdp: &str, g: u64, addrs: &[SocketAddr], reply: mpsc::Sender<Bytes>, endpoint: Option<&[SocketAddr]>) -> Result<Peer> {
     let offer = SdpOffer::from_sdp_string(sdp).context("offer")?;
     let mut rtc = Rtc::builder().set_ice_lite(true).set_stats_interval(None).build(Instant::now());
     for addr in addrs {
@@ -360,7 +359,7 @@ fn event(session: u64, peer: &mut Peer, e: Event, open: &Open) {
         Event::ChannelOpen(cid, label) => {
             tracing::info!(session, label, "WebRTC: data channel open");
             peer.channel = Some(cid);
-            open.lock().unwrap().insert(session, Claim { g: peer.g.clone(), active: true, dropped: 0, queued: 0 });
+            open.lock().unwrap().insert(session, Claim { g: peer.g, active: true, dropped: 0, queued: 0 });
         }
         Event::ChannelClose(cid) => {
             if peer.channel == Some(cid) {
@@ -429,16 +428,20 @@ mod endpoint_tests {
         reply.try_send(protocol::rtc(&serde_json::json!({}))).unwrap();
         let mut hub = Hub { tx, open: Default::default(), ice_servers: Default::default(), page_endpoint: true };
         let invalid = serde_json::json!({"host": "", "port": 0});
-        tokio::time::timeout(Duration::from_millis(100), hub.offer(1, String::new(), 1.into(), reply.clone(), Some(&invalid))).await.unwrap();
+        tokio::time::timeout(Duration::from_millis(100), hub.offer(1, String::new(), 1, reply.clone(), Some(&invalid))).await.unwrap();
+        assert!(rx.try_recv().is_err());
+        tokio::time::timeout(Duration::from_millis(100), hub.offer(1, String::new(), 1, reply.clone(), None)).await.unwrap();
         assert!(rx.try_recv().is_err());
         hub.page_endpoint = false;
-        hub.offer(1, String::new(), 1.into(), reply, Some(&invalid)).await;
+        hub.offer(1, String::new(), 1, reply.clone(), Some(&invalid)).await;
+        assert!(matches!(rx.recv().await, Some(Msg::Offer { endpoint: None, .. })));
+        hub.offer(1, String::new(), 1, reply, None).await;
         assert!(matches!(rx.recv().await, Some(Msg::Offer { endpoint: None, .. })));
     }
 
     #[tokio::test]
     async fn endpoint_resolution_and_wire_candidates() {
-        assert!(resolve_endpoint(None).await.unwrap().is_none());
+        assert!(resolve_endpoint(None).await.is_err());
         for value in [serde_json::json!({"host": "", "port": 443}), serde_json::json!({"host": "localhost", "port": 0}), serde_json::json!({"host": "localhost", "port": 65536})] {
             assert!(resolve_endpoint(Some(&value)).await.is_err());
         }
@@ -446,7 +449,7 @@ mod endpoint_tests {
         let mut endpoints = vec![vec!["192.0.2.1:443".parse().unwrap(), "[2001:db8::1]:443".parse().unwrap()]];
         for host in ["127.0.0.1", "::1", "localhost"] {
             let value = serde_json::json!({"host": host, "port": 9443});
-            let addrs = resolve_endpoint(Some(&value)).await.unwrap().unwrap();
+            let addrs = resolve_endpoint(Some(&value)).await.unwrap();
             assert!(addrs.iter().all(|addr| addr.port() == 9443 && addr.ip().is_loopback()));
             endpoints.push(addrs);
         }

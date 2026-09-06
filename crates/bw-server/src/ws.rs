@@ -287,11 +287,10 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                             let Some(state) = app.stream_state(id) else { break Some((UNAUTHORIZED, "token rotated")) };
                             if !send(&mut socket, state).await { break None }
                         }
-                        Some(ClientMsg::Rtc(v)) => match (&app.rtc, v.get("offer").and_then(|o| o.as_str())) {
-                            (Some(hub), Some(sdp)) => hub.offer(id, sdp.to_string(), v.get("g").cloned().unwrap_or_default(), etx.clone(), v.get("endpoint")).await,
+                        Some(ClientMsg::Rtc { g, message: v }) => match (&app.rtc, v.get("offer").and_then(|o| o.as_str())) {
+                            (Some(hub), Some(sdp)) => hub.offer(id, sdp.to_string(), g, etx.clone(), v.get("endpoint")).await,
                             (Some(hub), None) if v.get("close").and_then(|b| b.as_bool()) == Some(true) => {
-                                let g = v.get("g").cloned().unwrap_or_default();
-                                if hub.close_attempt(id, g.clone()).await {
+                                if hub.close_attempt(id, g).await {
                                     if !send(&mut socket, protocol::rtc(&serde_json::json!({ "keyframe": true, "g": g }))).await { break None; }
                                     app.viewer_message(id, key, ClientMsg::RequestKeyframe);
                                 }
@@ -479,12 +478,11 @@ pub async fn window_session(mut socket: WebSocket, app: Arc<App>, id: u64) {
                             let _ = etx.try_send(state(codec, quality, want_codec, preset));
                             cmd
                         }
-                        Some(ClientMsg::Rtc(v)) => {
+                        Some(ClientMsg::Rtc { g, message: v }) => {
                             match (&app.rtc, v.get("offer").and_then(|o| o.as_str())) {
-                                (Some(hub), Some(sdp)) => hub.offer(rtc_key, sdp.to_string(), v.get("g").cloned().unwrap_or_default(), etx.clone(), v.get("endpoint")).await,
+                                (Some(hub), Some(sdp)) => hub.offer(rtc_key, sdp.to_string(), g, etx.clone(), v.get("endpoint")).await,
                                 (Some(hub), None) if v.get("close").and_then(|b| b.as_bool()) == Some(true) => {
-                                    let g = v.get("g").cloned().unwrap_or_default();
-                                    if hub.close_attempt(rtc_key, g.clone()).await {
+                                    if hub.close_attempt(rtc_key, g).await {
                                         if !send(&mut socket, protocol::rtc(&serde_json::json!({ "keyframe": true, "g": g }))).await { break None; }
                                         control.request_keyframe();
                                         let _ = app.commands.send(Command::RequestFullFrame);

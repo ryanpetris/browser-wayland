@@ -175,7 +175,7 @@ try {
       assert.deepEqual(await page.evaluate(() => [bw.store.get().choice.quality, hellos[0][4], qualityStates[0].bitrate_kbps]), ['max', 5, 25000]);
       await page.context().close();
     }
-    for (const hello of [[0x81, 0, 16], [0x81, 0, 16, 0, 0], [0x81, 0, 16, 0, 255]]) {
+    for (const hello of [[0x81, 0, 16], [0x81, 0, 16, 0], [0x81, 0, 16, 0, 0], [0x81, 0, 16, 0, 255]]) {
       const ws = new WebSocket(origin.replace('http:', 'ws:') + '/ws' + (id ? '/window/' + id : ''));
       ws.binaryType = 'arraybuffer';
       let state;
@@ -183,8 +183,13 @@ try {
       try {
         await new Promise((resolve, reject) => { ws.addEventListener('open', resolve, { once: true }); ws.addEventListener('error', reject, { once: true }); });
         ws.send(new Uint8Array([0x80, ...new TextEncoder().encode(token)])); ws.send(new Uint8Array(hello));
-        await waitFor(() => state);
-        assert.equal(state.preset, 'max'); assert.equal(state.bitrate_kbps, 25000); assert.equal(state.auto_codec, true);
+        if (hello.length < 5) {
+          await waitFor(() => ws.readyState === WebSocket.CLOSED);
+          assert.equal(state, undefined, 'short HELLO cannot start a stream');
+        } else {
+          await waitFor(() => state);
+          assert.equal(state.preset, 'max'); assert.equal(state.bitrate_kbps, 25000); assert.equal(state.auto_codec, true);
+        }
       } finally { ws.close(); }
     }
   }

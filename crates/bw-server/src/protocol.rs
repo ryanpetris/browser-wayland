@@ -46,7 +46,7 @@ pub const FILE_RESULT: u8 = 0x13;
 // client -> server
 /// `[AUTH][token as UTF-8]`: must be the first message on a new socket; nothing else is processed before it.
 pub const AUTH: u8 = 0x80;
-/// `[HELLO][u8 hw][u8 sw]`: codec families the browser decodes (bit0 H.264, bit1 HEVC, bit2 VP9), with/without hardware.
+/// `[HELLO][u8 hw][u8 sw][u8 codec][u8 quality]`: decoder masks, codec choice and quality ceiling.
 pub const HELLO: u8 = 0x81;
 pub const RESIZE: u8 = 0x82;
 pub const MOTION_ABS: u8 = 0x83;
@@ -308,7 +308,7 @@ pub fn audio(pts_us: u64, data: &[u8], seq: u16) -> Bytes {
 
 #[derive(Debug, PartialEq)]
 pub enum ClientMsg {
-    /// The browser's decoders and optional codec and quality choices.
+    /// The browser's decoders and codec and quality choices.
     Hello { hw: u8, sw: u8, codec: Option<Codec>, quality: Preset },
     Resize { css_w: u16, css_h: u16, dpr: f32 },
     MotionAbs { x: f32, y: f32 },
@@ -333,7 +333,7 @@ pub enum ClientMsg {
     Mic(Bytes),
     Cam(Bytes),
     /// `{"offer": "<sdp>", "g": 1}` or `{"close": true, "g": 1}` (see `RTC_CLIENT`).
-    Rtc(serde_json::Value),
+    Rtc { g: u64, message: serde_json::Value },
     /// The page's second of video (see `REPORT`).
     Report { delay_ms: u16, dropped: u16 },
 }
@@ -370,8 +370,8 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         HELLO => ClientMsg::Hello {
             hw: u8_at(1)?,
             sw: u8_at(2)?,
-            codec: u8_at(3).and_then(|id| CODECS.get(id.checked_sub(1)? as usize)).map(|(c, _)| *c),
-            quality: u8_at(4).map_or(Preset::default(), Preset::from_id),
+            codec: u8_at(3)?.checked_sub(1).and_then(|id| CODECS.get(id as usize)).map(|(c, _)| *c),
+            quality: Preset::from_id(u8_at(4)?),
         },
         RESIZE => ClientMsg::Resize { css_w: u16_at(1)?, css_h: u16_at(3)?, dpr: f32_at(5)? },
         MOTION_ABS => ClientMsg::MotionAbs { x: f32_at(1)?, y: f32_at(5)? },
@@ -394,7 +394,11 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         MIC if (2..=65_537).contains(&b.len()) => ClientMsg::Mic(Bytes::copy_from_slice(&b[1..])),
         CAM => ClientMsg::Cam(Bytes::copy_from_slice(b.get(1..)?)),
         MIXER_CLIENT => ClientMsg::Mixer(if b.len() <= 4097 { serde_json::from_slice(&b[1..]).map_err(|_| "Malformed mixer command.") } else { Err("Mixer command is too large.") }),
-        RTC_CLIENT => ClientMsg::Rtc(serde_json::from_slice(&b[1..]).ok()?),
+        RTC_CLIENT => {
+            let message: serde_json::Value = serde_json::from_slice(&b[1..]).ok()?;
+            let g = message.get("g")?.as_u64()?;
+            ClientMsg::Rtc { g, message }
+        },
         REPORT => ClientMsg::Report { delay_ms: u16_at(1)?, dropped: u16_at(3)? },
         _ => return None,
     })
@@ -426,10 +430,32 @@ mod tests {
                 assert_eq!(state["auto_codec"], true);
             }
         }
+        assert_eq!(decode(&[HELLO, 0, 16]), None);
+        assert_eq!(decode(&[HELLO, 0, 16, 0]), None);
         assert_eq!(Preset::named("auto"), None);
         assert_eq!(Preset::default(), Preset::Max);
-        for packet in [vec![HELLO, 0, 16], vec![HELLO, 0, 16, 0], vec![HELLO, 0, 16, 0, 0], vec![HELLO, 0, 16, 0, 255]] {
+        for packet in [vec![HELLO, 0, 16, 0, 0], vec![HELLO, 0, 16, 0, 255]] {
             assert_eq!(decode(&packet), Some(ClientMsg::Hello { hw: 0, sw: 16, codec: None, quality: Preset::Max }));
+        }
+    }
+
+    #[test]
+    fn rtc_requires_an_integer_generation() {
+        for operation in [serde_json::json!({ "offer": "sdp" }), serde_json::json!({ "close": true })] {
+            let packet = |v: &serde_json::Value| {
+                let mut b = vec![RTC_CLIENT];
+                b.extend(serde_json::to_vec(v).unwrap());
+                b
+            };
+            assert_eq!(decode(&packet(&operation)), None);
+            for invalid in [serde_json::json!(null), serde_json::json!("1"), serde_json::json!(-1), serde_json::json!(1.5), serde_json::json!(true)] {
+                let mut v = operation.clone();
+                v["g"] = invalid;
+                assert_eq!(decode(&packet(&v)), None);
+            }
+            let mut v = operation;
+            v["g"] = 1.into();
+            assert_eq!(decode(&packet(&v)), Some(ClientMsg::Rtc { g: 1, message: v }));
         }
     }
 

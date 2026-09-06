@@ -44,7 +44,7 @@ export function openRtc({ iceServers, endpoint, g, signal, onMessage, onOpen, on
   // the offer goes out with the candidates in it, once gathering is done (host ones come at once; a STUN
   // or TURN one takes a round trip or an allocation, so the wait is longer with servers configured): the
   // server answers with the reachable endpoint and does no trickle; `g` comes back with the answer
-  const offer = () => { if (!offered && !closed && pc.localDescription) { offered = true; clearTimeout(gatherTimer); signal({ offer: pc.localDescription.sdp, g, ...(endpoint && { endpoint }) }); } };
+  const offer = () => { if (!offered && !closed && pc.localDescription) { offered = true; clearTimeout(gatherTimer); signal({ offer: pc.localDescription.sdp, g, endpoint }); } };
   pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') offer(); };
   pc.createOffer().then(o => { if (!closed) return pc.setLocalDescription(o); }).then(() => {
     if (!closed && !offered) gatherTimer = setTimeout(offer, iceServers.length ? RTC_TIMING.gatherWithServers : RTC_TIMING.gather);

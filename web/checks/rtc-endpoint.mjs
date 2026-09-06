@@ -34,6 +34,30 @@ try {
       assert(ready, await readFile(root + '/desktop.log', 'utf8'));
       const token = (await readFile(root + '/config/browser-wayland/token', 'utf8')).trim();
       await context.addInitScript(() => {
+        window.endpointReplies = [];
+        let omit = true;
+        const Socket = WebSocket;
+        window.WebSocket = class extends Socket {
+          constructor(...args) {
+            super(...args);
+            this.addEventListener('message', ({data}) => {
+              const bytes = new Uint8Array(data);
+              if (bytes[0] === 0x0d) endpointReplies.push(JSON.parse(new TextDecoder().decode(bytes.subarray(1))));
+            });
+          }
+          send(data) {
+            const bytes = new Uint8Array(data);
+            if (bytes[0] === 0x95 && omit) {
+              const v = JSON.parse(new TextDecoder().decode(bytes.subarray(1)));
+              if (v.offer) {
+                omit = false;
+                delete v.endpoint;
+                data = new Uint8Array([0x95, ...new TextEncoder().encode(JSON.stringify(v))]);
+              }
+            }
+            super.send(data);
+          }
+        };
         const Original = RTCPeerConnection;
         window.RTCPeerConnection = class extends Original {
           constructor(...args) { super(...args); window.testPeer = this; }
@@ -49,6 +73,7 @@ try {
         const pair = [...stats.values()].find(s => s.type === 'candidate-pair' && s.nominated);
         return stats.get(pair.remoteCandidateId);
       });
+      assert.equal(await page.evaluate(() => endpointReplies.some(v => v.close && v.reason === 'Page endpoint resolution failed')), args.length === 0, 'page endpoint is required unless rtc-addr overrides it');
       assert.equal(remote.port, expectedPort);
       const expected = args.length ? ['127.0.0.1'] : (await lookup(host.replace(/^\[|\]$/g, ''), { all: true })).map(a => a.address);
       assert(expected.includes(remote.address), JSON.stringify(remote));
