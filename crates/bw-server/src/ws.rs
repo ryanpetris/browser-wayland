@@ -207,21 +207,22 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
 
     let mut mixer_state = app.mixer.as_ref().map(|m| m.state.clone());
     let mut mixer_levels = app.mixer.as_ref().map(|m| m.levels.clone());
+    let mut mixer_subscribed = false;
     let (mut info, mut seq, mut failed) = (None::<bw_core::StreamInfo>, 0u16, false);
     let mut ping = tokio::time::interval(Duration::from_secs(1));
     let (mut unanswered, started) = (0, Instant::now());
     let ended = loop {
         tokio::select! {
             changed = async { match &mut mixer_state { Some(state) => state.changed().await, None => std::future::pending().await } } => {
+                if app.key_for(&token).is_none() { break Some((UNAUTHORIZED, "token rotated")); }
                 if changed.is_err() { mixer_state = None; }
                 if !send(&mut socket, protocol::mixer_state(&app.mixer_state())).await { break None }
             },
-            changed = async { match &mut mixer_levels { Some(levels) => levels.changed().await, None => std::future::pending().await } } => {
+            changed = async { match &mut mixer_levels { Some(levels) => levels.changed().await, None => std::future::pending().await } }, if mixer_subscribed => {
+                if app.key_for(&token).is_none() { break Some((UNAUTHORIZED, "token rotated")); }
                 if changed.is_err() { mixer_levels = None; }
-                if app.mixer_subscribed(id) {
-                    let levels = app.mixer.as_ref().map(|m| m.levels.borrow().clone()).unwrap_or_default();
-                    if !send(&mut socket, protocol::mixer_levels(&levels)).await { break None }
-                }
+                let levels = app.mixer.as_ref().map(|m| m.levels.borrow().clone()).unwrap_or_default();
+                if !send(&mut socket, protocol::mixer_levels(&levels)).await { break None }
             },
             msg = rx.recv() => match msg {
                 Some(StreamMsg::Info(i)) => {
@@ -275,7 +276,9 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
                     if app.key_for(&token).is_none() {
                         break Some((UNAUTHORIZED, "token rotated")); // a queued command must not get through after a rotation
                     }
-                    match protocol::decode(&b) {
+                    let decoded = protocol::decode(&b);
+                    if let Some(ClientMsg::Mixer(Ok(bw_core::audio::Command::Subscribe { enabled }))) = &decoded { mixer_subscribed = *enabled; }
+                    match decoded {
                         Some(ClientMsg::Notify(n)) if key == Key::Control => app.spawn_notification_action(n),
                         Some(ClientMsg::Stream(choice)) => {
                             let (new_codec, preset) = app.apply_choice(id, &choice);
@@ -324,12 +327,12 @@ pub async fn session(mut socket: WebSocket, app: Arc<App>) {
     {
         let mut v = app.viewers.lock().unwrap();
         v.sessions.remove(&id);
-        app.mixer_audience(&v);
         if v.controller == Some(id) {
             // the oldest remaining control-token session takes over
             let next = v.sessions.iter().filter(|(_, s)| s.key == Key::Control).map(|(id, _)| *id).min();
             app.set_controller(&mut v, next);
         }
+        app.mixer_audience(&v);
     }
     let _ = app.commands.send(Command::ViewerStream { key: id, sink: None });
     if let Some(hub) = &app.rtc {

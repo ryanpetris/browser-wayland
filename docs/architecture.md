@@ -61,7 +61,11 @@ receives application playback; a native mono loopback publishes the browser micr
 discovery and host routing state are excluded. The main process owns service startup and cleanup.
 A supervised helper process runs GStreamer `pipewiresrc` capture → stereo Opus and browser Opus →
 `pipewiresink` microphone injection, connected through explicit native socket descriptors. Framed
-Opus crosses the helper's pipes; the existing browser packet format is unchanged. The helper lets the
+Opus and typed mixer messages cross the helper's pipes; browser audio packet framing remains separate.
+The helper's native management loop subscribes to graph state and creates shared passive meters only
+while viewers subscribe. Controller epochs use a shared atomic mapping so delayed helper input cannot
+authorize queued commands after handoff. Authenticated desktop sockets receive authoritative snapshots
+and subscribed scalar levels through latest-value channels. The helper lets the
 owner bound GStreamer initialization and stop pipelines before destroying services, even when plugin
 startup blocks. The application launch path exports private native/Pulse selectors and clears inherited
 device overrides. See [session audio](session-audio.md) for readiness, failure and compatibility checks.

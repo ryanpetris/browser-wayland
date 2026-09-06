@@ -138,14 +138,39 @@ fn main() -> Result<()> {
     rig.wait("explicit target restored", |r| r.state.nodes.iter().any(|n| n.id == native && n.targets == [other.clone()]) && r.peak(&other, 0.0125))?;
     rig.send(2, 2, MixerCommand::Default { id: other.clone() })?;
     rig.wait("WirePlumber changes the session default", |r| r.state.nodes.iter().any(|n| n.id == other && n.is_default) && r.state.nodes.iter().any(|n| n.id == output && !n.is_default))?;
-    let next = Probe(Command::new("gst-launch-1.0").args(["-q", "audiotestsrc", "is-live=true", "freq=1320", "volume=0.15", "!", "audioconvert", "!", "audio/x-raw,rate=48000,channels=2", "!", "pipewiresink", "sync=false", "stream-properties=properties,node.name=NextTest,node.description=NextTest,media.name=NextTest"]).stdout(Stdio::null()).spawn()?);
+    let next_player = || -> Result<Probe> { Ok(Probe(Command::new("gst-launch-1.0").args(["-q", "audiotestsrc", "is-live=true", "freq=1320", "volume=0.15", "!", "audioconvert", "!", "audio/x-raw,rate=48000,channels=2", "!", "pipewiresink", "sync=false", "stream-properties=properties,node.name=NextTest,node.description=NextTest,media.name=NextTest"]).stdout(Stdio::null()).spawn()?)) };
+    let next = next_player()?;
     rig.wait("new application uses changed default", |r| r.state.nodes.iter().any(|n| n.name == "NextTest" && n.targets == [other.clone()]))?;
     let removed = rig.id("NextTest")?;
+    let global_id = || -> Result<u64> {
+        graph()?.as_array().context("graph array")?.iter().find(|o| o["info"]["props"]["node.name"] == "NextTest").context("NextTest global")?["id"].as_u64().context("global id")
+    };
+    let mut used_ids = HashMap::from([(global_id()?, removed.clone())]);
     drop(next);
     rig.wait("application removal is live", |r| !r.state.nodes.iter().any(|n| n.id == removed))?;
     rig.errors.clear();
     rig.send(2, 2, MixerCommand::Mute { id: removed, value: false })?;
     rig.wait("removed application rejects controls", |r| r.errors.iter().any(|(_, message)| message.contains("earlier connection")))?;
+    let mut reused = false;
+    for _ in 0..12 {
+        let next = next_player()?;
+        rig.wait("application restart is live", |r| r.state.nodes.iter().any(|n| n.name == "NextTest" && n.mute == Some(false)))?;
+        let current = rig.id("NextTest")?;
+        rig.wait("restarted application has its own meter", |r| r.peak(&current, 0.15))?;
+        let global = global_id()?;
+        if let Some(stale) = used_ids.insert(global, current.clone()) {
+            ensure!(stale != current, "reused global retained an old object identifier");
+            rig.errors.clear();
+            rig.send(2, 2, MixerCommand::Mute { id: stale, value: true })?;
+            rig.wait("reused numeric ID rejects previous object controls", |r| r.errors.iter().any(|(_, message)| message.contains("earlier connection")))?;
+            ensure!(rig.state.nodes.iter().any(|n| n.id == current && n.mute == Some(false)) && rig.peak(&current, 0.15), "stale command affected replacement stream");
+            reused = true;
+        }
+        drop(next);
+        rig.wait("restarted application exits cleanly", |r| !r.state.nodes.iter().any(|n| n.id == current))?;
+        if reused { break; }
+    }
+    ensure!(reused, "numeric global ID reuse was not exercised");
     let old_generation = rig.state.generation.clone();
     let graph = graph()?;
     let client = graph.as_array().context("graph array")?.iter().find(|o| o["type"] == "PipeWire:Interface:Client" && o["info"]["props"]["application.id"] == "browser-wayland-mixer").context("management client")?["id"].as_u64().context("client id")?;

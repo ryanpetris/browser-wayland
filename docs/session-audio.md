@@ -103,8 +103,9 @@ policy versions and reports missing elements during pipeline initialization.
 | Debian/Ubuntu | `pipewire`, `pipewire-pulse`, `wireplumber`, `gstreamer1.0-pipewire`, `pulseaudio-utils` |
 | Fedora | `pipewire`, `pipewire-pulseaudio`, `wireplumber`, `pipewire-gstreamer`, `pulseaudio-utils` |
 
-Check versions as well as package names. Audio packages are optional for installations using
+Check versions as well as package names. Audio services are optional for installations using
 `--no-audio`; Debian metadata recommends them and Arch metadata lists them as optional dependencies.
+The native PipeWire client library is a linked runtime dependency even when audio is disabled.
 The Docker image contains the complete audio stack and the application starts it.
 
 Runtime isolation does not guarantee that distribution packages coexist with host PulseAudio.

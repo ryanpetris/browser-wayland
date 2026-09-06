@@ -26,7 +26,7 @@ GStreamer (core and base), libgbm, libEGL and libxkbcommon; `make` builds the vi
   plugins, which encodes on the CPU (the desktop then runs at 30 Hz) for machines without a usable GPU encoder.
 - `xorg-xwayland` for X11 clients. Audio requires PipeWire 1.4.2+, its Pulse compatibility service,
   WirePlumber 0.5.6+, the native GStreamer PipeWire plugin and `pactl`. See [session audio](docs/session-audio.md)
-  for packages and host-service compatibility. `--no-audio` needs none of these audio dependencies.
+  for packages and host-service compatibility. `--no-audio` needs no audio services; the native PipeWire client library remains a runtime dependency.
 - Rust stable and Node 24 to build. The browser needs WebCodecs (Chromium, Firefox 130+, Safari 26+).
 
 ## Run
@@ -69,6 +69,11 @@ Startup commands, menu/API launches and their descendants receive the private au
 Applications play into the session output, which is encoded as 48 kHz stereo Opus for the browser.
 The viewer's microphone button sends the controlling browser's microphone into the session microphone.
 Stopping capture stops the browser's recording indicator and leaves silence for recording applications.
+
+Open **Mixer** in the status bar for session devices and individual application streams, with actual
+peak meters, volume and mute. Read-only viewers can inspect; the controlling viewer changes the shared
+session. Muting the session microphone does not stop browser capture. With multiple session endpoints,
+the mixer also offers routing and default selection through WirePlumber.
 
 `--no-audio` starts no audio services. Audio startup or service failure leaves the desktop running with
 audio unavailable. Shutdown stops the audio pipelines before the private services. For clients launched

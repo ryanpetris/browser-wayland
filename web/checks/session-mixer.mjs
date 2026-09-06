@@ -31,8 +31,19 @@ try {
   const page = await browser.newPage();
   await page.addInitScript(() => {
     const Original = window.WebSocket;
+    window.originalSocketSend = Original.prototype.send;
     window.WebSocket = class extends Original {
-      constructor(...args) { super(...args); window.checkSocket = this; }
+      constructor(...args) {
+        super(...args); window.checkSocket = this; window.mixerLevelCount = 0;
+        this.addEventListener('message', ({ data }) => { if (data instanceof ArrayBuffer && new Uint8Array(data)[0] === 0x10) window.mixerLevelCount++; });
+      }
+      send(data) {
+        const bytes = new Uint8Array(data.buffer ?? data, data.byteOffset ?? 0, data.byteLength);
+        if (window.holdMixerVolume && bytes[0] === 0x97 && JSON.parse(new TextDecoder().decode(bytes.subarray(1))).op === 'volume') {
+          window.heldMixerVolume = data; return;
+        }
+        super.send(data);
+      }
     };
   });
   await page.goto('http://127.0.0.1:8088/#token=' + token);
@@ -125,6 +136,10 @@ try {
   const graph = () => JSON.parse(execFileSync('pw-dump', { env: clientEnv, timeout: 2000 }));
   const meters = () => graph().filter(o => o.info?.props?.['node.name'] === 'browser-wayland-meter');
   await waitFor(() => meters().length === 4);
+  const beforeLevels = await page.evaluate(() => window.mixerLevelCount);
+  await page.waitForTimeout(1100);
+  const levelCount = await page.evaluate(() => window.mixerLevelCount) - beforeLevels;
+  assert(levelCount >= 8 && levelCount <= 13, 'meter updates stay around 10 Hz: ' + levelCount);
   console.log('multiple native/Pulse streams in one application have separate rows and shared monitors');
   for (const target of [page, participant]) await target.getByRole('button', { name: 'Close mixer', exact: true }).click();
   assert.equal(meters().length, 4, 'read-only subscriber retains shared meters');
@@ -132,6 +147,79 @@ try {
   await waitFor(() => meters().length === 0);
   for (const target of [page, participant, observer]) assert.equal(await target.evaluate(() => bw.store.get().mic), false);
   console.log('last subscriber removes all monitors without starting browser capture');
+  await participant.close();
+  await page.waitForFunction(() => bw.store.get().role === 'controller');
+  await page.getByRole('button', { name: 'Session audio mixer', exact: true }).click();
+  await waitFor(() => meters().length === 4);
+  await page.getByRole('button', { name: 'Fullscreen (browser shortcuts go to the desktop)', exact: true }).click();
+  await page.waitForFunction(() => !!document.fullscreenElement);
+  await waitFor(() => meters().length === 0);
+  await page.evaluate(() => document.exitFullscreen());
+  await waitFor(() => meters().length === 4);
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await waitFor(() => meters().length === 0);
+  await page.evaluate(() => { delete document.hidden; document.dispatchEvent(new Event('visibilitychange')); });
+  await waitFor(() => meters().length === 4);
+  console.log('hidden page and fullscreen suspend mixer monitoring; visible panel restores it');
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await page.evaluate(() => { window.holdMixerVolume = true; });
+  await row.getByRole('slider').fill('70');
+  await page.clock.runFor(100);
+  assert(await page.evaluate(() => !!window.heldMixerVolume));
+  await page.evaluate(() => bw.store.set({ mixerError: '' }));
+  await raw(page, { op: 'mute', id: 'stale:1', value: true });
+  await waitFor(() => page.evaluate(() => bw.store.get().mixerError.length > 0));
+  assert.equal(await row.getByRole('slider').inputValue(), '70', 'unrelated error preserves pending slider value');
+  await page.evaluate(() => { window.holdMixerVolume = false; originalSocketSend.call(checkSocket, window.heldMixerVolume); });
+  await waitFor(() => page.evaluate(id => Math.abs(bw.store.get().mixer.nodes.find(n => n.id === id).volume - 70) < .1, nativeId));
+  await page.clock.resume();
+  await page.evaluate(() => Object.defineProperty(checkSocket, 'bufferedAmount', { configurable: true, get: () => 300000 }));
+  await row.getByRole('slider').fill('65');
+  await page.waitForFunction(() => bw.store.get().mixerError.includes('not sent'));
+  assert.equal(await row.getByRole('slider').inputValue(), '70', 'socket backpressure immediately rolls back the unsent draft');
+  await page.evaluate(() => { delete checkSocket.bufferedAmount; });
+  console.log('controller departure hands off; unrelated errors preserve pending slider changes');
+  const generation = await page.evaluate(() => bw.store.get().mixer.generation);
+  const manager = graph().find(o => o.type === 'PipeWire:Interface:Client' && o.info.props['application.id'] === 'browser-wayland-mixer');
+  assert(manager);
+  execFileSync('pw-cli', ['destroy', String(manager.id)], { env: clientEnv, timeout: 2000 });
+  await page.waitForFunction(generation => bw.store.get().mixer.available && bw.store.get().mixer.generation !== generation && bw.store.get().mixer.nodes.some(n => n.name === 'MixerBrowserTest'), generation);
+  assert.equal(await page.evaluate(id => bw.store.get().mixer.nodes.some(n => n.id === id), nativeId), false);
+  await page.evaluate(() => bw.store.set({ mixerError: '' }));
+  await raw(page, { op: 'mute', id: nativeId, value: true });
+  await page.waitForFunction(() => bw.store.get().mixerError.includes('earlier connection'));
+  const currentId = await page.evaluate(() => bw.store.get().mixer.nodes.find(n => n.name === 'MixerBrowserTest').id);
+  await page.waitForFunction(id => bw.store.get().mixerLevels[id] > .03, currentId);
+  execFileSync('pw-cli', ['create-node', 'adapter', '{ factory.name = support.null-audio-sink node.name = OtherBrowser node.description = OtherBrowser media.class = Audio/Sink node.virtual = true node.always-process = true monitor.channel-volumes = true audio.position = [ FL FR ] object.linger = true }'], { env: clientEnv, timeout: 2000 });
+  await page.waitForFunction(() => bw.store.get().mixer.nodes.some(n => n.name === 'OtherBrowser'));
+  const otherId = await page.evaluate(() => bw.store.get().mixer.nodes.find(n => n.name === 'OtherBrowser').id);
+  await row.getByRole('combobox').selectOption(otherId);
+  await page.waitForFunction(([id, target]) => bw.store.get().mixer.nodes.find(n => n.id === id).targets.includes(target) && Math.abs(bw.store.get().mixerLevels[target] - .0343) < .002, [currentId, otherId]);
+  await row.getByRole('combobox').selectOption('');
+  await page.waitForFunction(id => !bw.store.get().mixer.nodes.find(n => n.name === 'MixerBrowserTest').targets.includes(id) && bw.store.get().mixerLevels[id] === 0, otherId);
+  await panel.getByRole('group', { name: 'OtherBrowser Output', exact: true }).getByRole('button', { name: 'Make default', exact: true }).click();
+  await page.waitForFunction(id => bw.store.get().mixer.nodes.find(n => n.id === id).is_default, otherId);
+  console.log('graph reconnect refreshes UI IDs; target/default widgets route real signal');
+  const rotated = await fetch('http://127.0.0.1:8088/api/token/rotate', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+  assert.equal(rotated.status, 200);
+  await page.waitForFunction(() => bw.store.get().status !== 'connected' && bw.store.get().mixer.nodes.length === 0);
+  await observer.waitForFunction(() => bw.store.get().status !== 'connected' && bw.store.get().mixer.nodes.length === 0);
+  const rejected = new WebSocket('ws://127.0.0.1:8088/ws');
+  rejected.binaryType = 'arraybuffer';
+  const leaked = []; let closed = 0;
+  rejected.onmessage = ({ data }) => { if ([0x0f, 0x10].includes(new Uint8Array(data)[0])) leaked.push(data); };
+  rejected.onclose = event => { closed = event.code; };
+  await waitFor(() => rejected.readyState === WebSocket.OPEN);
+  const auth = new TextEncoder().encode(token), packet = new Uint8Array(auth.length + 1);
+  packet[0] = 0x80; packet.set(auth, 1); rejected.send(packet);
+  rejected.send(new Uint8Array([0x81, 0, 16, 5, 0]));
+  await waitFor(() => closed);
+  assert.equal(closed, 4001); assert.equal(leaked.length, 0);
+  console.log('token rotation clears mixer UI; revoked credentials receive no mixer snapshot or levels');
+
+
+
   }
 
 } catch (error) {

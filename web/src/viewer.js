@@ -194,7 +194,7 @@ export function createViewer() {
     clearTimeout(mixerTimer); mixerTimer = 0; mixerVolumes.clear();
   }
 
-  function mixerCommand(command) {
+  function mixerCommand(command, onFailure) {
     if (state().role !== 'controller' || state().status !== 'connected' || !state().mixer.available) {
       store.set({ mixerError: 'Only the connected controlling viewer can change session audio.' });
       return false;
@@ -210,12 +210,12 @@ export function createViewer() {
         store.set({ mixerError: 'Too many pending audio changes. Try again.' });
         return false;
       }
-      mixerVolumes.set(command.id, command);
+      mixerVolumes.set(command.id, { command, onFailure });
       if (!mixerTimer) mixerTimer = setTimeout(() => {
         mixerTimer = 0;
         const commands = [...mixerVolumes.values()]; mixerVolumes.clear();
-        for (const command of commands) {
-          if (state().role === 'controller' && state().mixer.available && state().mixer.nodes.some(node => node.id === command.id)) sendMixer(command);
+        for (const { command, onFailure } of commands) {
+          if (state().role !== 'controller' || !state().mixer.available || !state().mixer.nodes.some(node => node.id === command.id) || !sendMixer(command)) onFailure?.();
         }
       }, 100);
       return true;
@@ -403,7 +403,6 @@ export function createViewer() {
         break;
       }
       case MIXER_ERROR:
-        cancelMixerVolumes();
         store.set({ mixerError: new TextDecoder().decode(new Uint8Array(buf, 1)) });
         break;
       case NOTICE:

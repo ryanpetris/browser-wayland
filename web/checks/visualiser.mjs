@@ -51,6 +51,11 @@ try {
   await page.waitForFunction(() => !!window.bw?.store);
   await page.evaluate(() => window.bw.store.set({ status: 'connected', role: 'viewer', audioAvailable: true, micAvailable: false }));
   assert.equal(chunks.length, 0, 'renderer must not load until opened');
+  await page.getByRole('button', { name: 'Session audio mixer', exact: true }).click();
+  await page.getByRole('region', { name: 'Session audio mixer', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Close mixer', exact: true }).click();
+  assert.equal(chunks.length, 0, 'mixer does not load the optional visualiser');
+
   if (disabled) {
     assert.equal(await page.getByRole('button', { name: 'Audio visualiser', exact: true }).count(), 0);
     console.log('disabled: no renderer files, imports, or controls');

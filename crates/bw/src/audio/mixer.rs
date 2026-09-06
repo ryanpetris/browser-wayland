@@ -461,12 +461,13 @@ fn connect(remote: &Path, requests: Rc<Receiver<Request>>, audience: Audience, s
                 Command::Default { .. } => node.is_default,
                 Command::Target { target, .. } => {
                     let target = target.as_ref().or_else(|| snapshot.nodes.iter().find(|n| Some(n.kind) == node.kind.target_kind() && n.is_default).map(|n| &n.id));
-                    target.is_some_and(|target| node.targets.len() == 1 && node.targets[0] == *target)
+                    target.is_some_and(|target| node.targets.contains(target))
                 }
                 Command::Subscribe { .. } => false,
             });
             if confirmed { return false; }
-            if node.is_none() || since.elapsed() >= Duration::from_secs(3) {
+            if node.is_none() { return false; }
+            if since.elapsed() >= Duration::from_secs(3) {
                 unconfirmed.push(*viewer); return false;
             }
             true

@@ -4,28 +4,23 @@ import { useStore } from '../store.js';
 const button = 'rounded border border-zinc-600 px-2 py-1 hover:bg-zinc-700 disabled:opacity-50 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-indigo-400';
 const directions = { output: 'Output', input: 'Input', playback: 'Playback', recording: 'Recording' };
 
-function MixerRow({ viewer, node, nodes, controls, routing, error }) {
+function MixerRow({ viewer, node, nodes, controls, routing }) {
   const peak = useStore(viewer.store, s => s.mixerLevels[node.id] ?? 0);
   const [draft, setDraft] = useState(null);
-  const [localError, setLocalError] = useState('');
-  const timer = useRef(0), volume = useRef(node.volume);
-  volume.current = node.volume;
+  const timer = useRef(0);
   useEffect(() => {
-    setDraft(null); setLocalError(''); clearTimeout(timer.current);
+    setDraft(null); clearTimeout(timer.current);
     return () => clearTimeout(timer.current);
-  }, [node.id, controls, error]);
+  }, [node.id, controls]);
   useEffect(() => {
-    if (draft !== null && Math.abs((node.volume ?? 0) - draft) < 0.6) { setDraft(null); clearTimeout(timer.current); }
+    if (draft !== null && Math.abs((node.volume ?? 0) - draft) < 0.1) { setDraft(null); clearTimeout(timer.current); }
   }, [node.volume, draft]);
 
   function changeVolume(value) {
-    setLocalError('');
-    if (!viewer.mixer.command({ op: 'volume', id: node.id, value })) { setDraft(null); return; }
+    if (!viewer.mixer.command({ op: 'volume', id: node.id, value }, () => setDraft(current => current === value ? null : current))) { setDraft(null); return; }
     setDraft(value); clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      setDraft(null);
-      if (Math.abs((volume.current ?? 0) - value) >= 0.6) setLocalError('Volume change was not confirmed.');
-    }, 1500);
+    // Bound the optimistic display; command errors come from the server.
+    timer.current = setTimeout(() => setDraft(null), 3500);
   }
 
   const targetKind = node.kind === 'playback' ? 'output' : node.kind === 'recording' ? 'input' : null;
@@ -58,8 +53,9 @@ function MixerRow({ viewer, node, nodes, controls, routing, error }) {
       {targetKind && <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
         <span>{directions[targetKind]}: {route || 'Not linked'}</span>
         {targets.length > 1 && <label>Target <select aria-label={`${node.name} target`} className="max-w-full rounded border border-zinc-600 bg-zinc-800 p-1 text-zinc-200 disabled:opacity-50"
-          disabled={!controls || !routing || !node.routing_writable} value={node.targets.length === 1 ? node.targets[0] : ''}
+          disabled={!controls || !routing || !node.routing_writable} value={node.targets.length === 1 ? node.targets[0] : '__current'}
           onChange={event => viewer.mixer.command({ op: 'target', id: node.id, target: event.target.value || null })}>
+          {node.targets.length !== 1 && <option value="__current" disabled>{node.targets.length ? 'Multiple targets' : 'Not linked'}</option>}
           <option value="">Follow session default</option>
           {targets.map(target => <option key={target.id} value={target.id}>{target.name}{target.is_default ? ' (default)' : ''}</option>)}
         </select></label>}
@@ -71,7 +67,6 @@ function MixerRow({ viewer, node, nodes, controls, routing, error }) {
       </div>
       <p className="text-[11px] text-zinc-500">{node.meter_before_volume ? 'Before stream volume and mute' : 'After volume and mute'}</p>
       {node.meter_error && <p className="mt-1 text-xs text-amber-300">Meter unavailable: {node.meter_error}</p>}
-      {localError && <p role="alert" className="mt-1 text-xs text-amber-300">{localError}</p>}
     </article>
   );
 }
@@ -117,7 +112,7 @@ export function MixerPanel({ viewer, hidden, onClose }) {
         : [...groups].map(([name, nodes]) => <div key={name} className="mt-3">
           <h2 className="mb-2 text-xs font-semibold text-zinc-400">{name}</h2>
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {nodes.map(node => <MixerRow key={node.id} viewer={viewer} node={node} nodes={snapshot.nodes} controls={controls} routing={snapshot.routing} error={error} />)}
+            {nodes.map(node => <MixerRow key={node.id} viewer={viewer} node={node} nodes={snapshot.nodes} controls={controls} routing={snapshot.routing} />)}
           </div>
         </div>)}
     </section>

@@ -234,6 +234,7 @@ impl Session {
             let mut ready = [0];
             if stdout.read_exact(&mut ready).is_err() || ready != [1] { return; }
             let _ = ready_tx.send(());
+            let mut pending_errors = std::collections::HashMap::new();
             loop {
                 let mut kind = [0];
                 if stdout.read_exact(&mut kind).is_err() { break; }
@@ -251,11 +252,14 @@ impl Session {
                         match event {
                             bw_core::audio::Event::State(state) => { mixer_state.send_replace(state); }
                             bw_core::audio::Event::Levels(levels) => { mixer_levels.send_replace(levels); }
-                            bw_core::audio::Event::Error { viewer, message } => { let _ = mixer_errors.try_send((viewer, message)); }
+                            bw_core::audio::Event::Error { viewer, message } => {
+                                if pending_errors.len() < 64 || pending_errors.contains_key(&viewer) { pending_errors.insert(viewer, message); }
+                            }
                         }
                     }
                     _ => break,
                 }
+                pending_errors.retain(|viewer, message| mixer_errors.try_send((*viewer, message.clone())).is_err());
             }
             mixer_state.send_replace(bw_core::audio::Snapshot { error: Some("Session mixer disconnected.".into()), ..Default::default() });
             mixer_levels.send_replace(Vec::new());

@@ -40,10 +40,6 @@ impl App {
         })
     }
 
-    pub(crate) fn mixer_subscribed(&self, id: u64) -> bool {
-        self.viewers.lock().unwrap().sessions.get(&id).is_some_and(|session| session.mixer_subscribed)
-    }
-
     pub(crate) fn mixer_message(&self, viewers: &mut Viewers, id: u64, command: Result<Command, &'static str>) {
         let result = (|| -> Result<(), &'static str> {
             let command = command?;
