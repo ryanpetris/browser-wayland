@@ -2,7 +2,6 @@
 
 use std::{borrow::Cow, cell::RefCell, os::unix::io::OwnedFd};
 
-use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::{
     backend::renderer::utils::with_renderer_surface_state,
     input::pointer::CursorImageSurfaceData,
@@ -31,7 +30,7 @@ use smithay::{
         },
         wayland_server::{
             Client, Resource,
-            protocol::{wl_buffer::WlBuffer, wl_data_device_manager::DndAction, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
+            protocol::{wl_buffer::WlBuffer, wl_data_device_manager::DndAction, wl_data_source::WlDataSource, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface},
         },
     },
     utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER, Serial},
@@ -265,6 +264,9 @@ impl CompositorHandler for State {
             self.cursor_status = CursorImageStatus::default_named();
             self.export_cursor();
         }
+        if self.dnd_icon.as_ref().is_some_and(|(s, _)| s == surface) {
+            self.dnd_icon = None;
+        }
         self.dirty = true;
     }
 
@@ -273,7 +275,6 @@ impl CompositorHandler for State {
         if let Some((icon, offset)) = self.dnd_icon.as_mut() && icon == surface {
             // a drag icon's hotspot moves with its buffer offsets
             with_states(surface, |s| *offset += s.cached_state.get::<SurfaceAttributes>().current().buffer_delta.take().unwrap_or_default());
-            self.dirty = true;
         }
         if !is_sync_subsurface(surface) {
             let mut root = surface.clone();
@@ -687,6 +688,11 @@ impl PrimarySelectionHandler for State {
 /// A client's drag: its icon follows the pointer in the picture while it lasts.
 impl ClientDndGrabHandler for State {
     fn started(&mut self, _source: Option<WlDataSource>, icon: Option<WlSurface>, _seat: Seat<Self>) {
+        if let Some(s) = &icon {
+            // not in the space, so it learns its output and scale here, as the cursor surface does
+            self.output.enter(s);
+            with_states(s, |states| with_fractional_scale(states, |f| f.set_preferred_scale(self.geometry.scale)));
+        }
         self.dnd_icon = icon.map(|s| (s, Point::default()));
         self.dirty = true;
     }

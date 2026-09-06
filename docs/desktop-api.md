@@ -181,9 +181,10 @@ tab opens and after an upload.
 
 Dragging local files over the stage is carried on as a drag on the desktop (`Drag` message; `State::drag`
 in `clipboard.rs`, `ServerDndGrabHandler` in `handlers.rs`). `dragenter` starts a compositor-owned drag
-(`start_dnd`) offering `text/uri-list` to copy or to move (a file manager takes the move, so the file
-leaves the transfer folder for the folder shown, and a drop on that folder itself, where the upload put
-it, changes nothing; an application that only copies keeps it there), from a synthetic left-button press made
+(`start_dnd`) offering `text/uri-list` to copy or to move (Thunar takes the move, so the file leaves the
+transfer folder for the folder shown, and a drop on that folder itself, where the upload put it, changes
+nothing; Nautilus copies, as GTK 4 prefers when both are offered, and so does an application that only
+copies, leaving the file in the transfer folder too), from a synthetic left-button press made
 over nothing so no client sees a press without its release; `dragover` is ordinary pointer motion, which
 the drag grab turns into `wl_data_device` enter/motion for the application under the pointer; `dragleave`
 lets go over nothing (`cancel`). The browser gives file contents only on `drop`, so the files are

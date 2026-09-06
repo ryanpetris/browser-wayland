@@ -228,7 +228,8 @@ pub struct State {
     pub drag_action: DndAction,
     pub drag_dropping: Option<Instant>,
     pub drag_taken: bool,
-    /// A client's drag icon and its offset from the pointer, drawn there while the drag lasts.
+    /// A client's drag icon and its offset from the pointer, drawn there while the drag lasts. (A drag a
+    /// finger starts would show it at the pointer: touch motion moves no pointer.)
     pub dnd_icon: Option<(WlSurface, Point<i32, Logical>)>,
     pub x11_display: Option<u32>,
     pub xwayland_pending: bool,
@@ -595,8 +596,12 @@ impl State {
             self.gpu.targets.resize(geo.width_px, geo.height_px); // a scale-only change keeps the buffers
             self.gpu.modifier_verified = false;
         }
-        if let CursorImageStatus::Surface(s) = &self.cursor_status {
-            // cursor surfaces aren't in the space, so relayout doesn't reach them
+        // cursor and drag-icon surfaces aren't in the space, so relayout doesn't reach them
+        let cursor = match &self.cursor_status {
+            CursorImageStatus::Surface(s) => Some(s),
+            _ => None,
+        };
+        for s in cursor.into_iter().chain(self.dnd_icon.as_ref().map(|(s, _)| s)) {
             smithay::wayland::compositor::with_states(s, |states| smithay::wayland::fractional_scale::with_fractional_scale(states, |f| f.set_preferred_scale(geo.scale)));
         }
         self.geometry = geo;

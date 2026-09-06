@@ -183,9 +183,9 @@ Drop a file on the page and it lands in the desktop's Downloads folder (`--files
 the Files tab of the side panel lists that folder, with download and delete, and an Upload button for
 browsers without drag and drop. The same folder is `GET`, `PUT` and `DELETE /api/files/{name}` on the API.
 Drag a file over the desktop itself and the application under the pointer sees a drag coming; let go and,
-once the file is uploaded, it is dropped there as a `file://` URI. A file manager moves it into the folder
-shown, so it lands there once; an application that only copies (an editor opening it) leaves it in the
-transfer folder.
+once the file is uploaded, it is dropped there as a `file://` URI, to copy or to move. Thunar moves it into
+the folder shown, so it lands there once; Nautilus copies (GTK 4 prefers that when both are offered) and an
+editor opening it only copies, so with those the file stays in the transfer folder as well.
 Files copied in a file manager inside the desktop show up in the status bar with a download button, and
 files copied on your machine paste into the desktop's file manager (they land in the folder first).
 
