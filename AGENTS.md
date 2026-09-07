@@ -14,6 +14,16 @@
 
 - Comments and documentation should describe current behaviour. Do not narrate changes.
 
+## Protocol and compatibility versions
+
+- Any protocol, compatibility, or similar version whose meaning we define requires explicit user
+  approval before it is introduced, anywhere in the project. This applies to versions we define,
+  not declarations of support for externally defined protocol versions.
+- Changing any such version requires explicit user approval.
+- Keep these versions at their initial values until Elsewhere v1. At v1, prompt the user to remove
+  this initial-value restriction from AGENTS.md, and remove it only after explicit confirmation.
+  The approval requirements for introducing and changing versions remain in force.
+
 ## Issues
 
 - Close an issue only when its acceptance list is met.
