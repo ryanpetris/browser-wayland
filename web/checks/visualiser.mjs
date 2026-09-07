@@ -172,6 +172,8 @@ try {
     await checkEdges(2);
   }
   assert.equal(await listeners(), clickListeners, 'no leaked window click listeners');
+  await panel.getByRole('combobox', { name: /^Style/ }).selectOption('bars');
+  await panel.getByRole('combobox', { name: /^Colours/ }).selectOption('classic');
   // Classic bars have coloured pixels only when the renderer draws a signal.
   // Check this canvas, since each open creates a fresh renderer and FFT input.
   const renderedImage = async signal => {
@@ -184,8 +186,10 @@ try {
         if (pixels[i + 3] && Math.max(pixels[i], pixels[i + 1], pixels[i + 2]) - Math.min(pixels[i], pixels[i + 1], pixels[i + 2]) > 30) coloured++;
       }
       return (signal ? coloured > 100 : coloured === 0 && pixels[3] === 255) && canvas.toDataURL();
-    }, signal, { timeout: 5000 });
-    return result.jsonValue();
+    }, signal, { timeout: 5000 }).catch(cause => {
+      throw new Error(`Visualiser did not render ${signal ? 'coloured signal bars' : 'silence with no coloured pixels'}`, { cause });
+    });
+    try { return await result.jsonValue(); } finally { await result.dispose(); }
   };
   const signalImage = await renderedImage(true);
   await page.evaluate(() => {
