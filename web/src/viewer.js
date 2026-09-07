@@ -820,7 +820,7 @@ export function createViewer() {
   // focus (so keys go to the desktop) unless the on-screen keyboard's field has it, which a tap must not
   // close
   function gesture(e) {
-    canvas.setPointerCapture(e.pointerId);
+    if (!document.pointerLockElement) canvas.setPointerCapture(e.pointerId);
     if (document.activeElement?.hasAttribute('data-keyboard')) e.preventDefault();
     else canvas.focus({ preventScroll: true });
     resumeAudio();

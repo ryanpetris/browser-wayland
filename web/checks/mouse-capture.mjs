@@ -69,6 +69,21 @@ try {
   assert.equal(await page.locator('footer [role=status]').innerText(), 'Press Left Ctrl + Left Alt to release mouse');
   assert.deepEqual(await canvas.boundingBox(), before, 'capture hint does not resize the desktop');
   assert(await page.locator('[data-captured-cursor]').isVisible());
+  const clicks = async () => {
+    await page.evaluate(() => { sent.length = 0; });
+    for (const button of ['left', 'right', 'middle', 'left']) {
+      await page.mouse.down({ button });
+      await page.mouse.up({ button });
+    }
+    assert.deepEqual(errors, [], 'captured clicks do not throw');
+    assert.deepEqual((await mousePackets()).filter(p => p[0] === BUTTON), [
+      [BUTTON, 0x10, 1, 1], [BUTTON, 0x10, 1, 0],
+      [BUTTON, 0x11, 1, 1], [BUTTON, 0x11, 1, 0],
+      [BUTTON, 0x12, 1, 1], [BUTTON, 0x12, 1, 0],
+      [BUTTON, 0x10, 1, 1], [BUTTON, 0x10, 1, 0],
+    ], 'every captured button press and release reaches the desktop');
+  };
+  await clicks();
   const move = async (x, y) => page.evaluate(([x, y]) => document.querySelector('canvas.stage').dispatchEvent(new PointerEvent('pointermove', { pointerType: 'mouse', movementX: x, movementY: y })), [x, y]);
   const lastMotion = async () => page.evaluate(({ MOTION_ABS, MOTION_REL }) => {
     const p = sent.filter(p => p[0] === MOTION_ABS || p[0] === MOTION_REL).at(-1), dv = new DataView(new Uint8Array(p).buffer);
@@ -81,6 +96,7 @@ try {
   await page.evaluate(type => packet([type, 1]), POINTER_LOCK);
   await move(12, -7); assert.deepEqual(await lastMotion(), [MOTION_REL, 12, -7]);
   assert.equal(await page.locator('[data-captured-cursor]').isVisible(), false);
+  await clicks();
   await page.evaluate(type => packet([type, 0]), POINTER_LOCK);
   await captured(); assert(await page.locator('[data-captured-cursor]').isVisible());
   await page.keyboard.press('ControlLeft+AltRight'); await captured();
@@ -90,6 +106,12 @@ try {
   await canvas.hover(); await page.mouse.wheel(0, 20);
   assert.deepEqual(await mousePackets(), [], 'released mouse input stays local');
   assert.equal(await page.locator('footer [role=status]').count(), 0);
+  await page.evaluate(type => packet([type, ...new Array(12).fill(0)]), CURSOR);
+  assert.equal(await canvas.evaluate(c => getComputedStyle(c).cursor), 'default', 'released mouse stays visible when the desktop hides its cursor');
+  await page.evaluate(() => elsewhere.setCaptureOnClick(false));
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('canvas.stage')).cursor === 'none');
+  await page.evaluate(() => elsewhere.setCaptureOnClick(true));
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('canvas.stage')).cursor === 'default');
   // Programmatic exit avoids Chromium's cooldown after its built-in unlock gesture.
   await page.waitForTimeout(1300);
   await canvas.click(); await captured();

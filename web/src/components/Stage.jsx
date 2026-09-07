@@ -9,6 +9,7 @@ import { MouseCaptureHint } from './StatusBar.jsx';
 import { Notifications } from './Notifications.jsx';
 
 export function Stage({ viewer, windowMode, borders, elements }) {
+  const releasedMouse = useStore(viewer.store, s => s.captureOnClick && !s.locked);
   const el = useRef(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   useEffect(() => {
@@ -32,7 +33,7 @@ export function Stage({ viewer, windowMode, borders, elements }) {
   }, [viewer]);
   return (
     <div ref={el} className="viewer-stage relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-black">
-      <canvas ref={viewer.attach} tabIndex={-1} className={`stage block outline-none ${windowMode ? '' : 'h-full w-full'}`} />
+      <canvas ref={viewer.attach} tabIndex={-1} className={`stage block outline-none ${windowMode ? '' : 'h-full w-full'} ${!windowMode && releasedMouse ? 'cursor-default!' : ''}`} />
       {(borders || elements) && <Overlay viewer={viewer} size={size} borders={borders} elements={elements} />}
       <MouseCaptureHint viewer={viewer} className={`absolute top-2 left-1/2 z-20 w-max max-w-[95%] -translate-x-1/2 rounded shadow-lg ${PIP ? 'flex' : 'hidden'}`} />
       <Banner viewer={viewer} />
