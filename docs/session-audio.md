@@ -6,6 +6,9 @@ directory remains usable. The services load distribution modules and policy, wit
 and persistent host routing state disabled. They do not enumerate ALSA, Bluetooth or video devices.
 This scopes the audio graph; it does not sandbox arbitrary applications running as the same user.
 
+The graph's minimum processing quantum is 1024 frames, or 21.33 ms at 48 kHz. This limits how far
+application latency requests can shorten the shared audio interval, at the cost of higher minimum audio latency.
+
 The graph has three virtual devices:
 
 | Name | Purpose |
