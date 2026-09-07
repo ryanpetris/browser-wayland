@@ -1013,6 +1013,7 @@ export function createViewer() {
   // the browser's paste event delivers the text or image, which goes to the desktop first, so the
   // application pastes what the browser had.
   let pendingClipboard = null, pendingPaste = null, pasteTimer, clipboardGen = 0, swallowKeyup = null;
+  const clearPasteTarget = () => canvas?.removeAttribute('contenteditable');
   function onClipboard(text) {
     clipboardGen++;
     pendingClipboard = null;
@@ -1054,6 +1055,7 @@ export function createViewer() {
   const sendKey = (code, pressed) => send(KEY, 3, dv => { dv.setUint16(1, code, true); dv.setUint8(3, pressed ? 1 : 0); });
   function flushPaste() {
     clearTimeout(pasteTimer); // a stale timer must not fire the next chord early
+    clearPasteTarget();
     if (!pendingPaste) return;
     const code = pendingPaste; pendingPaste = null;
     sendKey(code, true); sendKey(code, false);
@@ -1069,6 +1071,7 @@ export function createViewer() {
       // if the upload failed. Files are staged first and the clipboard then names them there.
       const chord = pendingPaste === KEYCODES.Insert ? 'shift+Insert' : 'ctrl+v';
       swallowKeyup = pendingPaste; pendingPaste = null; clearTimeout(pasteTimer);
+      clearPasteTarget();
       const batch = crypto.randomUUID();
       const put = image
         ? api('/api/clipboard', { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: image, signal: AbortSignal.timeout(5000) })
@@ -1100,6 +1103,8 @@ export function createViewer() {
     const code = KEYCODES[e.code];
     if (!code || e.repeat) return; // clients repeat keys themselves (wl_keyboard.repeat_info)
     if (e.type === 'keydown' && isPasteKey(e)) {
+      // Firefox needs an editable target for Ctrl+Shift+V. The paste handler prevents insertion.
+      if (e.target === canvas) canvas.setAttribute('contenteditable', 'true');
       // let the browser raise its paste event (no preventDefault); forward the key after it, or soon anyway
       pendingPaste = code;
       pasteTimer = setTimeout(flushPaste, 150);
@@ -1118,7 +1123,7 @@ export function createViewer() {
   window.addEventListener('keyup', onKey);
   // a deferred paste chord must not fire after its modifier was released; no key is held during a native
   // drag, and the release would let go of the drag while its files are still uploading
-  const releaseInput = () => { pendingPaste = null; clearTimeout(pasteTimer); send(BLUR, 0); };
+  const releaseInput = () => { pendingPaste = null; clearTimeout(pasteTimer); clearPasteTarget(); send(BLUR, 0); };
   const blur = () => { releaseKeys.clear(); pendingPaste = null; if (!dragging) releaseInput(); };
   window.addEventListener('blur', blur);
   document.addEventListener('visibilitychange', () => { if (document.hidden) blur(); });

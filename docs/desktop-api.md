@@ -501,9 +501,13 @@ in the same rig. DPR checks cover 1, 1.5 and 2. CDP omits the iframe media-query
 check supplies the event and verifies rearming and output scale. It does not simulate physically moving
 a window between monitors. Pointer-lock failure notices are exercised with error events.
 
-Chromium's clipboard-event check delivered text to the remote clipboard. In Firefox's headed native
-Ctrl+Shift+V check, no paste event reached the focused canvas and remote clipboard text stayed empty,
-both in the normal viewer and PiP. This is tracked in [#61](https://github.com/ryanpetris/elsewhere/issues/61).
+The focused canvas becomes editable only for a pending paste shortcut, so Firefox can dispatch
+Ctrl+Shift+V. The paste handler prevents insertion into the canvas and clears that attribute;
+key release, timeout and input release clear it too. The viewer's own fields keep native paste.
+`web/checks/clipboard-firefox.mjs` uses headed Firefox native key actions to verify trusted paste
+events and a terminal round trip in desktop, window and both PiP viewers. It also checks local-field
+isolation and read-only roles. Clipboard shortcuts reserved by the browser or operating system
+still follow that platform's rules.
 Copied-file download controls and microphone/camera controls remain in the normal viewer; Return takes
 you there. Pointer capture has an indicator and reports failure, but PiP cannot capture fullscreen
 browser shortcuts. The checks live in `web/checks/picture-in-picture.mjs` and
