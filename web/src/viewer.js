@@ -1061,6 +1061,7 @@ export function createViewer() {
     sendKey(code, true); sendKey(code, false);
   }
   document.addEventListener('paste', e => {
+    if (e.target === canvas) { clearPasteTarget(); e.preventDefault(); }
     if (isFormField(e.target) || state().role === 'viewer') return;
     e.preventDefault();
     const files = [...(e.clipboardData?.files ?? [])];
@@ -1087,7 +1088,15 @@ export function createViewer() {
   const isFormField = t => t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLButtonElement || t instanceof HTMLSelectElement;
   const releaseKeys = new Set();
   function onKey(e) {
-    if (isFormField(e.target) || !driving()) return;
+    if (isFormField(e.target)) return;
+    if (e.type === 'keydown' && !e.repeat && isPasteKey(e) && e.target === canvas
+        && ['controller', 'participant'].includes(state().role)) {
+      // Firefox needs an editable target for Ctrl+Shift+V. Paste never inserts into the canvas.
+      canvas.setAttribute('contenteditable', 'true');
+      clearTimeout(pasteTimer);
+      pasteTimer = setTimeout(flushPaste, 150);
+    }
+    if (!driving()) return;
     if (e.type === 'keyup') releaseKeys.delete(e.code);
     else if (e.code === 'ControlLeft' || e.code === 'AltLeft') releaseKeys.add(e.code);
     if (e.type === 'keydown' && !e.repeat && releaseKeys.has('ControlLeft') && releaseKeys.has('AltLeft')
@@ -1103,10 +1112,9 @@ export function createViewer() {
     const code = KEYCODES[e.code];
     if (!code || e.repeat) return; // clients repeat keys themselves (wl_keyboard.repeat_info)
     if (e.type === 'keydown' && isPasteKey(e)) {
-      // Firefox needs an editable target for Ctrl+Shift+V. The paste handler prevents insertion.
-      if (e.target === canvas) canvas.setAttribute('contenteditable', 'true');
       // let the browser raise its paste event (no preventDefault); forward the key after it, or soon anyway
       pendingPaste = code;
+      clearTimeout(pasteTimer);
       pasteTimer = setTimeout(flushPaste, 150);
       resumeAudio();
       return;

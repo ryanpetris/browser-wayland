@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "check:visualiser": "node checks/visualiser.mjs"
+    "check:visualiser": "node checks/visualiser.mjs",
+    "check:structured-input": "node checks/structured-input.mjs",
+    "check:clipboard-firefox": "node checks/clipboard-firefox.mjs"
   },
   "dependencies": {
     "audiomotion-analyzer": "4.5.4",

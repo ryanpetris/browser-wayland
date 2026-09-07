@@ -506,7 +506,9 @@ Ctrl+Shift+V. The paste handler prevents insertion into the canvas and clears th
 key release, timeout and input release clear it too. The viewer's own fields keep native paste.
 `web/checks/clipboard-firefox.mjs` uses headed Firefox native key actions to verify trusted paste
 events and a terminal round trip in desktop, window and both PiP viewers. It also checks local-field
-isolation and read-only roles. Clipboard shortcuts reserved by the browser or operating system
+isolation, pointer capture, read-only roles and fallback timer cleanup. A desktop participant can
+synchronize the clipboard without forwarding a paste key to the application.
+Clipboard shortcuts reserved by the browser or operating system
 still follow that platform's rules.
 Copied-file download controls and microphone/camera controls remain in the normal viewer; Return takes
 you there. Pointer capture has an indicator and reports failure, but PiP cannot capture fullscreen

@@ -48,7 +48,20 @@ try {
   await wait(() => js('return elsewhere.store.get().windows.some(w => w.app_id === "paste-check")'));
   await wait(async () => await contents(root + '/pasted') === '');
   const id = await js('return elsewhere.store.get().windows.find(w => w.app_id === "paste-check").id');
-  let expected = '';
+  let expected = '', clipboardText;
+  const paste = async text => {
+    await js('window.lastPaste = null; window.pasteTimers = []; return navigator.clipboard.writeText(arguments[0])', text);
+    await keys(['\uE009', '\uE008', 'v']);
+    await wait(() => js('return window.lastPaste?.trusted && lastPaste.text === arguments[0]', text));
+    await wait(() => js('return elsewhere.clipboard.read().then(text => text === arguments[0])', text));
+    await keys(['\uE007']);
+    expected += text + '\n';
+    clipboardText = text;
+    await wait(async () => await contents(root + '/pasted') === expected);
+    assert.equal(await js('return document.querySelector("canvas").hasAttribute("contenteditable")'), false);
+    assert.equal(await js('return document.querySelector("canvas").childNodes.length'), 0);
+    assert.equal(await js('return pasteTimers.length > 0 && pasteTimers.every(timer => timer.cancelled)'), true, 'successful paste cancels every fallback timer');
+  };
   for (const windowId of [null, id]) {
     await load(token, windowId);
     const main = await wd(route + '/window');
@@ -63,17 +76,25 @@ try {
         await wait(() => js('return !!window.elsewhere?.store.get().stream'));
       }
       await js('elsewhere.activate(arguments[0]); document.addEventListener("paste", e => { window.lastPaste = { trusted: e.isTrusted, text: e.clipboardData.getData("text/plain") }; });', id);
+      await js(`
+        window.pasteTimers = [];
+        let pasteKeydown = false;
+        document.addEventListener('keydown', e => { pasteKeydown = e.code === 'KeyV' && e.ctrlKey; }, true);
+        window.addEventListener('keydown', () => { pasteKeydown = false; });
+        const schedule = window.setTimeout, cancel = window.clearTimeout;
+        window.setTimeout = function(callback, delay, ...args) {
+          const id = schedule(callback, delay, ...args);
+          if (pasteKeydown && delay === 150) pasteTimers.push({ id, cancelled: false });
+          return id;
+        };
+        window.clearTimeout = function(id) {
+          for (const timer of pasteTimers) if (timer.id === id) timer.cancelled = true;
+          return cancel(id);
+        };
+      `);
       await click('canvas');
       const text = `${windowId ? 'window' : 'desktop'}${pip ? ' pip' : ''} clipboard`;
-      await js('return navigator.clipboard.writeText(arguments[0])', text);
-      await keys(['\uE009', '\uE008', 'v']);
-      await wait(() => js('return window.lastPaste?.trusted && lastPaste.text === arguments[0]', text));
-      await wait(() => js('return elsewhere.clipboard.read().then(text => text === arguments[0])', text));
-      await keys(['\uE007']);
-      expected += text + '\n';
-      await wait(async () => await contents(root + '/pasted') === expected);
-      assert.equal(await js('return document.querySelector("canvas").hasAttribute("contenteditable")'), false);
-      assert.equal(await js('return document.querySelector("canvas").childNodes.length'), 0);
+      await paste(text);
       // A local editable field must retain normal paste and leave the remote clipboard alone.
       await js('const field = document.createElement("textarea"); field.id = "local-paste"; field.style="position:fixed;top:0;left:0;z-index:9999"; document.body.append(field)');
       await click('#local-paste');
@@ -83,24 +104,66 @@ try {
       assert.equal(await js('return elsewhere.clipboard.read()'), text);
       await js('document.querySelector("#local-paste").remove()');
       console.log(text, 'trusted paste, application round trip, canvas cleanup and local field isolation');
+      if (!windowId && !pip) {
+        await js('elsewhere.setCaptureOnClick(true)');
+        await click('canvas');
+        await wait(() => js('return document.pointerLockElement === document.querySelector("canvas")'));
+        await paste('captured clipboard');
+        assert.equal(await js('return document.pointerLockElement === document.querySelector("canvas")'), true);
+        await js('document.exitPointerLock(); elsewhere.setCaptureOnClick(false)');
+        console.log('pointer capture survives native paste');
+      }
       if (pip) {
         await js('window.parent.elsewhereReturn()');
         await wd(route + '/window', { handle: main });
       }
     }
+    if (!windowId) {
+      const other = (await wd(route + '/window/new', { type: 'tab' })).handle;
+      await wd(route + '/window', { handle: other });
+      await load(token);
+      await js('elsewhere.takeControl()');
+      await wait(() => js('return elsewhere.store.get().role === "controller"'));
+      await wd(route + '/window', { handle: main });
+      await wait(() => js('return elsewhere.store.get().role === "participant"'));
+      await click('canvas');
+      await js('window.keysSent = 0; const send = WebSocket.prototype.send; WebSocket.prototype.send = function(data) { if (new Uint8Array(data)[0] === 0x87) keysSent++; return send.call(this, data); };');
+      await js('window.lastPaste = null; return navigator.clipboard.writeText("participant clipboard")');
+      await keys(['\uE009', '\uE008', 'v']);
+      await wait(() => js('return window.lastPaste?.trusted && lastPaste.text === "participant clipboard"'));
+      clipboardText = 'participant clipboard';
+      await wait(() => js('return elsewhere.clipboard.read().then(text => text === "participant clipboard")'));
+      assert.equal(await js('return keysSent'), 0, 'participant sends no raw key events');
+      assert.equal(await contents(root + '/pasted'), expected, 'participant updates clipboard without sending a key chord');
+      assert.equal(await js('return document.querySelector("canvas").hasAttribute("contenteditable")'), false);
+      console.log('desktop participant synchronizes clipboard without typing');
+      await wd(route + '/window', { handle: other });
+      await wd(route + '/window', undefined, 'DELETE');
+      await wd(route + '/window', { handle: main });
+    }
     await load(viewerToken, windowId);
     assert.equal(await js('return elsewhere.store.get().role'), 'viewer');
     await click('canvas');
+    await js('window.clipboardSent = 0; const send = WebSocket.prototype.send; WebSocket.prototype.send = function(data) { if (new Uint8Array(data)[0] === 0x8c) clipboardSent++; return send.call(this, data); };');
     await js('return navigator.clipboard.writeText("forbidden")');
     await keys(['\uE009', '\uE008', 'v']);
     assert.equal(await js('return document.querySelector("canvas").hasAttribute("contenteditable")'), false);
-    assert.notEqual(await js('return elsewhere.clipboard.read()'), 'forbidden');
+    // A paste that arrives after editing was enabled must still respect the current role.
+    await js('document.querySelector("canvas").contentEditable = "true"');
+    await keys(['\uE009', '\uE008', 'v']);
+    assert.equal(await js('return document.querySelector("canvas").childNodes.length'), 0);
+    assert.equal(await js('return document.querySelector("canvas").hasAttribute("contenteditable")'), false);
+    assert.equal(await js('return clipboardSent'), 0);
+    const quality = await js('return elsewhere.store.get().streamState.preset === "low" ? "high" : "low"');
+    await js('elsewhere.setChoice({quality: arguments[0]})', quality);
+    await wait(() => js('return elsewhere.store.get().streamState.preset === arguments[0]', quality));
+    assert.equal(await js('return elsewhere.clipboard.read()'), clipboardText);
   }
 } catch (error) {
   console.error(error, await contents(root + '/server.log'));
   throw error;
 } finally {
-  if (route) await wd(route, undefined, 'DELETE');
+  if (route) await wd(route, undefined, 'DELETE').catch(error => console.error('Firefox cleanup:', error));
   server.kill('SIGTERM');
   await new Promise(resolve => { if (server.exitCode !== null || server.signalCode !== null) resolve(); else server.once('exit', resolve); });
   await log.close();
