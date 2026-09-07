@@ -152,17 +152,16 @@ production capture still requires browser consent.
 Microphone capture uses AudioWorklet to send mono 1024-frame PCM blocks to the Opus encoder.
 Timestamps count frames at the AudioContext's actual sample rate. The processor leaves local output
 silent. Stopping invalidates starts waiting for permission or module loading; callbacks from an old capture
-cannot affect a new one. Browsers without AudioWorklet use ScriptProcessor capture.
+cannot affect a new one. Capture requires AudioWorklet.
 
 Run `node web/checks/microphone.mjs` inside Docker for real Chromium capture, Opus decoding,
 continuous timestamps, silent local output, repeated starts and stops, delayed permission results,
-setup/processing/encoder failures, and the ScriptProcessor fallback. Both browser runs use a button
+and setup/processing/encoder failures. Both browser runs use a button
 click with normal autoplay policy. Add `--firefox` with geckodriver on port 4445 and a working
 PulseAudio output for the browser. `private-audio.mjs` also checks repeated AudioWorklet delivery
 to native and Pulse recorders, the pending-permission button, control handover and disconnect.
 Chromium 152 and Firefox 155 pass the standalone checks; Chromium also passes the recorder and viewer
-checks. Safari 26+ capture remains unverified. The ScriptProcessor path remains available, but does
-not validate Safari's AudioWorklet path.
+checks.
 
 Lifecycle and isolation checks pass on PipeWire 1.4.2 with WirePlumber 0.5.6 and 0.5.8, and on PipeWire
 1.6.8 with WirePlumber 0.5.17. Direct GStreamer device publication is unsuitable for idle startup; native virtual

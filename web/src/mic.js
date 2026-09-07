@@ -44,19 +44,13 @@ export async function startMic(sendPacket, onEnd) {
       } catch (e) { fail(e); }
       finally { data?.close(); }
     };
-    if (ctx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
-      const url = URL.createObjectURL(new Blob([workletSource], { type: 'text/javascript' }));
-      try { await ctx.audioWorklet.addModule(url); }
-      finally { URL.revokeObjectURL(url); }
-      if (!current()) return false;
-      const node = capture.node = new AudioWorkletNode(ctx, 'microphone-capture', { channelCount: 1, channelCountMode: 'explicit', outputChannelCount: [1] });
-      node.port.onmessage = ({ data }) => encode(data);
-      node.onprocessorerror = () => fail(new Error('Microphone processing failed'));
-    } else {
-      // Compatibility capture for browsers without AudioWorklet.
-      const node = capture.node = ctx.createScriptProcessor(1024, 1, 1);
-      node.onaudioprocess = e => encode(e.inputBuffer.getChannelData(0));
-    }
+    const url = URL.createObjectURL(new Blob([workletSource], { type: 'text/javascript' }));
+    try { await ctx.audioWorklet.addModule(url); }
+    finally { URL.revokeObjectURL(url); }
+    if (!current()) return false;
+    const node = capture.node = new AudioWorkletNode(ctx, 'microphone-capture', { channelCount: 1, channelCountMode: 'explicit', outputChannelCount: [1] });
+    node.port.onmessage = ({ data }) => encode(data);
+    node.onprocessorerror = () => fail(new Error('Microphone processing failed'));
     const source = capture.source = ctx.createMediaStreamSource(stream);
     source.connect(capture.node);
     capture.node.connect(ctx.destination); // The processor leaves its output silent.
@@ -77,11 +71,9 @@ export function stopMic() {
   capture.source?.disconnect();
   if (capture.node) {
     capture.node.disconnect();
-    if (capture.node.port) {
-      capture.node.port.onmessage = null;
-      capture.node.port.close();
-      capture.node.onprocessorerror = null;
-    } else capture.node.onaudioprocess = null;
+    capture.node.port.onmessage = null;
+    capture.node.port.close();
+    capture.node.onprocessorerror = null;
   }
   if (capture.encoder && capture.encoder.state !== 'closed') capture.encoder.close();
   capture.ctx?.close().catch(() => {});

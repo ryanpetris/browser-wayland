@@ -12,8 +12,7 @@ export async function checkMicrophone() {
   const gum = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
   const contexts = [], encoders = [], tracks = [], nodes = [], blocks = [];
   window.micCheckState = () => ({ contexts: contexts.map(c => c.state), encoders: encoders.map(e => e.state), tracks: tracks.map(t => t.readyState), nodes: nodes.length, blocks: blocks.length });
-  let constraints, encoderCallbacks, throwConfigure = false, throwEncode = false, throwProcessor = false, failModule = false, holdModule, legacy = false;
-  const legacyNodes = [];
+  let constraints, encoderCallbacks, throwConfigure = false, throwEncode = false, throwProcessor = false, failModule = false, holdModule;
   window.AudioContext = class extends Context {
     constructor(options) {
       super(options);
@@ -30,15 +29,6 @@ export async function checkMicrophone() {
         }
         return addModule(url);
       };
-    }
-    createScriptProcessor(...args) {
-      assert(legacy, 'unexpected legacy capture');
-      const node = super.createScriptProcessor(...args);
-      legacyNodes.push(node);
-      node.meter = this.createAnalyser();
-      node.connect(node.meter);
-      node.meter.connect(this.destination);
-      return node;
     }
   };
   window.AudioEncoder = class extends Encoder {
@@ -71,7 +61,6 @@ export async function checkMicrophone() {
     assert(encoders.every(e => e.state === 'closed'), 'all encoders closed');
     assert(tracks.every(t => t.readyState === 'ended'), 'all tracks ended');
     assert(nodes.every(n => n.port.onmessage === null && n.onprocessorerror === null), 'callbacks detached');
-    assert(legacyNodes.every(n => n.onaudioprocess === null), 'legacy callbacks detached');
   };
   let packets = 0, ends = 0, decodedPeak = 0;
   const decoder = new AudioDecoder({
@@ -163,18 +152,6 @@ export async function checkMicrophone() {
     assert(await startMic(send, end), 'restart during module load');
     release();
     assert(!(await pending), 'old module load cancelled');
-    stopMic();
-    await stopped();
-    legacy = true;
-    window.AudioWorkletNode = undefined;
-    await decoder.flush();
-    decodedPeak = 0;
-    const before = packets;
-    assert(await startMic(send, end), 'legacy start succeeds');
-    await wait(() => packets > before + 15 && decodedPeak > .001);
-    const samples = new Float32Array(legacyNodes.at(-1).meter.fftSize);
-    legacyNodes.at(-1).meter.getFloatTimeDomainData(samples);
-    assert(samples.every(s => s === 0), 'legacy local output is silent');
     stopMic();
     await stopped();
     return { packets, decodedPeak, contexts: contexts.length, worklets: nodes.length, ends };
