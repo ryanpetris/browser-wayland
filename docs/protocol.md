@@ -211,6 +211,10 @@ Also on the server: `POST /mcp` (MCP over Streamable HTTP, same bearer token; se
   `\n` is Return; characters the layout can't produce are skipped with a warning in the log.
 - `scroll` is in wheel lines (positive `dy` down), sent like the viewer's wheel.
 
+`node web/checks/structured-input.mjs` checks text and key chords against a real
+terminal in the Docker rig, through desktop and window WebSockets. Both viewer-token
+paths reject input. Keys follow the compositor's current keyboard focus in both streams.
+
 ### Elements object
 
 ```json

@@ -703,7 +703,6 @@ impl App {
             ClientMsg::Control(m) if key == Key::Control => self.command_for(m).ok(),
             ClientMsg::SetClipboard(text) if key == Key::Control => Some(Command::SetClipboard { mime: api::TEXT.into(), data: text.into() }),
             ClientMsg::Drag(d) if controls => Some(self.drag_command(d, &v)),
-            ClientMsg::Input(m) if controls => Some(Command::Input(m)),
             ClientMsg::Mixer(command) => { self.mixer_message(&mut v, id, command); None },
             ClientMsg::Mic(packet) if controls => {
                 if let Some(mic) = &self.mic {
@@ -785,6 +784,7 @@ impl App {
 /// Pointer, keyboard and window messages as compositor commands (the ones any driving session sends the same way).
 fn input_command(m: ClientMsg) -> Option<Command> {
     Some(match m {
+        ClientMsg::Input(m) => Command::Input(m),
         ClientMsg::MotionAbs { x, y } => Command::PointerMotionAbsolute { x: x as f64, y: y as f64 },
         ClientMsg::MotionRel { dx, dy } => Command::PointerMotionRelative { dx: dx as f64, dy: dy as f64 },
         ClientMsg::Button { button, pressed } => Command::PointerButton { button: button as u32, pressed },
