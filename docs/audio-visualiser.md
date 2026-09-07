@@ -45,6 +45,11 @@ Chromium.
 The checks cover graph ownership, repeated disposal and click listener counts,
 style changes, HiDPI, fullscreen, reduced motion, animation off, delayed audio
 initialization, source replacement and license asset delivery.
+The signal/silence comparison waits for coloured Classic bars on the current
+canvas, then for an opaque canvas with no coloured pixels after the oscillator
+stops. Twelve consecutive Docker runs passed, including animation-disabled and
+reduced-motion checks. Suppressing canvas path fills in a temporary test copy
+failed the signal readiness check within five seconds.
 
 The live check is `node checks/session-audio.mjs`, with `ELSEWHERE_TEST_URL` and
 `ELSEWHERE_TEST_TOKEN_FILE` pointing at an isolated Docker desktop and its control token.

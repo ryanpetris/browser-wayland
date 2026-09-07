@@ -172,14 +172,28 @@ try {
     await checkEdges(2);
   }
   assert.equal(await listeners(), clickListeners, 'no leaked window click listeners');
-  const signalImage = await panel.locator('canvas').evaluate(c => c.toDataURL());
+  // Classic bars have coloured pixels only when the renderer draws a signal.
+  // Check this canvas, since each open creates a fresh renderer and FFT input.
+  const renderedImage = async signal => {
+    const result = await page.waitForFunction(signal => {
+      const canvas = document.querySelector('[aria-label="Session audio"] canvas');
+      if (!canvas?.width || !canvas.height) return false;
+      const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      let coloured = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i + 3] && Math.max(pixels[i], pixels[i + 1], pixels[i + 2]) - Math.min(pixels[i], pixels[i + 1], pixels[i + 2]) > 30) coloured++;
+      }
+      return (signal ? coloured > 100 : coloured === 0 && pixels[3] === 255) && canvas.toDataURL();
+    }, signal, { timeout: 5000 });
+    return result.jsonValue();
+  };
+  const signalImage = await renderedImage(true);
   await page.evaluate(() => {
     window.testPlayback.oscillator.stop();
     window.elsewhere.store.set({ stats: { ...window.elsewhere.store.get().stats, audio: { packets: 1, decoded: 1, lead: 0, state: 'running', signalPeak: 0, level: 0 } } });
   });
   await panel.getByText('Connected, but silent.', { exact: false }).waitFor();
-  await page.waitForTimeout(1000);
-  assert.notEqual(await panel.locator('canvas').evaluate(c => c.toDataURL()), signalImage, 'signal and silence draw differently');
+  assert.notEqual(await renderedImage(false), signalImage, 'signal and silence draw differently');
   // Same wrapper must also follow a replacement playback graph.
   await page.evaluate(() => {
     window.oldPlayback = window.testPlayback;
