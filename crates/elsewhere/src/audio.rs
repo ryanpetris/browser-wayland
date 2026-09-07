@@ -46,8 +46,16 @@ impl Services {
         };
         services.env.push(("PULSE_SERVER".into(), format!("unix:{}", services.directory.path().join("pulse/native").display())));
         let root = services.directory.path();
-        fs::write(root.join("pipewire.conf"), include_str!("audio/pipewire.conf"))?;
-        fs::write(root.join("pipewire-pulse.conf"), include_str!("audio/pipewire-pulse.conf"))?;
+        for (name, additions) in [
+            ("pipewire.conf", include_str!("audio/pipewire.conf")),
+            ("pipewire-pulse.conf", include_str!("audio/pipewire-pulse.conf")),
+        ] {
+            fs::copy(Path::new("/usr/share/pipewire").join(name), root.join(name))
+                .with_context(|| format!("PipeWire distribution configuration {name} is required"))?;
+            let fragments = root.join(format!("{name}.d"));
+            fs::create_dir(&fragments)?;
+            fs::write(fragments.join("99-elsewhere.conf"), additions)?;
+        }
         // Distribution policy and client modules, without host configuration fragments.
         fs::copy("/usr/share/pipewire/client.conf", root.join("client.conf"))
             .context("PipeWire client configuration is required")?;
@@ -183,7 +191,11 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(3);
         let graph = first.output("pw-dump", &[], deadline)?;
         let graph: serde_json::Value = serde_json::from_str(&graph)?;
-        assert_eq!(graph.as_array().unwrap().iter().filter(|o| o["type"] == "PipeWire:Interface:Node").count(), 4);
+        let mut nodes: Vec<_> = graph.as_array().unwrap().iter()
+            .filter(|o| o["type"] == "PipeWire:Interface:Node")
+            .map(|o| o["info"]["props"]["node.name"].as_str().unwrap()).collect();
+        nodes.sort_unstable();
+        assert_eq!(nodes, ["Dummy-Driver", "Freewheel-Driver", MICROPHONE, MICROPHONE_INPUT, OUTPUT]);
         drop(first);
         assert!(!first_root.exists());
         second.check()?;

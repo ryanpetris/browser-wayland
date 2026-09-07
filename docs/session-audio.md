@@ -2,7 +2,11 @@
 
 Each desktop owns a private PipeWire server, pipewire-pulse and WirePlumber. Their native and Pulse
 sockets, configuration and state live in a private temporary directory. The existing Wayland runtime
-directory remains usable. The services load distribution modules and policy, with hardware discovery
+directory remains usable. PipeWire and pipewire-pulse use private copies of the installed distribution
+configuration files with Elsewhere additions in private `.conf.d` directories. System files are untouched;
+machine and user configuration fragments are not loaded. Distribution scheduling and profiling defaults
+remain available. JACK auto-connection and X11 bell handling are disabled for the private server.
+The services load distribution modules and policy, with hardware discovery
 and persistent host routing state disabled. They do not enumerate ALSA, Bluetooth or video devices.
 This scopes the audio graph; it does not sandbox arbitrary applications running as the same user.
 

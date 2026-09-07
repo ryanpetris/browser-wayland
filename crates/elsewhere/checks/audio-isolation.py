@@ -106,7 +106,10 @@ with tempfile.TemporaryDirectory(prefix="elsewhere-isolation-") as directory:
             outside_env.pop(key, None)
         configs = Path("/src/crates/elsewhere/src/audio")
         for name in ("pipewire.conf", "pipewire-pulse.conf"):
-            (outside / name).write_text((configs / name).read_text().replace("elsewhere-", "outside-"))
+            shutil.copy(Path("/usr/share/pipewire") / name, outside / name)
+            fragments = outside / (name + ".d")
+            fragments.mkdir()
+            (fragments / "99-elsewhere.conf").write_text((configs / name).read_text().replace("elsewhere-", "outside-"))
         shutil.copy("/usr/share/pipewire/client.conf", outside / "client.conf")
         (outside / "wireplumber.conf").write_text(Path("/usr/share/wireplumber/wireplumber.conf").read_text() + "\n" + (configs / "wireplumber.conf").read_text())
         for args in (["pipewire"], ["wireplumber", "--profile=elsewhere"], ["pipewire-pulse"]):

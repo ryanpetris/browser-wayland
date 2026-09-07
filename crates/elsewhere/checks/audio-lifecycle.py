@@ -2,6 +2,7 @@
 
 python /src/crates/elsewhere/checks/audio-lifecycle.py /src/target/release/elsewhere
 """
+import json
 import os
 from pathlib import Path
 import signal
@@ -102,6 +103,21 @@ def run_case(name, *, replacement=None, no_audio=False, during_startup=False, gr
                 else:
                     assert "audio unavailable" not in text, "audio failed to initialize"
                     assert len(owned) >= 4, "private services and worker not found"
+                    private = next(iter(owned.values()))
+                    for config_name in ("pipewire.conf", "pipewire-pulse.conf"):
+                        assert (private / config_name).read_bytes() == (Path("/usr/share/pipewire") / config_name).read_bytes()
+                    graph = json.loads(subprocess.check_output(
+                        ["pw-dump"], env=dict(env, PIPEWIRE_REMOTE=str(private / "pipewire-0")), timeout=3))
+                    modules = [obj["info"]["name"] for obj in graph if obj["type"].endswith(":Module")]
+                    assert modules.count("libpipewire-module-profiler") == 1, modules
+                    assert "libpipewire-module-jackdbus-detect" not in modules, modules
+                    assert "libpipewire-module-x11-bell" not in modules, modules
+                    nodes = [obj["info"]["props"].get("node.name") for obj in graph if obj["type"].endswith(":Node")]
+                    for node_name in ("Dummy-Driver", "elsewhere-output", "elsewhere-microphone", "elsewhere-microphone-input"):
+                        assert nodes.count(node_name) == 1, nodes
+                    settings = {entry["key"]: entry["value"] for obj in graph for entry in obj.get("metadata", [])}
+                    assert settings["clock.min-quantum"] == 1024, settings
+                    assert settings["clock.force-quantum"] == 0, settings
             if kill_service:
                 for pid in owned:
                     try:
