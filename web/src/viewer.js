@@ -754,13 +754,23 @@ export function createViewer() {
   // --- microphone -----------------------------------------------------------------------------
   // The local microphone into the desktop (mic.js), one Opus packet per message. Only the controller's
   // counts, so losing control stops it, which also turns the browser's recording indicator off.
-  const micStop = () => { stopMic(); if (state().mic) store.set({ mic: false }); };
+  let micGeneration = 0;
+  const micStop = error => {
+    micGeneration++; stopMic();
+    if (state().mic) store.set({ mic: false });
+    if (error) notice(`microphone: ${error.message}`);
+  };
   async function micStart() {
+    if (state().role !== 'controller' || state().mic) return;
+    const generation = ++micGeneration;
+    store.set({ mic: true }); // The button can cancel capture while permission is pending.
     try {
-      await startMic(buf => send(MIC, buf.byteLength, dv => new Uint8Array(dv.buffer, 1).set(new Uint8Array(buf))), micStop);
-      if (state().role === 'controller') store.set({ mic: true }); // control may have gone while the permission prompt was up
-      else micStop();
+      const started = await startMic(buf => send(MIC, buf.byteLength, dv => new Uint8Array(dv.buffer, 1).set(new Uint8Array(buf))), micStop);
+      if (generation !== micGeneration) return;
+      if (!started || state().role !== 'controller') micStop();
     } catch (e) {
+      if (generation !== micGeneration) return;
+      micStop();
       notice(`microphone: ${e.message}`);
     }
   }

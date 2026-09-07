@@ -40,6 +40,19 @@ try {
   browser = await chromium.launch({ executablePath: '/usr/bin/chromium', env: { ...process.env, HOME: root + '/home', XDG_CONFIG_HOME: root + '/browser-config', XDG_RUNTIME_DIR: root + '/runtime' }, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-audio-capture=' + root + '/microphone.wav'] });
   const page = await browser.newPage();
   await page.addInitScript(() => {
+    window.micTracks = [];
+    window.micWorklets = [];
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    window.realMicCapture = async options => {
+      const stream = await getUserMedia(options);
+      micTracks.push(...stream.getTracks());
+      return stream;
+    };
+    navigator.mediaDevices.getUserMedia = realMicCapture;
+    const Worklet = window.AudioWorkletNode;
+    window.AudioWorkletNode = class extends Worklet {
+      constructor(...args) { super(...args); micWorklets.push(args[1]); }
+    };
     window.audioSocketPackets = 0;
     const Peer = window.RTCPeerConnection;
     window.RTCPeerConnection = class extends Peer {
@@ -188,6 +201,60 @@ try {
     assert(off.length > 0 && off.every(s => s.peak < .0001), command + ' produces silence after microphone stops');
   }
   console.log('native and Pulse recording: idle silence, browser microphone, and stopped silence passed');
+  for (let cycle = 0; cycle < 3; cycle++) {
+    const started = Date.now();
+    await page.evaluate(() => elsewhere.mic.start());
+    await waitFor(() => recorders.every(({ samples }) => samples.some(s => s.at > started && s.peak > .005)));
+    await page.evaluate(() => elsewhere.mic.stop());
+    assert(await page.evaluate(() => micTracks.every(t => t.readyState === 'ended')), 'each capture stop ends all tracks');
+    const stopped = Date.now();
+    await page.waitForTimeout(1200);
+    for (const { command, samples } of recorders) {
+      const quiet = samples.filter(s => s.at > stopped + 700);
+      assert(quiet.length > 0 && quiet.every(s => s.peak < .0001), command + ' is silent between capture cycles');
+    }
+  }
+  assert(await page.evaluate(() => micWorklets.filter(name => name === 'microphone-capture').length >= 4), 'real delivery uses AudioWorklet');
+  // The actual button cancels a pending permission request; old success/denial cannot revive it.
+  for (const denied of [false, true]) {
+    await page.evaluate(() => {
+      navigator.mediaDevices.getUserMedia = () => new Promise((resolve, reject) => { window.resolveMic = resolve; window.rejectMic = reject; });
+    });
+    await page.getByRole('button', { name: 'Microphone', exact: true }).click();
+    await page.locator('button[aria-label="Microphone"][aria-pressed="true"]').waitFor();
+    await page.getByRole('button', { name: 'Microphone', exact: true }).click();
+    await page.waitForFunction(() => !elsewhere.store.get().mic);
+    await page.evaluate(async denied => {
+      navigator.mediaDevices.getUserMedia = realMicCapture;
+      await elsewhere.mic.start();
+      if (denied) rejectMic(new DOMException('Denied', 'NotAllowedError'));
+      else resolveMic(await realMicCapture({ audio: true }));
+    }, denied);
+    await page.waitForTimeout(200);
+    assert(await page.evaluate(() => elsewhere.store.get().mic), 'old permission result preserves new capture');
+    await page.evaluate(() => elsewhere.mic.stop());
+    assert(await page.evaluate(() => micTracks.every(t => t.readyState === 'ended')), 'stopping after a stale permission result ends all tracks');
+  }
+  await page.evaluate(async () => {
+    await elsewhere.mic.start();
+    micTracks.find(t => t.readyState === 'live').dispatchEvent(new Event('ended'));
+  });
+  await page.waitForFunction(() => !elsewhere.store.get().mic && elsewhere.store.get().notice?.text === 'microphone: Microphone disconnected');
+  assert(await page.evaluate(() => micTracks.every(t => t.readyState === 'ended')), 'capture failure stops tracks and reports the reason');
+  const participant = await browser.newPage();
+  await participant.goto('http://127.0.0.1:8088/#token=' + token);
+  await participant.waitForFunction(() => window.elsewhere?.store.get().role === 'participant');
+  await page.evaluate(() => elsewhere.mic.start());
+  await participant.evaluate(() => elsewhere.takeControl());
+  await page.waitForFunction(() => elsewhere.store.get().role === 'participant' && !elsewhere.store.get().mic);
+  assert(await page.evaluate(() => micTracks.every(t => t.readyState === 'ended')), 'handover stops tracks');
+  await page.evaluate(() => elsewhere.takeControl());
+  await page.waitForFunction(() => elsewhere.store.get().role === 'controller');
+  await participant.close();
+  await page.evaluate(async () => { await elsewhere.mic.start(); checkSocket.close(); });
+  await page.waitForFunction(() => !elsewhere.store.get().mic && micTracks.every(t => t.readyState === 'ended'));
+  await page.waitForFunction(() => elsewhere.store.get().status === 'connected' && elsewhere.store.get().role === 'controller');
+  console.log('AudioWorklet repeated delivery, pending permission cancellation, handover and disconnect passed');
   await page.evaluate(() => elsewhere.mic.start());
   await page.waitForFunction(() => elsewhere.store.get().mic);
   const children = (await readdir('/proc')).filter(n => /^\d+$/.test(n));
