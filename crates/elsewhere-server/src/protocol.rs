@@ -57,6 +57,8 @@ pub const KEY: u8 = 0x87;
 pub const REQUEST_KEYFRAME: u8 = 0x88;
 pub const BLUR: u8 = 0x89;
 pub const POINTER_LOCK_LOST: u8 = 0x8A;
+/// The browser acquired pointer lock; resume pending client locks without delivering a click.
+pub const POINTER_LOCK_GAINED: u8 = 0x99;
 /// `[CONTROL][JSON ControlMsg]`
 pub const CONTROL: u8 = 0x8B;
 /// UTF-8 text the browser pasted: becomes the desktop clipboard.
@@ -320,6 +322,7 @@ pub enum ClientMsg {
     RequestKeyframe,
     Blur,
     PointerLockLost,
+    PointerLockGained,
     Control(ControlMsg),
     SetClipboard(String),
     TakeControl,
@@ -382,6 +385,7 @@ pub fn decode(b: &[u8]) -> Option<ClientMsg> {
         REQUEST_KEYFRAME => ClientMsg::RequestKeyframe,
         BLUR => ClientMsg::Blur,
         POINTER_LOCK_LOST => ClientMsg::PointerLockLost,
+        POINTER_LOCK_GAINED => ClientMsg::PointerLockGained,
         CONTROL => ClientMsg::Control(serde_json::from_slice(&b[1..]).ok()?),
         SET_CLIPBOARD => ClientMsg::SetClipboard(String::from_utf8(b[1..].to_vec()).ok()?),
         TAKE_CONTROL => ClientMsg::TakeControl,
@@ -487,6 +491,7 @@ mod tests {
     #[test]
     fn decode_matches_js_layout() {
         // These byte strings are also what web/src/viewer.js produces.
+        assert_eq!(decode(&[POINTER_LOCK_GAINED]), Some(ClientMsg::PointerLockGained));
         assert_eq!(
             decode(&[0x82, 0x80, 0x07, 0x38, 0x04, 0x00, 0x00, 0x00, 0x40]),
             Some(ClientMsg::Resize { css_w: 1920, css_h: 1080, dpr: 2.0 })

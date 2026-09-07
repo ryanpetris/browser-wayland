@@ -45,8 +45,10 @@ pub enum Command {
     ViewerStream { key: u64, sink: Option<Box<dyn FrameSink>> },
     /// Render a frame even if nothing changed (keyframe on connect).
     RequestFullFrame,
-    /// The browser lost its pointer lock (Escape etc.): release the client's lock and don't re-lock until the next click.
+    /// The browser lost its pointer lock (Escape etc.): release the client's lock and don't re-lock until the next click or browser capture.
     ReleasePointerLock,
+    /// The browser captured the pointer: allow the client to lock again without a button event.
+    ResumePointerLock,
     /// A window action or spawn from the viewer page or the HTTP API.
     Control(ControlMsg),
     /// Text or an image (`image/png`) from the browser or the API becomes the desktop clipboard.

@@ -8,7 +8,7 @@ import { createStore } from './store.js';
 import { startMic, stopMic } from './mic.js';
 import { startCam, stopCam } from './cam.js';
 import { openRtc, pageEndpoint, RTC_TIMING } from './rtc.js';
-import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, PRESET_IDS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT, SESSION, HANDOFF, FILE_RESULT } from './protocol.js';
+import { CONFIG, VIDEO, CURSOR, POINTER_LOCK, AUDIO, WINDOWS, CLIPBOARD, ROLE, NOTICE, CLIPBOARD_DATA, NOTIFICATIONS, STREAM_STATE, RTC, ROLES, CODEC_FAMILIES, PRESETS, PRESET_IDS, AUTH, HELLO, RESIZE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, REQUEST_KEYFRAME, BLUR, POINTER_LOCK_LOST, POINTER_LOCK_GAINED, CONTROL, SET_CLIPBOARD, TAKE_CONTROL, NOTIFY, STREAM, DRAG, INPUT, TOUCH, MIC, CAM, RTC_CLIENT, REPORT, BTN, MIXER_STATE, MIXER_LEVELS, MIXER_ERROR, MIXER_CLIENT, SESSION, HANDOFF, FILE_RESULT } from './protocol.js';
 
 const AUDIO_LEAD = 0.06;
 const qualityName = name => PRESETS.includes(name) ? name : 'max';
@@ -378,7 +378,7 @@ export function createViewer() {
       case POINTER_LOCK:
         // A client locked the pointer (a game, say): lock the browser's too and send raw deltas.
         wantLock = dv.getUint8(1) !== 0;
-        if (wantLock && driving()) requestLock();
+        if (wantLock && driving() && (WINDOW || !state().captureOnClick || state().locked)) requestLock();
         else if (document.pointerLockElement && (WINDOW || !state().captureOnClick)) document.exitPointerLock();
         drawCapturedCursor();
         break;
@@ -572,10 +572,12 @@ export function createViewer() {
       return;
     }
     if (document.pointerLockElement && state().notice?.text === lockFailure) store.set({ notice: null });
+    const captured = !state().locked && document.pointerLockElement === canvas;
     const released = state().locked && document.pointerLockElement !== canvas;
     store.set({ locked: document.pointerLockElement === canvas });
+    if (captured) send(POINTER_LOCK_GAINED, 0);
     drawCapturedCursor();
-    if (!document.pointerLockElement && wantLock) { wantLock = false; send(POINTER_LOCK_LOST, 0); } // browser release gesture
+    if (released || (!document.pointerLockElement && wantLock)) { wantLock = false; send(POINTER_LOCK_LOST, 0); }
     if (released) {
       releaseKeys.clear();
       releaseInput();

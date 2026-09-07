@@ -63,7 +63,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/elsewhere-
 | `0x87` | Key | `u16 evdev` `u8 pressed`. From `KeyboardEvent.code`; repeats are never sent. |
 | `0x88` | RequestKeyframe | none. |
 | `0x89` | Blur | none. Window blur, page hidden: releases every held key and button. |
-| `0x8A` | PointerLockLost | none. The browser lost its lock (Escape): the client's lock is released and not re-taken until the next click. |
+| `0x8A` | PointerLockLost | none. The browser lost its lock (Escape): the client's lock is released and not re-taken until the next click or successful browser capture. |
 | `0x8B` | Control | JSON control message (below). |
 | `0x8C` | SetClipboard | UTF-8 text the browser pasted; it becomes the desktop clipboard, offered to Wayland and X11 clients. Control token only. A pasted image goes by `PUT /api/clipboard` instead. |
 | `0x8D` | TakeControl | none. A control-token session becomes the controller; the desktop takes its size. |
@@ -78,6 +78,7 @@ Binary frames, little-endian, byte 0 is the type. Mirrored in `crates/elsewhere-
 | `0x96` | Report | `u16 delay_ms` `u16 dropped`: the page's last second of video, once a second while frames come: how much later they arrived than at their best over the last ten seconds (the link queueing, which comes before it loses) and how many its decoder dropped. Either feeds the server's rate controller, which halves the bitrate under the viewer's quality ceiling and holds two seconds; five clean seconds raise it a quarter. |
 | `0x97` | Mixer | JSON, at most 4096 bytes: `{op: "subscribe", enabled: bool}`, `{op: "volume", id, value}`, `{op: "mute", id, value}`, `{op: "target", id, target}`, or `{op: "default", id}`. Subscriptions are available to every authenticated desktop viewer; mutations require the current controller. Volume is finite 0–100 percent with cubic gain; mute is boolean; target is a compatible endpoint ID or null to follow the session default. Unknown fields, stale IDs and unsupported operations are rejected. Commands never accept a server address or native operation. |
 | `0x98` | Handoff | `u64 target`: the current controller transfers to a live control-token desktop connection. Other senders, missing targets and viewer-token targets are ignored. |
+| `0x99` | PointerLockGained | none. The browser acquired pointer lock; allow a pending application lock to resume without sending a button event. Driving sessions only. |
 
 ### Close codes
 

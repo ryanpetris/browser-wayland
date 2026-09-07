@@ -126,6 +126,10 @@ impl State {
             Command::ViewerStream { key, sink: None } => self.stop_viewer_stream(key),
             Command::RequestFullFrame => self.force_full_frame = true,
             Command::ReleasePointerLock => self.release_pointer_lock(),
+            Command::ResumePointerLock => {
+                self.lock_suppressed = false;
+                self.pointer_motion(self.pointer_location);
+            }
             Command::Control(msg) => self.control(msg),
             Command::Snapshot { id, sizing, reply } => (reply.0)(self.snapshot(id, sizing)),
             Command::WindowIcon { id, reply } => (reply.0)(self.window_icon(id)),
@@ -371,7 +375,7 @@ impl State {
         self.sync_pointer_lock(&pointer);
     }
 
-    /// The browser lost its pointer lock: release the client's, and stay unlocked until the next click.
+    /// The browser lost its pointer lock: release the client's, and stay unlocked until the next click or browser capture.
     fn release_pointer_lock(&mut self) {
         let pointer = self.seat.get_pointer().unwrap();
         if let Some(surface) = pointer.current_focus() {

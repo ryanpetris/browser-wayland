@@ -803,6 +803,7 @@ fn input_command(m: ClientMsg) -> Option<Command> {
         }
         ClientMsg::Blur => Command::ReleaseAllInput,
         ClientMsg::PointerLockLost => Command::ReleasePointerLock,
+        ClientMsg::PointerLockGained => Command::ResumePointerLock,
         _ => return None,
     })
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { chromium } from 'playwright-core';
-import { CONFIG, CURSOR, POINTER_LOCK, ROLE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, BLUR } from '../src/protocol.js';
+import { CONFIG, CURSOR, POINTER_LOCK, POINTER_LOCK_GAINED, POINTER_LOCK_LOST, ROLE, MOTION_ABS, MOTION_REL, BUTTON, AXIS, KEY, BLUR } from '../src/protocol.js';
 
 const root = await mkdtemp('/tmp/elsewhere-capture-');
 const server = createServer(async (req, res) => {
@@ -64,6 +64,7 @@ try {
   assert.deepEqual(await mousePackets(), [], 'unlocked mouse movement and wheel stay local');
   const before = await canvas.boundingBox();
   await canvas.click(); await captured();
+  assert.equal(await page.evaluate(type => sent.filter(p => p[0] === type).length, POINTER_LOCK_GAINED), 1, 'successful capture notifies the desktop once');
   assert.equal((await mousePackets()).filter(p => p[0] === BUTTON).length, 0, 'capture click is not sent to the game');
   assert(await page.locator('footer [role=status]').isVisible());
   assert.equal(await page.locator('footer [role=status]').innerText(), 'Press Left Ctrl + Left Alt to release mouse');
@@ -103,6 +104,20 @@ try {
   await page.evaluate(() => { sent.length = 0; });
   await page.keyboard.press('ControlLeft+AltLeft'); await released();
   assert.deepEqual(await mousePackets(), [], 'release leaves the remote pointer in place');
+  assert.deepEqual(await page.evaluate(type => sent.filter(p => p[0] === type), POINTER_LOCK_LOST), [[POINTER_LOCK_LOST]], 'release notifies the desktop even without an application lock acknowledgement');
+  // Responses to capture can arrive after the user has already released it.
+  const lateRequests = await page.evaluate(type => {
+    const c = document.querySelector('canvas.stage'), request = c.requestPointerLock;
+    let requests = 0;
+    c.requestPointerLock = function (...args) { requests++; return request.apply(this, args); };
+    packet([type, 1]); packet([type, 0]);
+    c.requestPointerLock = request;
+    return requests;
+  }, POINTER_LOCK);
+  assert.equal(lateRequests, 0, 'delayed application lock response does not request browser capture');
+  await page.waitForTimeout(250);
+  assert.equal(await page.evaluate(() => !!document.pointerLockElement), false, 'delayed application lock response does not recapture the mouse');
+  assert.equal(await page.evaluate(type => sent.filter(p => p[0] === type).length, POINTER_LOCK_GAINED), 0);
   await canvas.hover(); await page.mouse.wheel(0, 20);
   assert.deepEqual(await mousePackets(), [], 'released mouse input stays local');
   assert.equal(await page.locator('footer [role=status]').count(), 0);
@@ -147,6 +162,7 @@ try {
   });
   const touchMotion = await lastMotion();
   assert.deepEqual(touchMotion, [MOTION_ABS, 320, 180], 'touch-as-mouse still moves to the tap position while mouse capture is off');
+  await page.evaluate(() => { sent.length = 0; });
   // Simulate a browser granting an earlier request after the viewer no longer wants it.
   await page.evaluate(() => {
     const c = document.querySelector('canvas.stage'), exit = document.exitPointerLock;
@@ -159,6 +175,7 @@ try {
     delete document.pointerLockElement; document.exitPointerLock = exit;
   });
   assert.equal(await page.evaluate(() => window.lateExits), 3);
+  assert.equal(await page.evaluate(type => sent.filter(p => p[0] === type).length, POINTER_LOCK_GAINED), 0, 'rejected grants do not resume application locks');
   assert.deepEqual(errors, []);
   console.log('mouse capture: preference, real lock, edge clamping, cursor, game lock, release shortcut, role loss, disconnect and fullscreen passed');
 } finally {
