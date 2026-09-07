@@ -57,7 +57,7 @@ jobs:
           strip dist/$d/elsewhere
           tar -C dist -czf dist/$d.tar.gz $d
           cp target/debian/*.deb dist/
-          dist/$d/elsewhere --version
+          test "$(dist/$d/elsewhere --version)" = "elsewhere $ELSEWHERE_VERSION"
       - uses: actions/upload-artifact@v7
         with:
           name: debian
@@ -68,21 +68,24 @@ jobs:
   # The .deb built on Debian stable must install and start on Debian and on the Ubuntu releases we
   # care about (glibc and GStreamer versions differ).
   install-test:
-    needs: debian
+    needs: [version, debian]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         image: ['debian:trixie', 'ubuntu:24.04', 'ubuntu:latest']
     container: ${{ matrix.image }}
+    env:
+      ELSEWHERE_VERSION: ${{ needs.version.outputs.version }}
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: debian
       - run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y ./elsewhere_*.deb
-          elsewhere --version
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ./elsewhere_*.deb curl
+          sh scripts/check-release.sh "$ELSEWHERE_VERSION"
 
   arch:
     needs: version
@@ -105,6 +108,7 @@ jobs:
           sed -i "s/^pkgver=.*/pkgver=$ELSEWHERE_VERSION/" packaging/arch/PKGBUILD
           chown -R builder .
           su builder -c 'cd packaging/arch && PACKAGER="$PACKAGER" makepkg -f --noconfirm'
+          test "$(target/release/elsewhere --version)" = "elsewhere $ELSEWHERE_VERSION"
       - uses: actions/upload-artifact@v7
         with:
           name: arch
